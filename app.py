@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import subprocess, json, os, time, psutil, socket
+import time
 
 # NEW: UI
 from ui.oled_ui import OledUI
@@ -35,32 +36,36 @@ def list_services():
     names = ["omimidi","omiosc","companion-satellite","companion"]
     return [{"name": n, "status": service_status(n)} for n in names]
 
+time.sleep(1)
+
 # ----------------- FastAPI lifecycle -----------------
 @app.on_event("startup")
 def _on_startup():
     # 1) Arranca pantalla en modo LOADING
     ui.start_boot()
-    ui.set_progress(5, "Leyendo dispositivo...")
+    ui.set_progress(5)
     dev = read_device()
-
+    time.sleep(1)
     # 2) Pasitos de boot con progreso (ajusta a tus necesidades)
-    ui.set_progress(20, "Comprobando servicios...")
+    ui.set_progress(20)
     _ = list_services()  # simple scan para que tarde "algo" real
-
-    ui.set_progress(35, "Inicializando sensores...")
+    time.sleep(1)
+    ui.set_progress(35)
     # (psutil caliente, etc.)
     _ = psutil.cpu_percent(interval=0.1)
-
-    ui.set_progress(60, "Preparando API...")
+    time.sleep(1)
+    ui.set_progress(60)
     # (no hay mucho más que hacer aquí; FastAPI ya está subiendo)
-
-    ui.set_progress(85, "Finalizando...")
+    time.sleep(1)
+    ui.set_progress(85)
     # 3) Cuando el server está listo, cambiamos a READY
     index = dev.get("index")
     role = dev.get("role", "standby")
     ui.set_ready(profile=role, index=index)
+    time.sleep(1)
     # Consideramos “conectado” (puedes cambiar esto a tu lógica real de servidor remoto)
-    ui.set_connection(True)
+    ui.set_connection(False)
+    time.sleep(1)
     ui.set_progress(100, "Listo")
 
 @app.on_event("shutdown")
