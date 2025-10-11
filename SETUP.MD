@@ -13,7 +13,7 @@ Guía paso a paso para desplegar el sistema **omiControl**, compuesto por:
 - 1 PC o NUC de control (Windows o Linux)
 - 1 o más Raspberry Pi (recomendado modelo 4 o 5)
 - Red local con DHCP (IP fija opcional)
-- Conectividad por **Ethernet** o **PoE**
+- Conectividad por **Ethernet** Y **POE** Para las raspberry pi's es recomendable 
 
 ### Software necesario
 | En PC central | En Raspberry Pi |
@@ -22,6 +22,12 @@ Guía paso a paso para desplegar el sistema **omiControl**, compuesto por:
 | Visual Studio Code | Python 3.11+ |
 | PowerShell o Terminal | pip / venv |
 | (Opcional) Apple Bonjour | Avahi-daemon |
+
+En el PC central:
+- Git, VSC, apple bonjour
+
+En la raspberry:
+Git, python 3.11+, pip / venv, Avahi-Daemon
 
 ---
 
@@ -45,16 +51,16 @@ Conectarla por SSH o teclado.
 Actualizar el sistema:
 
 bash
-Copiar código
+
 sudo apt update && sudo apt full-upgrade -y
 3.2 Instalar dependencias
 bash
-Copiar código
+
 sudo apt -y install python3 python3-pip python3-venv git avahi-daemon
 sudo systemctl enable --now avahi-daemon
 3.3 Clonar e instalar el agente
 bash
-Copiar código
+
 mkdir -p ~/omi && cd ~/omi
 git clone https://github.com/omarmohamedluis/agent.git
 cd agent
@@ -63,7 +69,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 🧱 4. Crear el servicio systemd
 bash
-Copiar código
+
 sudo tee /etc/systemd/system/omiagent.service >/dev/null <<'EOF'
 [Unit]
 Description=omiAgent REST API
@@ -90,19 +96,19 @@ sudo systemctl enable --now omiagent
 Verificar que está activo:
 
 bash
-Copiar código
+
 sudo systemctl status omiagent
 🔐 5. Permisos sudo
 Permitir que el agente ejecute acciones de administración sin pedir contraseña:
 
 bash
-Copiar código
+
 echo "pi ALL=(ALL) NOPASSWD: /bin/systemctl, /usr/bin/journalctl, /usr/sbin/shutdown, /usr/sbin/reboot, /usr/bin/hostnamectl" | sudo tee /etc/sudoers.d/omiagent
 🔎 6. Configurar mDNS (Avahi)
 Crea el archivo /etc/avahi/services/omiagent.service:
 
 xml
-Copiar código
+
 <?xml version="1.0" standalone='no'?><!DOCTYPE service-group SYSTEM "avahi-service.dtd">
 <service-group>
   <name replace-wildcards="yes">%h _omiagent</name>
@@ -115,7 +121,7 @@ Copiar código
 Y reinicia el servicio:
 
 bash
-Copiar código
+
 sudo systemctl restart avahi-daemon
 Ahora podrás descubrir la Raspberry por nombre:
 ping omipi-01.local
@@ -123,24 +129,24 @@ ping omipi-01.local
 🧠 7. Prueba de funcionamiento
 7.1 Desde la Raspberry
 bash
-Copiar código
+
 curl http://localhost:9000/v1/health
 7.2 Desde el PC central
 powershell
-Copiar código
+
 Invoke-RestMethod http://omipi-01.local:9000/v1/health
 Si responde con un JSON mostrando CPU, RAM, rol, etc., ¡funciona correctamente! 🎉
 
 🧭 8. Asignar identidad y rol
 Asignar índice y nombre
 bash
-Copiar código
+
 curl -X PUT -H "Content-Type: application/json" \
   -d '{"index":1,"hostname":"omipi-01"}' \
   http://localhost:9000/v1/identity
 Cambiar rol
 bash
-Copiar código
+
 curl -X PUT -H "Content-Type: application/json" \
   -d '{"role":"omimidi"}' \
   http://localhost:9000/v1/role
@@ -148,14 +154,14 @@ curl -X PUT -H "Content-Type: application/json" \
 Desde el PC central, descarga o clona el repo de configuraciones:
 
 bash
-Copiar código
+
 git clone https://github.com/omarmohamedluis/omi-fleet-config.git
 Abre el perfil del show (por ejemplo profiles/DEMO_SHOW/).
 
 Envía los archivos de configuración a las Raspberry correspondientes:
 
 bash
-Copiar código
+
 curl -X PUT -H "Content-Type: application/json" \
   -d @profiles/DEMO_SHOW/roles/omimidi/map.json \
   http://omipi-01.local:9000/v1/configs/omimidi
@@ -171,17 +177,17 @@ Ruta	Descripción
 🧰 11. Mantenimiento y actualización
 Ver logs
 bash
-Copiar código
+
 curl http://localhost:9000/v1/logs/omiagent
 Actualizar el agente
 bash
-Copiar código
+
 cd ~/omi/agent
 git pull
 sudo systemctl restart omiagent
 Actualizar configuraciones del show
 bash
-Copiar código
+
 cd ~/omi-fleet-config
 git pull
 🎬 12. Siguiente fase
@@ -194,7 +200,7 @@ de forma visual y en tiempo real.
 MIT © 2025 Omar Mohamed Luis
 
 yaml
-Copiar código
+
 
 ---
 
