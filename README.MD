@@ -1,17 +1,19 @@
 # omi-Agent
 
-Agente REST ligero para Raspberry Pi que permite gestionar roles, servicios y configuraciones de forma centralizada.
+Agente REST ligero para Raspberry Pi que permite gestionar roles, servicios y configuraciones de forma centralizada dentro del ecosistema **omiControl**.
 
 ---
 
 ## 🚀 Características principales
-- API REST en **FastAPI**
-- Métricas del sistema (CPU, RAM, temperatura, uptime)
-- Control de servicios (`systemd`)
-- Gestión de roles (`omimidi`, `omiosc`, `satellite`, `companion`, `standby`)
-- Guardado de configuraciones en `/etc/omi/roles/`
-- Reboot / Shutdown remoto
-- Descubrimiento automático por **mDNS**
+
+- API REST basada en **FastAPI**
+- Métricas del sistema: CPU, RAM, temperatura, uptime
+- Control de servicios gestionados por **systemd**
+- Asignación dinámica de roles: `omimidi`, `omiosc`, `satellite`, `companion`, `standby`
+- Gestión de configuraciones locales en `/etc/omi/roles/`
+- Encendido, reinicio y apagado remoto
+- Descubrimiento automático mediante **mDNS (Avahi)**
+- Integración con el repositorio [`omi-fleet-config`](https://github.com/omarmohamedluis/omi-fleet-config)
 
 ---
 
@@ -25,12 +27,12 @@ cd agent
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-🔁 Crear servicio systemd
+⚙️ Crear servicio systemd
 bash
-Copiar código
+
 sudo tee /etc/systemd/system/omiagent.service >/dev/null <<'EOF'
 [Unit]
-Description=omiAgent REST
+Description=omiAgent REST API
 After=network-online.target
 Wants=network-online.target
 
@@ -53,29 +55,31 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now omiagent
 🧩 Endpoints principales
 Método	Ruta	Descripción
-GET	/v1/health	Estado y métricas del dispositivo
-PUT	/v1/identity	Asignar index y hostname
-PUT	/v1/role	Cambiar rol activo
-GET	/v1/services	Listar servicios
-POST	/v1/services/{name}/{action}	Start/Stop/Restart de servicios
-PUT	/v1/configs/{service}	Guardar configuración local
-GET	/v1/logs/{name}	Ver logs del servicio
-POST	/v1/power/{action}	reboot o shutdown
+GET	/v1/health	Estado general y métricas del sistema
+PUT	/v1/identity	Asigna index y hostname a la Raspberry
+PUT	/v1/role	Cambia el rol activo (omimidi, omiosc, etc.)
+GET	/v1/services	Lista los servicios y su estado
+POST	/v1/services/{name}/{action}	Inicia, detiene o reinicia servicios
+PUT	/v1/configs/{service}	Guarda configuración local en /etc/omi/roles/
+GET	/v1/logs/{name}	Muestra los logs de un servicio
+POST	/v1/power/{action}	Reinicia o apaga la Raspberry (reboot / shutdown)
 
-Documentación interactiva disponible en
-🧩 http://<raspberry_ip>:9000/docs
+📘 Documentación interactiva disponible en:
+http://<raspberry_ip>:9000/docs
 
 🧠 Permisos sudo
 Permitir que el agente maneje servicios y energía sin pedir contraseña:
 
 bash
-Copiar código
+
 echo "pi ALL=(ALL) NOPASSWD: /bin/systemctl, /usr/bin/journalctl, /usr/sbin/shutdown, /usr/sbin/reboot, /usr/bin/hostnamectl" | sudo tee /etc/sudoers.d/omiagent
 🔍 Descubrimiento mDNS (Avahi)
-Crea el archivo /etc/avahi/services/omiagent.service:
+Permite encontrar automáticamente cada Raspberry Pi por su nombre (omipi-01.local, etc.)
+
+Crea /etc/avahi/services/omiagent.service:
 
 xml
-Copiar código
+
 <?xml version="1.0" standalone='no'?><!DOCTYPE service-group SYSTEM "avahi-service.dtd">
 <service-group>
   <name replace-wildcards="yes">%h _omiagent</name>
@@ -85,42 +89,48 @@ Copiar código
     <txt-record>api=/v1</txt-record>
   </service>
 </service-group>
-Y reinicia Avahi:
+Y reinicia el servicio:
 
 bash
-Copiar código
+
 sudo systemctl restart avahi-daemon
 🧪 Prueba rápida
+Localmente:
 bash
-Copiar código
-curl http://localhost:9000/v1/health
-O desde PowerShell (PC central):
 
+curl http://localhost:9000/v1/health
+Desde el PC central:
 powershell
-Copiar código
+
 Invoke-RestMethod http://omipi-01.local:9000/v1/health
 🧭 Roles disponibles
-Rol	Servicio(s) activado(s)	Función
-standby	ninguno	Espera asignación
-omimidi	omimidi.service	Convierte MIDI → OSC
-omiosc	omiosc.service	Controlador OSC
-satellite	companion-satellite.service	Companion Satellite
+Rol	Servicio(s) activado(s)	Descripción
+standby	Ninguno	Estado inactivo esperando asignación
+omimidi	omimidi.service	Convierte mensajes MIDI a OSC
+omiosc	omiosc.service	Controlador de señales OSC
+satellite	companion-satellite.service	Modo Companion Satellite
 companion	companion.service	Instancia principal de Companion
 
-🧩 Ejemplos de uso de la API
+🧩 Ejemplos de uso
 Cambiar rol
 bash
-Copiar código
+
 curl -X PUT -H "Content-Type: application/json" \
   -d '{"role":"omimidi"}' \
   http://localhost:9000/v1/role
-Ver logs de un servicio
+Ver logs
 bash
-Copiar código
+
 curl http://localhost:9000/v1/logs/omimidi
 Apagar la Raspberry
 bash
-Copiar código
+
 curl -X POST http://localhost:9000/v1/power/shutdown
+🔗 Integración con omi-Fleet-Config
+El agente puede sincronizar configuraciones directamente desde el repositorio
+omi-fleet-config
+para aplicar parámetros de show y roles definidos.
+
 📜 Licencia
 MIT © 2025 Omar Mohamed Luis
+
