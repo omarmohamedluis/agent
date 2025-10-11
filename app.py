@@ -2,11 +2,17 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import subprocess, json, os, time, psutil, socket
 
+# NEW: UI
+from ui.oled_ui import OledUI
+
 APP_PORT = 9000
 DATA_DIR = "/etc/omi"
 DEVICE_FILE = os.path.join(DATA_DIR, "device.json")
 
 app = FastAPI(title="omiAgent", version="0.1")
+
+# --- UI global ---
+ui = OledUI()  # crea la instancia (no bloquea)
 
 def read_device():
     if os.path.exists(DEVICE_FILE):
@@ -29,6 +35,40 @@ def list_services():
     names = ["omimidi","omiosc","companion-satellite","companion"]
     return [{"name": n, "status": service_status(n)} for n in names]
 
+# ----------------- FastAPI lifecycle -----------------
+@app.on_event("startup")
+def _on_startup():
+    # 1) Arranca pantalla en modo LOADING
+    ui.start_boot()
+    ui.set_progress(5, "Leyendo dispositivo...")
+    dev = read_device()
+
+    # 2) Pasitos de boot con progreso (ajusta a tus necesidades)
+    ui.set_progress(20, "Comprobando servicios...")
+    _ = list_services()  # simple scan para que tarde "algo" real
+
+    ui.set_progress(35, "Inicializando sensores...")
+    # (psutil caliente, etc.)
+    _ = psutil.cpu_percent(interval=0.1)
+
+    ui.set_progress(60, "Preparando API...")
+    # (no hay mucho más que hacer aquí; FastAPI ya está subiendo)
+
+    ui.set_progress(85, "Finalizando...")
+    # 3) Cuando el server está listo, cambiamos a READY
+    index = dev.get("index")
+    role = dev.get("role", "standby")
+    ui.set_ready(profile=role, index=index)
+    # Consideramos “conectado” (puedes cambiar esto a tu lógica real de servidor remoto)
+    ui.set_connection(True)
+    ui.set_progress(100, "Listo")
+
+@app.on_event("shutdown")
+def _on_shutdown():
+    # Apaga el hilo de la UI
+    ui.stop()
+
+# ----------------- Endpoints -----------------
 @app.get("/v1/health")
 def health():
     dev = read_device()
@@ -58,6 +98,9 @@ def identity(body: Identity):
         dev["hostname"] = body.hostname
         svc(f"sudo hostnamectl set-hostname {body.hostname}")
     write_device(dev)
+
+    # NEW: refleja al momento en el header (READY mantiene el perfil actual)
+    ui.set_ready(profile=dev.get("role","standby"), index=dev.get("index"))
     return {"ok": True}
 
 class RoleBody(BaseModel):
@@ -86,6 +129,11 @@ def set_role(body: RoleBody):
     if role not in ROLE_TO_SERVICES:
         raise HTTPException(status_code=400, detail="unknown role")
     prev = read_device().get("role","standby")
+
+    # Opcional: feedback visual mientras cambia el rol
+    ui.set_progress(10, f"Cambiando rol → {role}…")
+    ui.set_connection(False)
+
     stop_all()
     start_role(role)
     dev = read_device()
@@ -95,11 +143,20 @@ def set_role(body: RoleBody):
     ok = all(service_status(n) == "active" for n in ROLE_TO_SERVICES[role])
     if not ok and role != "standby":
         # rollback
+        ui.set_progress(60, "Fallo. Revirtiendo…")
         stop_all()
         start_role(prev)
         dev["role"] = prev
         write_device(dev)
+        # reflejar rollback en pantalla
+        ui.set_ready(profile=prev, index=dev.get("index"))
+        ui.set_connection(True)
         return {"ok": False, "reason": "start_failed", "prev": prev, "now": prev}
+
+    # OK: refleja el nuevo rol en pantalla
+    ui.set_ready(profile=role, index=dev.get("index"))
+    ui.set_connection(True)
+    ui.set_progress(100, "Listo")
     return {"ok": True, "prev": prev, "now": role}
 
 @app.get("/v1/services")
