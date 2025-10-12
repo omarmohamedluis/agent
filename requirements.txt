@@ -1,3 +1,4 @@
+# --- núcleo / server ---
 annotated-types==0.7.0
 anyio==4.11.0
 click==8.3.0
@@ -18,3 +19,14 @@ uvicorn==0.37.0
 uvloop==0.21.0
 watchfiles==1.1.0
 websockets==15.0.1
+
+# --- cliente HTTP (agente) ---
+requests==2.32.3
+
+# --- red/sistema para HUD (agente) ---
+netifaces==0.11.0
+
+# --- OLED (agente) ---
+Pillow==10.4.0
+luma.oled==3.13.0
+smbus2==0.4.3

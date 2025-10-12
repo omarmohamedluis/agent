@@ -1,200 +1,280 @@
-from fastapi import FastAPI, HTTPException
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+from fastapi import FastAPI
 from pydantic import BaseModel
-import subprocess, json, os, time, psutil, socket
-import time
+import subprocess, json, os, socket, psutil, time, hashlib, threading
+import requests
 
-# NEW: UI
+# ====== CONFIG ======
+MAIN_VERSION  = "0.0.1"
+SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR      = os.path.join(SCRIPT_DIR, "data")            # ← ruta relativa
+PIINFO_FILE   = os.path.join(DATA_DIR, "PiInfo.json")
+TOKEN_FILE    = os.path.join(DATA_DIR, "agent_token")       # ← token persistente
+FILLER_SCRIPT = os.path.join(SCRIPT_DIR, "DataConfig", "fill_rpi_config.py")
+
+# ====== UI ======
 from ui.oled_ui import OledUI
+ui = OledUI()  # instancia global
 
-APP_PORT = 9000
-DATA_DIR = "/etc/omi"
-DEVICE_FILE = os.path.join(DATA_DIR, "device.json")
+app = FastAPI(title="omiAgent-MVP+UI", version=MAIN_VERSION)
+PIINFO_CACHE = {}
+STOP_HEARTBEAT = threading.Event()
 
-app = FastAPI(title="omiAgent", version="0.1")
-
-# --- UI global ---
-ui = OledUI()  # crea la instancia (no bloquea)
-
-def read_device():
-    if os.path.exists(DEVICE_FILE):
-        return json.load(open(DEVICE_FILE))
-    return {"index": None, "hostname": socket.gethostname(), "role": "standby"}
-
-def write_device(d):
+# -------------------- Helpers --------------------
+def ensure_dirs():
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(DEVICE_FILE, "w") as f:
-        json.dump(d, f)
 
-def svc(cmd):
-    return subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+def run_filler(version: str):
+    print(f"[agent] Rellenador --version {version}", flush=True)
+    r = subprocess.run(["python3", FILLER_SCRIPT, "--version", version],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    print(r.stdout.strip())
+    if r.returncode != 0:
+        print("[agent][ERROR] Rellenador falló:", r.stderr.strip(), flush=True)
 
-def service_status(name):
-    r = svc(f"systemctl is-active {name}")
-    return r.stdout.strip() if r.returncode == 0 else "inactive"
+    # Copia si el rellenador genera PiInfo.json junto a su script
+    src = os.path.join(os.path.dirname(FILLER_SCRIPT), "PiInfo.json")
+    if os.path.exists(src):
+        ensure_dirs()
+        with open(src, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        with open(PIINFO_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        print(f"[agent] PiInfo.json actualizado en {PIINFO_FILE}", flush=True)
 
-def list_services():
-    names = ["omimidi","omiosc","companion-satellite","companion"]
-    return [{"name": n, "status": service_status(n)} for n in names]
+def load_piinfo():
+    global PIINFO_CACHE
+    if os.path.exists(PIINFO_FILE):
+        with open(PIINFO_FILE, "r", encoding="utf-8") as f:
+            PIINFO_CACHE = json.load(f)
+    else:
+        PIINFO_CACHE = {}
+    return PIINFO_CACHE
 
-time.sleep(1)
+def save_piinfo(conf: dict):
+    ensure_dirs()
+    with open(PIINFO_FILE, "w", encoding="utf-8") as f:
+        json.dump(conf, f, indent=2, ensure_ascii=False)
 
-# ----------------- FastAPI lifecycle -----------------
+def infer_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(0.2)
+        try:
+            s.connect(("1.1.1.1", 53)); ip = s.getsockname()[0]
+        finally:
+            s.close()
+        return ip
+    except:
+        return socket.gethostbyname(socket.gethostname())
+
+def read_token() -> str | None:
+    try:
+        with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+            t = f.read().strip()
+            return t or None
+    except FileNotFoundError:
+        return None
+
+def write_token(tok: str):
+    ensure_dirs()
+    with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+        f.write(tok.strip())
+    try:
+        os.chmod(TOKEN_FILE, 0o600)
+    except Exception:
+        pass
+
+def normalized_api_base(server_block: dict) -> str | None:
+    """Devuelve api_base usable. Si falta, intenta construir http://<address>:8443."""
+    api_base = (server_block or {}).get("api_base", "") or ""
+    address  = (server_block or {}).get("address", "") or ""
+    if api_base:
+        return api_base
+    if address:
+        # Nuestro server corre http en 8443 en el MVP
+        return f"http://{address}:8443"
+    return None
+
+def sha256_json(obj: dict) -> str:
+    data = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+def http_post(url: str, json_body: dict, token: str | None = None, timeout=3.0) -> requests.Response:
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    # Acepta http/https. Si es https con cert autofirmado, desactiva verify en MVP.
+    verify = not url.lower().startswith("https://")
+    # Nota: verify=False para https (autofirmado) → set verify=False
+    verify = False if url.lower().startswith("https://") else True
+    return requests.post(url, json=json_body, headers=headers, timeout=timeout, verify=verify)
+
+# -------------------- REST (handshake + heartbeat) --------------------
+def do_handshake_and_start_heartbeat(pi: dict):
+    """Hace handshake con el server, guarda token e index si aplica y lanza el thread de heartbeat."""
+    ident   = pi.get("identity", {}) or {}
+    serial  = ident.get("serial", "UNKNOWN")
+    index   = ident.get("index", 99)
+    serverb = pi.get("server", {}) or {}
+    api_base = normalized_api_base(serverb)
+
+    if not api_base:
+        print("[agent] Sin api_base del servidor. No se puede hacer handshake.", flush=True)
+        ui.set_connection(False)
+        return
+
+    observed_sha = sha256_json(pi)
+    body = {
+        "serial": serial,
+        "hostname": socket.gethostname(),
+        "versions": {"agent": MAIN_VERSION},
+        "observed_sha": observed_sha,
+        "identity": {"index": index},
+    }
+
+    url = f"{api_base}/v1/agents/handshake"
+    print(f"[agent] Handshake → {url}", flush=True)
+    try:
+        r = http_post(url, body, token=None, timeout=4.0)
+        r.raise_for_status()
+        resp = r.json()
+    except Exception as e:
+        print(f"[agent][handshake][ERROR] {e}", flush=True)
+        ui.set_connection(False)
+        return
+
+    # token
+    tok = (resp or {}).get("token")
+    if tok:
+        write_token(tok)
+
+    # asignación de index
+    assign = (resp or {}).get("assign") or {}
+    if "index" in assign and isinstance(assign["index"], int):
+        new_idx = assign["index"]
+        if new_idx != index:
+            print(f"[agent] Index asignado por server: {new_idx} (antes {index})", flush=True)
+            pi.setdefault("identity", {})["index"] = new_idx
+            save_piinfo(pi)  # persistimos
+            # refleja en UI
+            ui.set_ready(profile="standby", index=new_idx)
+
+    ui.set_connection(True)
+    # lanza heartbeat
+    start_heartbeat_thread(pi)
+
+def heartbeat_loop(pi_supplier, interval_s: int):
+    """Bucle de latidos. pi_supplier es una función que devuelve la config actual."""
+    while not STOP_HEARTBEAT.is_set():
+        pi = pi_supplier()
+        ident = pi.get("identity", {}) or {}
+        serverb = pi.get("server", {}) or {}
+        token = read_token()
+        api_base = normalized_api_base(serverb)
+        if not token or not api_base:
+            time.sleep(interval_s)
+            continue
+
+        serial = ident.get("serial", "UNKNOWN")
+        observed_sha = sha256_json(pi)
+
+        body = {
+            "serial": serial,
+            "observed_sha": observed_sha,
+            "service": "standby",   # MVP: fijo, ya lo haremos dinámico
+            "stats": {
+                "cpu": psutil.cpu_percent(interval=0.05),
+                "ip": infer_ip()
+            }
+        }
+        url = f"{api_base}/v1/agents/heartbeat/{serial}"
+        try:
+            r = http_post(url, body, token=token, timeout=3.0)
+            # si el token caducó o no vale, el server devolverá 401
+            if r.status_code == 401:
+                print("[agent][heartbeat] 401 Unauthorized (token). Reintentará tras renovar.", flush=True)
+        except Exception as e:
+            print(f"[agent][heartbeat][WARN] {e}", flush=True)
+
+        # pinta “conectado” si todo OK recientemente
+        ui.set_connection(True)
+        STOP_HEARTBEAT.wait(interval_s)
+
+def start_heartbeat_thread(pi_initial: dict):
+    # intervalo desde config, default 5s
+    interval = int(pi_initial.get("config", {}).get("heartbeat_interval_s", 5) or 5)
+    STOP_HEARTBEAT.clear()
+    t = threading.Thread(target=heartbeat_loop, args=(lambda: (PIINFO_CACHE or load_piinfo()), interval), daemon=True)
+    t.start()
+
+# -------------------- Lifecycle --------------------
 @app.on_event("startup")
-def _on_startup():
-    # 1) Arranca pantalla en modo LOADING
+def startup():
+    # 1) UI primero
     ui.start_boot()
-    ui.set_progress(5)
-    dev = read_device()
-    time.sleep(1)
-    # 2) Pasitos de boot con progreso (ajusta a tus necesidades)
-    ui.set_progress(20)
-    _ = list_services()  # simple scan para que tarde "algo" real
-    time.sleep(1)
-    ui.set_progress(35)
-    # (psutil caliente, etc.)
-    _ = psutil.cpu_percent(interval=0.1)
-    time.sleep(1)
-    ui.set_progress(60)
-    # (no hay mucho más que hacer aquí; FastAPI ya está subiendo)
-    time.sleep(1)
-    ui.set_progress(85)
-    # 3) Cuando el server está listo, cambiamos a READY
-    index = dev.get("index")
-    role = dev.get("role", "standby")
+    ui.set_progress(5, "Arrancando…")
+
+    # 2) JSON rellenado
+    ui.set_progress(15, "Leyendo hardware…")
+    ensure_dirs()
+    run_filler(MAIN_VERSION)
+
+    # 3) Cargar PiInfo y READY mínimo
+    ui.set_progress(45, "Cargando configuración…")
+    pi = load_piinfo()
+    ident = pi.get("identity", {})
+    index = ident.get("index", 99)
+    role  = "standby"
+
+    _ = psutil.cpu_percent(interval=0.15)
+    ui.set_progress(70, "Inicializando UI…")
+    time.sleep(0.1)
     ui.set_ready(profile=role, index=index)
-    time.sleep(1)
-    # Consideramos “conectado” (puedes cambiar esto a tu lógica real de servidor remoto)
     ui.set_connection(False)
-    time.sleep(1)
+    ui.set_progress(85, "Contacto con servidor…")
+
+    # 4) Handshake REST + heartbeat
+    do_handshake_and_start_heartbeat(pi)
     ui.set_progress(100, "Listo")
 
 @app.on_event("shutdown")
-def _on_shutdown():
-    # Apaga el hilo de la UI
+def shutdown():
+    STOP_HEARTBEAT.set()
     ui.stop()
 
-# ----------------- Endpoints -----------------
+# -------------------- Endpoints locales (debug) --------------------
 @app.get("/v1/health")
 def health():
-    dev = read_device()
-    temps = psutil.sensors_temperatures() if hasattr(psutil, "sensors_temperatures") else {}
+    pi = PIINFO_CACHE or load_piinfo()
+    ident = pi.get("identity", {})
     return {
-        "device_id": dev.get("device_id", socket.gethostname()),
-        "hostname": dev.get("hostname", socket.gethostname()),
-        "index": dev.get("index"),
-        "role": dev.get("role","standby"),
-        "ip": socket.gethostbyname(socket.gethostname()),
-        "services": {s["name"]: s["status"] for s in list_services()},
-        "cpu": psutil.cpu_percent(interval=0.2),
-        "mem": psutil.virtual_memory()._asdict(),
-        "temp": {k:[t.current for t in v] for k,v in temps.items()} if temps else {},
-        "uptime": time.time() - psutil.boot_time()
+        "serial": ident.get("serial", "UNKNOWN"),
+        "index": ident.get("index", 99),
+        "ip": infer_ip(),
+        "cpu": psutil.cpu_percent(interval=0.1)
     }
 
-class Identity(BaseModel):
-    index: int
-    hostname: str | None = None
+@app.get("/v1/config")
+def get_config():
+    return PIINFO_CACHE or load_piinfo()
 
-@app.put("/v1/identity")
-def identity(body: Identity):
-    dev = read_device()
-    dev["index"] = body.index
-    if body.hostname:
-        dev["hostname"] = body.hostname
-        svc(f"sudo hostnamectl set-hostname {body.hostname}")
-    write_device(dev)
+# ====== UI helpers ======
+class UIConnBody(BaseModel):
+    connected: bool
 
-    # NEW: refleja al momento en el header (READY mantiene el perfil actual)
-    ui.set_ready(profile=dev.get("role","standby"), index=dev.get("index"))
-    return {"ok": True}
+@app.put("/v1/ui/connection")
+def ui_connection(body: UIConnBody):
+    ui.set_connection(bool(body.connected))
+    return {"ok": True, "connected": body.connected}
 
-class RoleBody(BaseModel):
-    role: str
+class UIStatusBody(BaseModel):
+    message: str | None = None
+    progress: int | None = None  # 0-100
 
-ROLE_TO_SERVICES = {
-    "standby": [],
-    "omimidi": ["omimidi"],
-    "omiosc": ["omiosc"],
-    "satellite": ["companion-satellite"],
-    "companion": ["companion"]
-}
-
-def stop_all():
-    for n in ["omimidi","omiosc","companion-satellite","companion"]:
-        svc(f"sudo systemctl stop {n}")
-
-def start_role(role: str):
-    for n in ROLE_TO_SERVICES.get(role, []):
-        svc(f"sudo systemctl enable {n}")
-        svc(f"sudo systemctl restart {n}")
-
-@app.put("/v1/role")
-def set_role(body: RoleBody):
-    role = body.role.lower()
-    if role not in ROLE_TO_SERVICES:
-        raise HTTPException(status_code=400, detail="unknown role")
-    prev = read_device().get("role","standby")
-
-    # Opcional: feedback visual mientras cambia el rol
-    ui.set_progress(10, f"Cambiando rol → {role}…")
-    ui.set_connection(False)
-
-    stop_all()
-    start_role(role)
-    dev = read_device()
-    dev["role"] = role
-    write_device(dev)
-    # verificación simple
-    ok = all(service_status(n) == "active" for n in ROLE_TO_SERVICES[role])
-    if not ok and role != "standby":
-        # rollback
-        ui.set_progress(60, "Fallo. Revirtiendo…")
-        stop_all()
-        start_role(prev)
-        dev["role"] = prev
-        write_device(dev)
-        # reflejar rollback en pantalla
-        ui.set_ready(profile=prev, index=dev.get("index"))
-        ui.set_connection(True)
-        return {"ok": False, "reason": "start_failed", "prev": prev, "now": prev}
-
-    # OK: refleja el nuevo rol en pantalla
-    ui.set_ready(profile=role, index=dev.get("index"))
-    ui.set_connection(True)
-    ui.set_progress(100, "Listo")
-    return {"ok": True, "prev": prev, "now": role}
-
-@app.get("/v1/services")
-def services():
-    return {"services": list_services()}
-
-@app.post("/v1/services/{name}/{action}")
-def service_ctl(name: str, action: str):
-    if action not in ["start","stop","restart"]:
-        raise HTTPException(status_code=400, detail="bad action")
-    r = svc(f"sudo systemctl {action} {name}")
-    return {"ok": r.returncode == 0, "stdout": r.stdout, "stderr": r.stderr}
-
-@app.put("/v1/configs/{service}")
-async def put_config(service: str, body: dict):
-    role_dir = f"/etc/omi/roles/{service if service!='satellite' else 'satellite'}"
-    os.makedirs(role_dir, exist_ok=True)
-    fname = "config.json" if service in ["satellite","companion"] else ("map.json" if service=="omimidi" else "routes.json")
-    with open(os.path.join(role_dir, fname), "w") as f:
-        json.dump(body, f, indent=2)
-    return {"ok": True}
-
-@app.get("/v1/logs/{name}")
-def logs(name: str, tail: int = 300):
-    r = svc(f"journalctl -u {name} -n {tail} --no-pager")
-    return r.stdout or r.stderr
-
-@app.post("/v1/power/{action}")
-def power(action: str):
-    if action == "reboot":
-        svc("sudo reboot")
-        return {"ok": True}
-    if action == "shutdown":
-        svc("sudo shutdown -h now")
-        return {"ok": True}
-    raise HTTPException(status_code=400, detail="bad action")
+@app.put("/v1/ui/status")
+def ui_status(body: UIStatusBody):
+    pct = body.progress if body.progress is not None else None
+    ui.set_progress(pct if pct is not None else 100, body.message)
+    return {"ok": True, "progress": pct, "message": body.message}

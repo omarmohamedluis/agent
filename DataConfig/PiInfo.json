@@ -1,0 +1,54 @@
+{
+  "version": {
+    "version": "0.0.1"
+  },
+  "identity": {
+    "index": 99,
+    "name": "NONE",
+    "serial": "4f30ea9e2b4bbfbc"
+  },
+  "server": {
+    "api_base": "https://192.168.0.52:8443",
+    "address": "192.168.0.52"
+  },
+  "network": {
+    "interfaces": [
+      {
+        "name": "wlan0",
+        "mac": "2C:CF:67:9C:2A:D3",
+        "mode": "dhcp",
+        "ipv4": {
+          "address": "192.168.0.48",
+          "netmask": "255.255.255.0",
+          "gateway": "192.168.0.1",
+          "dns": [
+            "192.168.0.1"
+          ]
+        }
+      }
+    ]
+  },
+  "services": [
+    {
+      "name": "standby",
+      "enabled": true
+    },
+    {
+      "name": "MIDI",
+      "enabled": false
+    },
+    {
+      "name": "companion-satellite",
+      "enabled": false
+    }
+  ],
+  "config": {
+    "heartbeat_interval_s": 5,
+    "log_level": "info",
+    "topics": [
+      "status",
+      "metrics",
+      "events"
+    ]
+  }
+}
