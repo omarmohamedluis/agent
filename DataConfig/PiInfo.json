@@ -1,34 +1,21 @@
 {
   "version": {
-    "version": "0.0.1"
+    "version": "" //SE LO PASA EL SCRIPT QUE LO LLAME
   },
   "identity": {
-    "index": 99,
-    "name": "NONE",
-    "serial": "4f30ea9e2b4bbfbc"
+    "index": null, //NULL HASTA QUE LO INDIQUE EL SERVER
+    "name": "",  //NULL HASTA QUE LO INDIQUE EL SERVER
+    "serial": "" //IMPORTANTE!!!!!
   },
   "server": {
-    "api_base": "https://192.168.0.52:8443",
-    "address": "192.168.0.52"
+    "api_base": "", //NULL HASTA QUE LO INDIQUE EL SERVER
+    "address": ""  //NULL HASTA QUE LO INDIQUE EL SERVER
   },
   "network": {
-    "interfaces": [
-      {
-        "name": "wlan0",
-        "mac": "2C:CF:67:9C:2A:D3",
-        "mode": "dhcp",
-        "ipv4": {
-          "address": "192.168.0.48",
-          "netmask": "255.255.255.0",
-          "gateway": "192.168.0.1",
-          "dns": [
-            "192.168.0.1"
-          ]
-        }
-      }
+    "interfaces": [ //NULL HASTA QUE LO INDIQUE EL SERVER
     ]
   },
-  "services": [
+  "services": [ //EN STANDBY LA PRIMERA VEZ Y LUEGO LO QUE LE INDIQUE EL SERVER
     {
       "name": "standby",
       "enabled": true
@@ -40,15 +27,13 @@
     {
       "name": "companion-satellite",
       "enabled": false
+    },
+    {
+      "name": "scauting",
+      "enabled": false
     }
   ],
   "config": {
-    "heartbeat_interval_s": 5,
-    "log_level": "info",
-    "topics": [
-      "status",
-      "metrics",
-      "events"
-    ]
+    "heartbeat_interval_s": 5 //ESTO DEJALO ASI DE MOMENTO, LE INDICARA AL SCRIPT DE HARTBEAT CADA CUANDO DAR LA VUELTA AL BUCLE
   }
 }

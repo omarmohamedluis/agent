@@ -1,0 +1,36 @@
+{
+  "version": {
+    "version": "0.0.1"
+  },
+  "identity": {
+    "index": 1,
+    "name": "foh1",
+    "serial": "4f30ea9e2b4bbfbc"
+  },
+  "network": {
+    "interfaces": [
+      "192.168.0.48"
+    ]
+  },
+  "services": [
+    {
+      "name": "standby",
+      "enabled": true
+    },
+    {
+      "name": "MIDI",
+      "enabled": false
+    },
+    {
+      "name": "companion-satellite",
+      "enabled": false
+    },
+    {
+      "name": "scauting",
+      "enabled": false
+    }
+  ],
+  "config": {
+    "heartbeat_interval_s": 5
+  }
+}
