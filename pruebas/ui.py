@@ -1,0 +1,262 @@
+# ui/ui.py
+from __future__ import annotations
+from pathlib import Path
+from typing import Optional
+from PIL import Image, ImageDraw, ImageFont
+import json
+
+DEFAULT_JSON_PATH = Path("agent_pi/data/structure.json")
+
+OLED_W, OLED_H = 128, 64
+HEADER_H = 16
+
+# -------- Assets (ajusta si quieres) --------
+ASSETS_CANDIDATES = [
+    Path(__file__).resolve().parent / "assets",
+    Path(__file__).resolve().parents[1] / "utilitys",
+]
+ICON_NAMES = ["omar.png", "omipi.png", "omarpi.png"]
+FONT_MONO_NAMES = ["PixelOperator.ttf", "PixelOperatorMono.ttf"]
+FONT_ICON_NAMES = ["lineawesome-webfont.ttf"]  # opcional
+
+# -------- Hardware (fallback NOOP si no hay OLED) --------
+_HW_OK = True
+_device = None
+try:
+    from luma.core.interface.serial import i2c
+    from luma.oled.device import ssd1306
+    serial = i2c(port=1, address=0x3C)
+    _device = ssd1306(serial, width=OLED_W, height=OLED_H)
+except Exception:
+    _HW_OK = False
+
+# -------- Carga de fuentes e icono --------
+def _find_first(paths, names) -> Optional[Path]:
+    for base in paths:
+        for n in names:
+            p = base / n
+            if p.exists():
+                return p
+    return None
+
+_FONT_PATH = _find_first(ASSETS_CANDIDATES, FONT_MONO_NAMES)
+_FONT = ImageFont.truetype(str(_FONT_PATH), 14) if _FONT_PATH else ImageFont.load_default()
+_ICON_PATH = _find_first(ASSETS_CANDIDATES, ICON_NAMES)
+_ICON = None
+if _ICON_PATH:
+    try:
+        _ICON = Image.open(_ICON_PATH).convert("L")
+    except Exception:
+        _ICON = None
+
+# -------- Lienzos --------
+def _base_canvas() -> Image.Image:
+    """Fondo negro con icono abajo (para Loading/Error/Shutdown)."""
+    img = Image.new("L", (OLED_W, OLED_H), 0)
+    if _ICON:
+        max_w, max_h = OLED_W, OLED_H - HEADER_H
+        w, h = _ICON.size
+        scale = min(max_w / w, max_h / h)
+        nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+        icon = _ICON.resize((nw, nh), Image.LANCZOS)
+        x = (OLED_W - nw) // 2
+        y = OLED_H - nh
+        img.paste(icon, (x, y))
+    return img
+
+def _new_frame() -> Image.Image:
+    """Frame completamente negro (sin icono)."""
+    return Image.new("L", (OLED_W, OLED_H), 0)
+
+# -------- Headers --------
+def _draw_header_with_progress(img: Image.Image, percent: int, label: str):
+    percent = max(0, min(100, int(percent)))
+    draw = ImageDraw.Draw(img)
+
+    text = label or ""
+    tw, th = draw.textbbox((0, 0), text, font=_FONT)[2:]
+    tx = max(2, (OLED_W - tw) // 2)
+    ty = max(0, (HEADER_H - th) // 2)
+
+    draw.text((tx, ty), text, font=_FONT, fill=255)
+
+    bar_w = int((percent / 100.0) * OLED_W)
+    if bar_w > 0:
+        draw.rectangle([0, 0, bar_w - 1, HEADER_H - 1], fill=255)
+
+        text_layer = Image.new("L", (OLED_W, HEADER_H), 0)
+        ImageDraw.Draw(text_layer).text((tx, ty), text, font=_FONT, fill=255)
+        bar_mask = Image.new("L", (OLED_W, HEADER_H), 0)
+        ImageDraw.Draw(bar_mask).rectangle([0, 0, bar_w - 1, HEADER_H - 1], fill=255)
+        masked = Image.new("L", (OLED_W, HEADER_H), 0)
+        masked.paste(text_layer, (0, 0), mask=bar_mask)
+        img.paste(0, (0, 0, OLED_W, HEADER_H), mask=masked)
+
+def _draw_header_error(img: Image.Image, label: str):
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 0, OLED_W - 1, HEADER_H - 1], fill=255)
+    text = label or "ERROR"
+    tw, th = draw.textbbox((0, 0), text, font=_FONT)[2:]
+    tx = max(2, (OLED_W - tw) // 2)
+    ty = max(0, (HEADER_H - th) // 2)
+    draw.text((tx, ty), text, font=_FONT, fill=0)
+
+def _draw_wifi(draw: ImageDraw.ImageDraw, x:int, y:int, ok: bool):
+    draw.arc([x+0, y+0, x+12, y+12], start=200, end=340, fill=255)
+    draw.arc([x+2, y+2, x+10, y+10], start=200, end=340, fill=255)
+    draw.arc([x+4, y+4, x+8, y+8], start=200, end=340, fill=255)
+    draw.rectangle([x+5, y+9, x+7, y+11], fill=255)
+    if not ok:
+        draw.line([x+1, y+1, x+11, y+11], fill=255, width=2)
+
+def _draw_wifi_black(draw: ImageDraw.ImageDraw, x:int, y:int, ok: bool):
+    draw.arc([x+0, y+0, x+12, y+12], start=200, end=340, fill=0)
+    draw.arc([x+2, y+2, x+10, y+10], start=200, end=340, fill=0)
+    draw.arc([x+4, y+4, x+8, y+8], start=200, end=340, fill=0)
+    draw.rectangle([x+5, y+9, x+7, y+11], fill=0)
+    if not ok:
+        draw.line([x+1, y+1, x+11, y+11], fill=0, width=2)
+
+def _draw_header_text_left_center_right(img: Image.Image, left:str, center:str, right_wifi_ok: bool):
+    draw = ImageDraw.Draw(img)
+    l_text = left or ""
+    l_tw, l_th = draw.textbbox((0,0), l_text, font=_FONT)[2:]
+    draw.text((2, max(0, (HEADER_H - l_th)//2)), l_text, font=_FONT, fill=255)
+    wifi_x = OLED_W - 14
+    wifi_y = (HEADER_H - 12) // 2
+    _draw_wifi(draw, wifi_x, wifi_y, ok=right_wifi_ok)
+    c_text = center or ""
+    c_tw, c_th = draw.textbbox((0,0), c_text, font=_FONT)[2:]
+    cx = max(2, (OLED_W - c_tw)//2)
+    cy = max(0, (HEADER_H - c_th)//2)
+    draw.text((cx, cy), c_text, font=_FONT, fill=255)
+
+def _draw_header_text_left_center_right_inverted(img: Image.Image, left:str, center:str, right_wifi_ok: bool):
+    """Header blanco, texto negro."""
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 0, OLED_W - 1, HEADER_H - 1], fill=255)
+    l_text = left or ""
+    l_tw, l_th = draw.textbbox((0,0), l_text, font=_FONT)[2:]
+    draw.text((2, max(0, (HEADER_H - l_th)//2)), l_text, font=_FONT, fill=0)
+    wifi_x = OLED_W - 14
+    wifi_y = (HEADER_H - 12) // 2
+    _draw_wifi_black(draw, wifi_x, wifi_y, ok=right_wifi_ok)
+    c_text = center or ""
+    c_tw, c_th = draw.textbbox((0,0), c_text, font=_FONT)[2:]
+    cx = max(2, (OLED_W - c_tw)//2)
+    cy = max(0, (HEADER_H - c_th)//2)
+    draw.text((cx, cy), c_text, font=_FONT, fill=0)
+
+# -------- Utiles --------
+def _read_json_simple(path: Path):
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _get_enabled_service(services_list):
+    if isinstance(services_list, list):
+        for s in services_list:
+            if s.get("enabled"):
+                return s.get("name") or ""
+    return ""
+
+def _is_wifi_iface(name: str) -> bool:
+    if not name:
+        return False
+    n = name.lower()
+    return n.startswith("wl") or n.startswith("wlan") or n.startswith("wifi")
+
+def _is_eth_iface(name: str) -> bool:
+    if not name:
+        return False
+    n = name.lower()
+    return n.startswith("eth") or n.startswith("en")
+
+def _display(img: Image.Image):
+    if not _HW_OK or _device is None:
+        print("[OLED:NOOP] frame renderizado")
+        return
+    if img.size != (_device.width, _device.height):
+        img = img.resize((_device.width, _device.height), Image.NEAREST)
+    if img.mode != _device.mode:
+        img = img.convert(_device.mode)
+    _device.display(img)
+
+# -------- API pública --------
+def LoadingUI(percent: int, label: str = "Cargando"):
+    """Pantalla de carga: barra en header que invierte el texto; icono abajo."""
+    img = _base_canvas()
+    _draw_header_with_progress(img, percent, label)
+    _display(img)
+
+def ErrorUI(label: str = "ERROR"):
+    """Header blanco + texto ERROR (o label), icono abajo."""
+    img = _base_canvas()
+    _draw_header_error(img, label)
+    _display(img)
+
+def UIShutdownProceess(percent: int, label: str = "Apagando"):
+    """Igual que LOADING, separado por semántica (con icono)."""
+    img = _base_canvas()
+    _draw_header_with_progress(img, percent, label)
+    _display(img)
+
+def EstandardUse(snapshot: dict, server_online: bool, json_path: Path = DEFAULT_JSON_PATH):
+    """Header blanco/negro y footer con CPU/TEMP y NET (WIFI/ETH ip/cidr)."""
+    img = _new_frame()
+
+    # Header invertido: fondo blanco, texto negro
+    data = _read_json_simple(json_path)
+    index = data.get("identity", {}).get("index", None)
+    index_label = f"#{index if index is not None else '--'}"
+    services = data.get("services", [])
+    service_active = _get_enabled_service(services)
+    service_label = (service_active or "").upper()
+    _draw_header_text_left_center_right_inverted(img, index_label, service_label, right_wifi_ok=server_online)
+
+    # Footer
+    draw = ImageDraw.Draw(img)
+    cpu  = snapshot.get("cpu")
+    temp = snapshot.get("temp")
+    ifaces = snapshot.get("ifaces") or []
+
+    # Elegir interfaz principal: primero Wi-Fi; si no hay, la primera
+    primary = None
+    for x in ifaces:
+        if _is_wifi_iface(x.get("iface", "")):
+            primary = x
+            break
+    if primary is None:
+        primary = ifaces[0] if ifaces else None
+
+    if primary:
+        iface_name = primary.get("iface") or ""
+        if _is_wifi_iface(iface_name):
+            kind = "WIFI"
+        elif _is_eth_iface(iface_name):
+            kind = "ETH"
+        else:
+            kind = "NET"
+        ip_cidr = primary.get("cidr") or primary.get("ip") or "-"
+        ip_text = f"{kind} {ip_cidr if ip_cidr else '-'}"
+    else:
+        ip_text = "NET -"
+
+    y = HEADER_H + 0
+    draw.text((2, y),      f"CPU: {('--' if cpu  is None else f'{cpu:.0f}%')}", font=_FONT, fill=255)
+    draw.text((2, y + 12), f"TEMP:{('--' if temp is None else f'{temp:.0f}C')}", font=_FONT, fill=255)
+
+    tw, _ = draw.textbbox((0, 0), ip_text, font=_FONT)[2:]
+    while tw > (OLED_W - 4) and len(ip_text) > 4:
+        ip_text = ip_text[:-2] + "…"
+        tw, _ = draw.textbbox((0, 0), ip_text, font=_FONT)[2:]
+    draw.text((2, y + 24), ip_text, font=_FONT, fill=255)
+
+    _display(img)
+
+def UIOFF():
+    """Apaga visualmente la OLED (pantalla completamente negra)."""
+    img = Image.new("L", (OLED_W, OLED_H), 0)
+    _display(img)

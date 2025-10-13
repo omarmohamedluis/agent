@@ -1,10 +1,8 @@
-# heartbeat.py — ultra básico
+# heartbeat.py — UPDATEHB sin hilo y sin 'ips'
 # deps: psutil, netifaces
 from __future__ import annotations
-import time
 import json
 from pathlib import Path
-from threading import Thread, Event
 from typing import List, Dict, Any, Optional
 
 import psutil
@@ -12,19 +10,11 @@ import netifaces
 
 STRUCTURE_PATH = Path("agent_pi/data/structure.json")
 
-# ---------------- Vars de estado (las que pediste) ----------------
-interval: int = 5                 # se cargará desde el JSON
-NETNICS: List[str] = []           # array de IPs
+# ---------------- Vars de estado expuestas ----------------
 CpuUsage: Optional[float] = None  # %
 TEMP: Optional[float] = None      # ºC
-active: bool = True               # centinela
 
-# Control interno del hilo
-_loop_thread: Optional[Thread] = None
-_stop_evt: Event = Event()
-
-
-# ---------------- Utils JSON muy simples ----------------
+# ---------------- Utils JSON ----------------
 def _read_json(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
@@ -34,24 +24,65 @@ def _write_json(path: Path, data: Dict[str, Any]) -> None:
     with path.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+# Acepta formatos antiguos (lista de strings) o nuevos (lista de objetos)
+def _normalize_json_interfaces(val) -> List[Dict[str, Optional[str]]]:
+    out: List[Dict[str, Optional[str]]] = []
+    if not isinstance(val, list):
+        return out
+    for item in val:
+        if isinstance(item, dict):
+            out.append({
+                "iface": item.get("iface"),
+                "ip": item.get("ip"),
+                "netmask": item.get("netmask")
+            })
+        elif isinstance(item, str):
+            out.append({"iface": None, "ip": item, "netmask": None})
+    return out
 
 # ---------------- Lecturas del sistema ----------------
-def _get_ips_real() -> List[str]:
-    """Devuelve lista de IPv4 reales (sin loopback)."""
-    ips: List[str] = []
+def _mask_to_prefix(netmask: Optional[str]) -> Optional[int]:
+    if not netmask:
+        return None
+    try:
+        return sum(bin(int(part)).count("1") for part in netmask.split("."))
+    except Exception:
+        return None
+
+def _get_ip_info() -> List[Dict[str, Optional[str]]]:
+    """
+    Devuelve lista de dicts por interfaz IPv4 (sin loopback):
+    [{"iface":"eth0","ip":"192.168.1.23","netmask":"255.255.255.0"}, ...]
+    """
+    out: List[Dict[str, Optional[str]]] = []
     for iface in netifaces.interfaces():
         addrs = netifaces.ifaddresses(iface)
-        for fam, lst in addrs.items():
-            if fam == netifaces.AF_INET:
-                for a in lst:
-                    ip = a.get("addr")
-                    if ip and not ip.startswith("127."):
-                        ips.append(ip)
-    # orden estable
-    return sorted(set(ips))
+        if netifaces.AF_INET not in addrs:
+            continue
+        for a in addrs[netifaces.AF_INET]:
+            ip = a.get("addr")
+            nm = a.get("netmask")
+            if ip and not str(ip).startswith("127."):
+                out.append({"iface": iface, "ip": ip, "netmask": nm})
+    out.sort(key=lambda d: (d.get("iface") or "", d.get("ip") or ""))
+    return out
+
+def _enrich_ip_info(ip_info: List[Dict[str, Optional[str]]]) -> List[Dict[str, Any]]:
+    enriched: List[Dict[str, Any]] = []
+    for x in ip_info:
+        ip = x.get("ip")
+        nm = x.get("netmask")
+        pfx = _mask_to_prefix(nm)
+        enriched.append({
+            "iface": x.get("iface"),
+            "ip": ip,
+            "netmask": nm,
+            "prefix": pfx,
+            "cidr": f"{ip}/{pfx}" if (ip and pfx is not None) else (ip or None)
+        })
+    return enriched
 
 def _get_cpu_usage() -> float:
-    # muestreo corto para no bloquear mucho
     return float(psutil.cpu_percent(interval=0.2))
 
 def _get_temp_c() -> Optional[float]:
@@ -60,14 +91,13 @@ def _get_temp_c() -> Optional[float]:
         p = Path("/sys/class/thermal/thermal_zone0/temp")
         if p.exists():
             v = p.read_text().strip()
-            # suele venir en milicelsius
             return round(float(v) / (1000.0 if float(v) > 200 else 1.0), 1)
     except Exception:
         pass
     # 2) fallback a psutil
     try:
         temps = psutil.sensors_temperatures(fahrenheit=False)
-        for key, entries in temps.items():
+        for _, entries in temps.items():
             for e in entries:
                 if hasattr(e, "current") and e.current is not None:
                     return float(e.current)
@@ -75,99 +105,45 @@ def _get_temp_c() -> Optional[float]:
         pass
     return None
 
+# ---------------- API principal ----------------
+def UPDATEHB(path: Path = STRUCTURE_PATH) -> Dict[str, Any]:
 
-# ---------------- API pública: start/stop ----------------
-def set_active(flag: bool) -> None:
-    """Cambia la centinela. Si se pone en False, el bucle se detiene limpiamente."""
-    global active
-    active = bool(flag)
-    if not active:
-        _stop_evt.set()
+    global CpuUsage, TEMP
 
-def starthb(path: Path = STRUCTURE_PATH) -> None:
-    """Inicia el bucle de heartbeat en un hilo."""
-    global _loop_thread, _stop_evt
-    if _loop_thread and _loop_thread.is_alive():
-        return
-    _stop_evt.clear()
-    _loop_thread = Thread(target=_run_loop, args=(path,), daemon=True)
-    _loop_thread.start()
+    # leer JSON si existe
+    data: Dict[str, Any] = {}
+    try:
+        if path.exists():
+            data = _read_json(path)
+    except Exception:
+        data = {}
 
-def stophb() -> None:
-    """Detiene el bucle de heartbeat y deja CPU/TEMP en null y NETNICS vacío."""
-    set_active(False)
+    # métricas
+    CpuUsage = _get_cpu_usage()
+    TEMP     = _get_temp_c()
+    ip_info  = _get_ip_info()
 
-# --- API extra: snapshot de métricas en vivo ---
+    # estado previo (acepta strings o objetos)
+    prev_ifaces = _normalize_json_interfaces(data.get("network", {}).get("interfaces")) if data else []
+    prev_ips    = [x.get("ip") for x in prev_ifaces if x.get("ip")]
+    now_ips     = [x.get("ip") for x in ip_info if x.get("ip")]
 
-def snapshothb():
-    """Devuelve una foto actual del heartbeat: cpu, temp, ips."""
+    # ¿cambió algo?
+    changed = sorted(prev_ips) != sorted(now_ips)
+    if changed and data:
+        data.setdefault("network", {})["interfaces"] = _enrich_ip_info(ip_info)
+        try:
+            _write_json(path, data)
+        except Exception:
+            pass
+
+    # snapshot para UI/cliente (enriquecido)
     return {
-        "cpu": CpuUsage,     # puede ser None hasta que mida
-        "temp": TEMP,        # puede ser None si no hay sensor
-        "ips": list(NETNICS) # copia defensiva
+        "cpu": CpuUsage,
+        "temp": TEMP,
+        "ifaces": _enrich_ip_info(ip_info)
     }
 
-
-
-# ---------------- Lógica principal del heartbeat ----------------
-def _run_loop(path: Path) -> None:
-    global interval, NETNICS, CpuUsage, TEMP
-
-    # 1) Cargar JSON; si no existe, no hacemos nada (PoC simple)
-    if not path.exists():
-        # nada que hacer: salimos en silencio
-        return
-
-    try:
-        data = _read_json(path)
-    except Exception:
-        return
-
-    # 2) Inicialización desde JSON
-    try:
-        interval = int(data.get("config", {}).get("heartbeat_interval_s", 5))
-    except Exception:
-        interval = 5
-
-    # JSON guarda interfaces como lista (array de IPs). Si viniera vacía, se rellena luego.
-    NETNICS = list(data.get("network", {}).get("interfaces", []))
-
-    # 3) Bucle
-    while active and not _stop_evt.is_set():
-        # 3.1 Consultas
-        CpuUsage = _get_cpu_usage()
-        TEMP = _get_temp_c()
-        ips_real = _get_ips_real()
-
-        # 3.2 Comparar IPs con JSON
-        # Los comparamos como conjuntos ordenados
-        if sorted(NETNICS) != sorted(ips_real):
-            # Actualizamos variable y JSON
-            NETNICS = ips_real
-            # Sobrescribir JSON en network.interfaces (PoC: lista de IPs)
-            data.setdefault("network", {})["interfaces"] = NETNICS
-            try:
-                _write_json(path, data)
-            except Exception:
-                # si falla escritura, ignoramos en PoC
-                pass
-
-        # 3.3 Espera según interval (respetando stop inmediato)
-        # esperar en pasitos para reaccionar rápido a stop
-        slept = 0.0
-        step = 0.2
-        while slept < max(0.2, float(interval)) and active and not _stop_evt.is_set():
-            time.sleep(step)
-            slept += step
-
-    # 4) Limpieza al parar
-    CpuUsage = None
-    TEMP = None
-    NETNICS = []
-    # opcional: limpiar también en el JSON
-    try:
-        data = _read_json(path)
-        data.setdefault("network", {})["interfaces"] = []
-        _write_json(path, data)
-    except Exception:
-        pass
+# alias por si ya lo usabas antes
+def snapshothb(path: Path = STRUCTURE_PATH) -> Dict[str, Any]:
+    return UPDATEHB(path)

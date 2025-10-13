@@ -4,12 +4,18 @@
   },
   "identity": {
     "index": 1,
-    "name": "foh1",
+    "name": "",
     "serial": "4f30ea9e2b4bbfbc"
   },
   "network": {
     "interfaces": [
-      "192.168.0.48"
+      {
+        "iface": "wlan0",
+        "ip": "192.168.0.48",
+        "netmask": "255.255.255.0",
+        "prefix": 24,
+        "cidr": "192.168.0.48/24"
+      }
     ]
   },
   "services": [
@@ -31,6 +37,6 @@
     }
   ],
   "config": {
-    "heartbeat_interval_s": 5
+    "heartbeat_interval_s": 3
   }
 }
