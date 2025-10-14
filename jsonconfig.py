@@ -6,7 +6,9 @@ import subprocess
 DEFAULT_SERVICES = [
     {"name": "standby",              "enabled": True},
     {"name": "MIDI",                 "enabled": False},
-    {"name": "companion-satellite",  "enabled": False},
+    {"name": "satellite",            "enabled": False},
+    {"name": "companion",            "enabled": False},
+    {"name": "OSCkey",               "enabled": False},
     {"name": "scauting",             "enabled": False},
 ]
 

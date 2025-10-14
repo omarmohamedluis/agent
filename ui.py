@@ -1,53 +1,30 @@
 # ui/ui.py
+
 from __future__ import annotations
 from pathlib import Path
-from typing import Optional
 from PIL import Image, ImageDraw, ImageFont
 import json
+
 
 DEFAULT_JSON_PATH = Path("agent_pi/data/structure.json")
 
 OLED_W, OLED_H = 128, 64
 HEADER_H = 16
 
-# -------- Assets (ajusta si quieres) --------
-ASSETS_CANDIDATES = [
-    Path(__file__).resolve().parent / "assets",
-    Path(__file__).resolve().parents[1] / "utilitys",
-]
-ICON_NAMES = ["omar.png", "omipi.png", "omarpi.png"]
-FONT_MONO_NAMES = ["PixelOperator.ttf", "PixelOperatorMono.ttf"]
-FONT_ICON_NAMES = ["lineawesome-webfont.ttf"]  # opcional
+# -------- Hardware --------
 
-# -------- Hardware (fallback NOOP si no hay OLED) --------
-_HW_OK = True
-_device = None
-try:
-    from luma.core.interface.serial import i2c
-    from luma.oled.device import ssd1306
-    serial = i2c(port=1, address=0x3C)
-    _device = ssd1306(serial, width=OLED_W, height=OLED_H)
-except Exception:
-    _HW_OK = False
+from luma.core.interface.serial import i2c
+from luma.oled.device import ssd1306
 
-# -------- Carga de fuentes e icono --------
-def _find_first(paths, names) -> Optional[Path]:
-    for base in paths:
-        for n in names:
-            p = base / n
-            if p.exists():
-                return p
-    return None
+serial = i2c(port=1, address=0x3C)
+_device = ssd1306(serial, width=OLED_W, height=OLED_H)
 
-_FONT_PATH = _find_first(ASSETS_CANDIDATES, FONT_MONO_NAMES)
-_FONT = ImageFont.truetype(str(_FONT_PATH), 14) if _FONT_PATH else ImageFont.load_default()
-_ICON_PATH = _find_first(ASSETS_CANDIDATES, ICON_NAMES)
-_ICON = None
-if _ICON_PATH:
-    try:
-        _ICON = Image.open(_ICON_PATH).convert("L")
-    except Exception:
-        _ICON = None
+# -------- Carga estricta de fuentes e icono --------
+
+_FONT = ImageFont.truetype("utilitys/PixelOperator.ttf",14)
+_ICON_FONT = ImageFont.truetype("utilitys/lineawesome-webfont.ttf",16)
+_ICON  = Image.open("utilitys/omarpi.png")
+
 
 # -------- Lienzos --------
 def _base_canvas() -> Image.Image:
@@ -72,18 +49,14 @@ def _new_frame() -> Image.Image:
 def _draw_header_with_progress(img: Image.Image, percent: int, label: str):
     percent = max(0, min(100, int(percent)))
     draw = ImageDraw.Draw(img)
-
     text = label or ""
     tw, th = draw.textbbox((0, 0), text, font=_FONT)[2:]
     tx = max(2, (OLED_W - tw) // 2)
     ty = max(0, (HEADER_H - th) // 2)
-
     draw.text((tx, ty), text, font=_FONT, fill=255)
-
     bar_w = int((percent / 100.0) * OLED_W)
     if bar_w > 0:
         draw.rectangle([0, 0, bar_w - 1, HEADER_H - 1], fill=255)
-
         text_layer = Image.new("L", (OLED_W, HEADER_H), 0)
         ImageDraw.Draw(text_layer).text((tx, ty), text, font=_FONT, fill=255)
         bar_mask = Image.new("L", (OLED_W, HEADER_H), 0)
@@ -101,53 +74,38 @@ def _draw_header_error(img: Image.Image, label: str):
     ty = max(0, (HEADER_H - th) // 2)
     draw.text((tx, ty), text, font=_FONT, fill=0)
 
-def _draw_wifi(draw: ImageDraw.ImageDraw, x:int, y:int, ok: bool):
-    draw.arc([x+0, y+0, x+12, y+12], start=200, end=340, fill=255)
-    draw.arc([x+2, y+2, x+10, y+10], start=200, end=340, fill=255)
-    draw.arc([x+4, y+4, x+8, y+8], start=200, end=340, fill=255)
-    draw.rectangle([x+5, y+9, x+7, y+11], fill=255)
-    if not ok:
-        draw.line([x+1, y+1, x+11, y+11], fill=255, width=2)
+def _draw_wifi_icon(draw: ImageDraw.ImageDraw, ok: bool, inverted: bool):
 
-def _draw_wifi_black(draw: ImageDraw.ImageDraw, x:int, y:int, ok: bool):
-    draw.arc([x+0, y+0, x+12, y+12], start=200, end=340, fill=0)
-    draw.arc([x+2, y+2, x+10, y+10], start=200, end=340, fill=0)
-    draw.arc([x+4, y+4, x+8, y+8], start=200, end=340, fill=0)
-    draw.rectangle([x+5, y+9, x+7, y+11], fill=0)
+    glyph = "\uf1eb"  # usamos el normal y lo tachamos si no ok
+    fill = 0 if inverted else 255
+    gw, gh = draw.textbbox((0, 0), glyph, font=_ICON_FONT)[2:]
+    x = OLED_W - gw - 2
+    y = max(0, (HEADER_H - gh) // 2)
+    draw.text((x, y), glyph, font=_ICON_FONT, fill=fill)
     if not ok:
-        draw.line([x+1, y+1, x+11, y+11], fill=0, width=2)
-
-def _draw_header_text_left_center_right(img: Image.Image, left:str, center:str, right_wifi_ok: bool):
-    draw = ImageDraw.Draw(img)
-    l_text = left or ""
-    l_tw, l_th = draw.textbbox((0,0), l_text, font=_FONT)[2:]
-    draw.text((2, max(0, (HEADER_H - l_th)//2)), l_text, font=_FONT, fill=255)
-    wifi_x = OLED_W - 14
-    wifi_y = (HEADER_H - 12) // 2
-    _draw_wifi(draw, wifi_x, wifi_y, ok=right_wifi_ok)
-    c_text = center or ""
-    c_tw, c_th = draw.textbbox((0,0), c_text, font=_FONT)[2:]
-    cx = max(2, (OLED_W - c_tw)//2)
-    cy = max(0, (HEADER_H - c_th)//2)
-    draw.text((cx, cy), c_text, font=_FONT, fill=255)
+        # Diagonal del recuadro del glyph
+        x0, y0 = x, y
+        x1, y1 = x + gw, y + gh
+        draw.line([(x0, y0), (x1, y1)], fill=fill, width=2)
 
 def _draw_header_text_left_center_right_inverted(img: Image.Image, left:str, center:str, right_wifi_ok: bool):
     """Header blanco, texto negro."""
     draw = ImageDraw.Draw(img)
     draw.rectangle([0, 0, OLED_W - 1, HEADER_H - 1], fill=255)
+    # LEFT
     l_text = left or ""
     l_tw, l_th = draw.textbbox((0,0), l_text, font=_FONT)[2:]
     draw.text((2, max(0, (HEADER_H - l_th)//2)), l_text, font=_FONT, fill=0)
-    wifi_x = OLED_W - 14
-    wifi_y = (HEADER_H - 12) // 2
-    _draw_wifi_black(draw, wifi_x, wifi_y, ok=right_wifi_ok)
+    # RIGHT (icono negro)
+    _draw_wifi_icon(draw, ok=right_wifi_ok, inverted=True)
+    # CENTER
     c_text = center or ""
     c_tw, c_th = draw.textbbox((0,0), c_text, font=_FONT)[2:]
     cx = max(2, (OLED_W - c_tw)//2)
     cy = max(0, (HEADER_H - c_th)//2)
     draw.text((cx, cy), c_text, font=_FONT, fill=0)
 
-# -------- Utiles --------
+# -------- Útiles --------
 def _read_json_simple(path: Path):
     try:
         with path.open("r", encoding="utf-8") as f:
@@ -175,9 +133,9 @@ def _is_eth_iface(name: str) -> bool:
     return n.startswith("eth") or n.startswith("en")
 
 def _display(img: Image.Image):
-    if not _HW_OK or _device is None:
-        print("[OLED:NOOP] frame renderizado")
-        return
+    # if not _HW_OK or _device is None:
+    #     print("[OLED:NOOP] frame renderizado")
+    #     return
     if img.size != (_device.width, _device.height):
         img = img.resize((_device.width, _device.height), Image.NEAREST)
     if img.mode != _device.mode:

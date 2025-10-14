@@ -1,0 +1,14 @@
+{
+    "schema": "omi.services/v1",
+
+    "services": [
+      {
+        "name": "standby",
+        "enabled": true,
+        "exec": { "cmd": "python3", "args": ["servicios/standby/service.py"], "cwd": ".", "env": {} },
+        "stop": { "signal": "TERM", "graceful_timeout_s": 5, "pattern": null },
+        "options": { "type": "object", "properties": { "verbose": { "type": "boolean", "default": false } } }
+      }
+    ]
+  }
+  

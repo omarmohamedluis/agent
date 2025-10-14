@@ -12,26 +12,25 @@ SOFVERSION = "0.0.1"
 BCAST_PORT = 37020
 STRUCTURE_PATH = Path("agent_pi/data/structure.json")
 
-LoadingUI(0,"Ciniciando")
+LoadingUI(0,"INICIANDO")
 
 time.sleep(1)
+
+LoadingUI(30,"LEYENDO")
 
 # Crea/valida el JSON
 CFG = ensure_config(STRUCTURE_PATH, version=SOFVERSION)
 snap = UPDATEHB(STRUCTURE_PATH)
-LoadingUI(50,"LEYENDO")
 
-time.sleep(1)
+LoadingUI(40,"CARGADO")
 
-LoadingUI(100,"CARGADO")
 
-time.sleep(1)
 
 def listen_and_reply():
     # 1) Actualiza HB al inicio y pinta UI en modo "sin server" (wifi tachado)
     snap = UPDATEHB(STRUCTURE_PATH)
     try:
-        EstandardUse(snap, server_online=False, json_path=STRUCTURE_PATH)
+        LoadingUI(50,"ESPERANDO SERVER")
     except Exception:
         pass
 
@@ -65,7 +64,6 @@ def listen_and_reply():
                     snap = UPDATEHB(STRUCTURE_PATH)
 
                     reply = {
-                        "type": "STRUCTURE",
                         "serial":  CFG["identity"]["serial"] or "pi-unknown",
                         "index":   CFG["identity"]["index"],
                         "name":    CFG["identity"]["name"],
@@ -102,3 +100,20 @@ def listen_and_reply():
 
 if __name__ == "__main__":
     listen_and_reply()
+
+
+
+
+# from AppHandler import start_service, stop_service, get_active_service
+
+# # arrancar
+# start_service("standby")     # servicios/standby/service.py
+
+# # cambiar a otro
+# start_service("MIDI")        # para standby y lanza MIDI
+
+# # consultar
+# print("Activo:", get_active_service())
+
+# # parar
+# stop_service()

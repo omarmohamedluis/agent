@@ -3,7 +3,7 @@
     "version": "0.0.1"
   },
   "identity": {
-    "index": 1,
+    "index": null,
     "name": "",
     "serial": "4f30ea9e2b4bbfbc"
   },
@@ -28,7 +28,15 @@
       "enabled": false
     },
     {
-      "name": "companion-satellite",
+      "name": "satellite",
+      "enabled": false
+    },
+    {
+      "name": "companion",
+      "enabled": false
+    },
+    {
+      "name": "OSCkey",
       "enabled": false
     },
     {
@@ -37,6 +45,6 @@
     }
   ],
   "config": {
-    "heartbeat_interval_s": 3
+    "heartbeat_interval_s": 5
   }
 }
