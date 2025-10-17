@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import os, json, socket, ipaddress, time, asyncio, tempfile
+import os, json, socket, ipaddress, time, asyncio, tempfile, html
 from typing import Any, Dict
 
 from fastapi import FastAPI, Form, WebSocket, WebSocketDisconnect, Request
@@ -86,395 +86,515 @@ class WSManager:
 
 ws_manager = WSManager()
 
+
 # ---------- HTML ----------
-def page(title: str, body_html: str) -> HTMLResponse:
-    html = """<!doctype html>
+NAV_ITEMS = [
+    ("home", "Home", "/"),
+    ("settings", "Ajustes", "/settings"),
+    ("add", "Añadir", "/add")
+]
+
+def render_layout(body_html: str, *, title: str = "OMIMIDI Web UI", active: str = "home", extra_head: str = "", extra_js: str = "") -> HTMLResponse:
+    nav_links = []
+    for key, label, href in NAV_ITEMS:
+        cls = "nav-link"
+        if key == active:
+            cls += " active"
+        nav_links.append(f'<a class="{cls}" href="{href}">{label}</a>')
+    html_doc = f"""<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>{{TITLE}}</title>
+<title>{title}</title>
 <style>
-:root {
+:root {{
   --bg:#111;
   --card:#1b1b1b;
   --text:#eaeaea;
-  --muted:#aaaaaa;
-  --ok:#2ea043;
-  --warn:#f0ad4e;
+  --muted:#a7a7a7;
+  --accent:#2ea043;
   --danger:#e53e3e;
   --danger-dim:#8f2929;
   --line:#2a2a2a;
-}
-* { box-sizing: border-box; }
-body {
-  margin: 20px;
+}}
+* {{ box-sizing: border-box; }}
+body {{
+  margin: 0;
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
   background: var(--bg);
   color: var(--text);
-}
-h1 { margin: 0 0 18px 0; font-size: 22px; }
-.card {
+}}
+a {{ color: inherit; }}
+.topbar {{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:16px 20px;
+  border-bottom:1px solid var(--line);
+  background:#141414;
+}}
+.brand {{ font-weight:600; letter-spacing:0.04em; }}
+.nav {{ display:flex; gap:8px; flex-wrap:wrap; }}
+.nav-link {{
+  padding:7px 14px;
+  border-radius:20px;
+  border:1px solid transparent;
+  text-decoration:none;
+  color:var(--muted);
+  background:transparent;
+}}
+.nav-link:hover {{ color:var(--text); }}
+.nav-link.active {{
+  color:#0d170d;
+  background:var(--accent);
+  border-color:var(--accent);
+  font-weight:600;
+}}
+.container {{ max-width:960px; margin:0 auto; padding:28px 20px 40px; }}
+.stack > * + * {{ margin-top:18px; }}
+.card {{
   background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 14px;
-}
-.grid {
-  display: grid;
-  grid-template-columns: 1fr 320px;
-  gap: 16px;
-  align-items: start;
-}
-.row { margin-bottom: 10px; }
-label { display:block; margin-bottom:6px; color: var(--muted); }
-input[type=text], select {
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #121212;
-  color: var(--text);
-}
-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 8px;
-}
-td, th {
-  border-bottom: 1px solid var(--line);
-  padding: 8px 6px;
-  text-align: left;
-}
-th { color: var(--muted); font-weight: 600; }
-.btn {
-  display:inline-block;
-  padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: #222;
-  color: var(--text);
-  text-decoration: none;
-  cursor: pointer;
-  margin: 2px 0;
-}
-.btn:hover { filter: brightness(1.1); }
-.btn-danger { background: var(--danger); border-color: #7a2020; }
-.btn-danger.dim { background: var(--danger-dim); }
-.btn-ok { background: var(--ok); border-color: #2b6b34; }
-.stack > * + * { margin-top: 12px; }
-.badge {
-  display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:#ddd;
-}
-.small { font-size: 12px; color: var(--muted); }
-.header {
-  display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;
-}
-hr.sep { border:none; border-top:1px solid var(--line); margin:12px 0; }
+  border:1px solid var(--line);
+  border-radius:12px;
+  padding:20px;
+}}
+.card-header {{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }}
+.card-header h2 {{ margin:0; font-size:22px; }}
+.section-title h2 {{ margin:0; font-size:22px; }}
+.section-title p {{ margin:6px 0 0 0; color:var(--muted); font-size:14px; }}
+.btn {{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  padding:8px 14px;
+  border-radius:10px;
+  border:1px solid var(--line);
+  background:#222;
+  color:var(--text);
+  text-decoration:none;
+  cursor:pointer;
+  font-size:14px;
+}}
+.btn:hover {{ filter:brightness(1.12); }}
+.btn.primary {{ background:var(--accent); border-color:var(--accent); color:#0d170d; }}
+.btn.danger {{ background:var(--danger); border-color:#7a2020; }}
+.btn.ghost {{ background:transparent; }}
+.table-wrap {{ overflow-x:auto; }}
+table {{ width:100%; border-collapse:collapse; }}
+th, td {{ border-bottom:1px solid var(--line); padding:10px 8px; text-align:left; }}
+th {{ color:var(--muted); font-size:13px; text-transform:uppercase; letter-spacing:0.06em; }}
+small, .muted {{ color:var(--muted); }}
+input[type=text], select {{
+  width:100%;
+  padding:8px 10px;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:#121212;
+  color:var(--text);
+}}
+.form-grid {{ display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); }}
+.form-grid .full {{ grid-column:1 / -1; }}
+.option-grid {{ display:grid; gap:18px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }}
+.option-card {{
+  display:block;
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:12px;
+  padding:18px;
+  text-decoration:none;
+  transition:transform 0.15s ease, border-color 0.15s ease;
+}}
+.option-card:hover {{ transform:translateY(-3px); border-color:var(--accent); }}
+.option-card h3 {{ margin:0 0 8px 0; font-size:20px; }}
+.option-card p {{ margin:0; color:var(--muted); line-height:1.4; }}
+.info-block {{ background:#131313; border:1px dashed var(--line); border-radius:10px; padding:14px; }}
+.actions {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:16px; }}
+.badge {{ display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:#ddd; }}
 </style>
+{extra_head}
 </head>
 <body>
-  <div class="header">
-    <h1>OMIMIDI Web UI</h1>
-    <span class="small">Frontend minimal • listo para maquetar</span>
-  </div>
-
-  <div class="grid">
-    <div>
-      <!-- Columna izquierda: Dispositivo, OSC y Rutas -->
-      <div class="card stack">
-        <div>
-          <h2 style="margin:0 0 8px 0; font-size:18px;">Dispositivo MIDI</h2>
-          <form method="post" action="/set_device">
-            <div class="row">
-              <label>Entrada MIDI</label>
-              {{MIDI_SELECT}}
-            </div>
-            <button class="btn" type="submit">Guardar dispositivo</button>
-            <a class="btn" href="/">Refrescar</a>
-          </form>
-        </div>
-
-        <hr class="sep">
-
-        <div>
-          <h2 style="margin:0 0 8px 0; font-size:18px;">Targets OSC</h2>
-          <form method="post" action="/set_osc">
-            <div class="row">
-              <label>Puerto</label>
-              <input type="text" name="osc_port" value="{{OSC_PORT}}">
-            </div>
-            <div class="row">
-              <label>IPs (separadas por coma)</label>
-              <input type="text" name="osc_ips" value="{{OSC_IPS}}">
-            </div>
-            <button class="btn" type="submit">Guardar OSC</button>
-            <button class="btn" formaction="/ping_osc" formmethod="post" title="Envia /omimidi/ping a todos los targets">Ping OSC</button>
-          </form>
-        </div>
-
-        <hr class="sep">
-
-        <div>
-          <div style="display:flex;align-items:center;gap:8px;">
-            <h2 style="margin:0; font-size:18px;">Rutas MIDI → OSC</h2>
-            <span class="small">(LEARN para añadir automáticamente; la columna <b>Último</b> muestra el último valor)</span>
-          </div>
-          <table>
-            <tr><th>#</th><th>MIDI</th><th>OSC Path</th><th>Valor</th><th>Último</th><th></th></tr>
-            {{ROUTES_ROWS}}
-          </table>
-
-          <h3 style="margin:16px 0 6px 0; font-size:16px;">Añadir ruta (manual)</h3>
-          <form method="post" action="/add_route">
-            <div class="row">
-              <label>Tipo</label>
-              <select name="rtype"><option value="note">note</option><option value="cc">cc</option></select>
-            </div>
-            <div class="row">
-              <label>Nota o CC (0..127)</label>
-              <input type="text" name="num">
-            </div>
-            <div class="row">
-              <label>Canal (solo CC, 0..15, opcional)</label>
-              <input type="text" name="channel" placeholder="(opcional)">
-            </div>
-            <div class="row">
-              <label>OSC Path</label>
-              <input type="text" name="osc" value="/D3/x">
-            </div>
-            <div class="row">
-              <label>Tipo de valor OSC</label>
-              <select name="vtype">
-                <option value="float">float (0..1)</option>
-                <option value="int">int (0..127)</option>
-                <option value="bool">bool</option>
-                <option value="const">const</option>
-              </select>
-            </div>
-            <div class="row">
-              <label>Const (si vtype=const)</label>
-              <input type="text" name="const" placeholder="ej: 1.0">
-            </div>
-            <button class="btn" type="submit">Añadir</button>
-          </form>
-        </div>
-
-        <hr class="sep">
-
-        <div>
-          <h2 style="margin:0 0 8px 0; font-size:18px;">Web UI</h2>
-          <form method="post" action="/set_ui">
-            <div class="row">
-              <label>Puerto WebUI (requiere reinicio)</label>
-              <input type="text" name="ui_port" value="{{UI_PORT}}">
-            </div>
-            <button class="btn" type="submit">Guardar WebUI</button>
-            <button class="btn" formaction="/restart" formmethod="post" title="Reinicia todo (core + WebUI)">Reiniciar servicio</button>
-          </form>
-          <div class="small">Actual: <code>http://&lt;host&gt;:{{UI_PORT}}</code></div>
-        </div>
-      </div>
-    </div>
-
-    <div>
-      <!-- Sidebar derecha: LEARN -->
-      <div class="card">
-        <h2 style="margin:0 0 12px 0; font-size:18px;">LEARN</h2>
-
-        <form method="post" action="/arm_learn" id="learnForm">
-          <div class="row">
-            <label>OSC Path</label>
-            <input type="text" name="osc" value="/D3/learn" id="oscInput">
-          </div>
-          <div class="row">
-            <label>Tipo de valor OSC</label>
-            <select name="vtype" id="vtypeInput">
-              <option value="float">float (0..1)</option>
-              <option value="int">int (0..127)</option>
-              <option value="bool">bool</option>
-              <option value="const">const</option>
-            </select>
-          </div>
-          <div class="row" id="constRow" style="display:none;">
-            <label>Const (si vtype=const)</label>
-            <input type="text" name="const" id="constInput" placeholder="ej: 1.0">
-          </div>
-
-          <div class="row">
-            <!-- Estado LEARN -->
-            <button class="btn btn-danger dim" id="learnToggle" type="submit" title="Activa LEARN y toca/mueve algo en tu controlador">
-              LEARN DISABLED
-            </button>
-            <a class="btn" href="/cancel_learn" id="cancelLink" style="display:none;">Cancelar</a>
-          </div>
-          <div class="small">Cuando esté <b>LEARN ENABLED</b>, el próximo evento MIDI creará la ruta y la página se actualizará sola.</div>
-        </form>
-
-        <hr class="sep">
-
-        <div id="learnResult" style="display:none;">
-          <div class="small" style="margin-bottom:6px;">Último LEARN</div>
-          <code id="resultCode" style="display:block; white-space:pre-wrap;"></code>
-          <form method="post" action="/clear_learn_result" style="margin-top:8px;">
-            <button class="btn" type="submit">Ocultar resultado</button>
-          </form>
-        </div>
-      </div>
-    </div>
-  </div>
-
-<script>
-(function(){
-  /* Mostrar/ocultar input const en función de vtype */
-  const vtypeSel = document.getElementById('vtypeInput');
-  const constRow = document.getElementById('constRow');
-  vtypeSel.addEventListener('change', () => {
-    constRow.style.display = (vtypeSel.value === 'const') ? 'block' : 'none';
-  });
-
-  /* Polling de LEARN */
-  let prevArmed = null;
-  async function refreshLearnUI() {
-    try {
-      const res = await fetch('/learn_state');
-      const st = await res.json();
-
-      const toggle = document.getElementById('learnToggle');
-      const cancelLink = document.getElementById('cancelLink');
-
-      if (st.armed) {
-        toggle.classList.remove('dim');
-        toggle.textContent = 'LEARN ENABLED';
-        cancelLink.style.display = 'inline-block';
-      } else {
-        toggle.classList.add('dim');
-        toggle.textContent = 'LEARN DISABLED';
-        cancelLink.style.display = 'none';
-      }
-
-      /* Mostrar último resultado si existe */
-      const lr = document.getElementById('learnResult');
-      const rc = document.getElementById('resultCode');
-      if (st.result) {
-        lr.style.display = 'block';
-        rc.textContent = JSON.stringify(st.result, null, 2);
-      } else {
-        lr.style.display = 'none';
-      }
-
-      /* Auto-recargar si veníamos de armed=true y pasa a false con result */
-      if (prevArmed === true && st.armed === false && st.result) {
-        window.location.reload();
-      }
-      prevArmed = st.armed;
-    } catch(e) {}
-  }
-
-  /* WebSocket: actualiza la columna "Último" en tiempo real */
-  function setupWS() {
-    const proto = (location.protocol === 'https:') ? 'wss' : 'ws';
-    const ws = new WebSocket(proto + '://' + location.host + '/ws');
-
-    ws.onopen = () => {
-      /* Carga inicial de valores por si llegamos tarde */
-      fetch('/state').then(r=>r.json()).then(st=>{
-        Object.entries(st).forEach(([k, o])=>{
-          const nodes = document.querySelectorAll('[data-osc="' + k + '"]');
-          nodes.forEach(el => {
-            const v = o.value;
-            el.textContent = (typeof v === 'number')
-              ? ((Math.abs(v) >= 1000) ? v.toFixed(0) : (Math.round(v*1000)/1000))
-              : String(v);
-          });
-        });
-      }).catch(()=>{});
-    };
-
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data); // {path, value, ts}
-        const nodes = document.querySelectorAll('[data-osc="' + msg.path + '"]');
-        nodes.forEach(el => {
-          const v = msg.value;
-          el.textContent = (typeof v === 'number')
-            ? ((Math.abs(v) >= 1000) ? v.toFixed(0) : (Math.round(v*1000)/1000))
-            : String(v);
-        });
-      } catch(e) {}
-    };
-
-    ws.onclose = () => {
-      /* Reintentar conexión */
-      setTimeout(setupWS, 1000);
-    };
-  }
-
-  /* Primer pintado y timers */
-  refreshLearnUI();
-  setInterval(refreshLearnUI, 600);
-  setupWS();
-})();
-</script>
-
+<header class="topbar">
+  <div class="brand">OMIMIDI Web UI</div>
+  <nav class="nav">{''.join(nav_links)}</nav>
+</header>
+<main class="container stack">
+{body_html}
+</main>
+{extra_js}
 </body>
-</html>"""
-    html = html.replace("{{TITLE}}", title)
-    html = html.replace("__BODY__", body_html)
-    return HTMLResponse(html)
+</html>
+"""
+    return HTMLResponse(html_doc)
 
-# ---------- Rutas HTML ----------
-@app.get("/", response_class=HTMLResponse)
-def index():
-    data = get_map()
-    inputs = mido.get_input_names()
-    current = data.get("midi_input", "")
 
-    # tabla rutas (incluye celda de "Último" con data-osc)
-    rows = ""
+def render_routes_rows(data: Dict[str, Any]) -> str:
+    rows = []
     for i, r in enumerate(data.get("routes", [])):
         midi_desc = "?"
         if r.get("type") == "note":
             midi_desc = f"NOTE {r.get('note')}"
         elif r.get("type") == "cc":
-            midi_desc = f"CC {r.get('cc')} ch {r.get('channel','any')}"
+            ch = r.get("channel", "any")
+            midi_desc = f"CC {r.get('cc')} ch {ch}"
         vtype = r.get("vtype", "float")
-        extra = f" const={r.get('const')}" if vtype == "const" else ""
-        osc = r.get("osc")
-        rows += (
-            f"<tr>"
-            f"<td>{i}</td>"
-            f"<td>{midi_desc}</td>"
-            f"<td>{osc}</td>"
-            f"<td>{vtype}{extra}</td>"
-            f"<td><span data-osc=\"{osc}\">–</span></td>"
-            f"<td>"
-            f"<form method='post' action='/delete_route' style='display:inline;'>"
-            f"<input type='hidden' name='idx' value='{i}'/>"
-            f"<button class='btn'>Eliminar</button>"
-            f"</form>"
-            f"</td>"
-            f"</tr>"
+        extra = ""
+        if vtype == "const" and "const" in r:
+            extra = f" const={r['const']}"
+        osc = str(r.get("osc", ""))
+        osc_esc = html.escape(osc, quote=True)
+        midi_esc = html.escape(str(midi_desc))
+        vtype_esc = html.escape(f"{vtype}{extra}")
+        rows.append(
+            (
+                "<tr>"
+                f"<td>{i}</td>"
+                f"<td>{midi_esc}</td>"
+                f"<td>{osc_esc}</td>"
+                f"<td>{vtype_esc}</td>"
+                f"<td><span data-osc='{osc_esc}'>–</span></td>"
+                "<td>"
+                "<form method='post' action='/delete_route' style='display:inline;'>"
+                f"<input type='hidden' name='idx' value='{i}'/>"
+                "<button class='btn'>Eliminar</button>"
+                "</form>"
+                "</td>"
+                "</tr>"
+            )
         )
+    if not rows:
+        return "<tr><td colspan='6' class='muted' style='text-align:center;'>No hay rutas configuradas.</td></tr>"
+    return "".join(rows)
 
-    # select MIDI
+@app.get("/", response_class=HTMLResponse)
+def index():
+    data = get_map()
+    rows_html = render_routes_rows(data)
+    body = f"""
+<section class="card">
+  <div class="card-header">
+    <h2>Rutas MIDI → OSC</h2>
+    <a class="btn primary" href="/add">+ Añadir ruta</a>
+  </div>
+  <div class="table-wrap">
+    <table class="routes-table">
+      <tr><th>#</th><th>MIDI</th><th>OSC Path</th><th>Valor</th><th>Último</th><th></th></tr>
+      {rows_html}
+    </table>
+  </div>
+</section>
+"""
+    extra_js = """
+<script>
+(function(){
+  function formatValue(v){
+    if (typeof v === 'number'){
+      if (Math.abs(v) >= 1000) return v.toFixed(0);
+      return Math.round(v * 1000) / 1000;
+    }
+    return String(v);
+  }
+  function applyValue(path, value){
+    const nodes = document.querySelectorAll('[data-osc="' + path + '"]');
+    nodes.forEach(el => { el.textContent = formatValue(value); });
+  }
+  fetch('/state').then(r=>r.json()).then(st=>{
+    Object.entries(st).forEach(([path, obj])=>{
+      if (obj && 'value' in obj){
+        applyValue(path, obj.value);
+      }
+    });
+  }).catch(()=>{});
+  function setupWS(){
+    const proto = (location.protocol === 'https:') ? 'wss' : 'ws';
+    const ws = new WebSocket(proto + '://' + location.host + '/ws');
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg && msg.path !== undefined){
+          applyValue(msg.path, msg.value);
+        }
+      } catch(e){}
+    };
+    ws.onclose = () => {
+      setTimeout(setupWS, 1000);
+    };
+  }
+  setupWS();
+})();
+</script>
+"""
+    return render_layout(body, active="home", extra_js=extra_js)
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page():
+    data = get_map()
+    inputs = mido.get_input_names()
+    current = data.get("midi_input", "")
     options = ["<option value=''>(sin seleccionar)</option>"]
-    for n in inputs:
-        sel = " selected" if n == current else ""
-        options.append(f"<option{sel}>{n}</option>")
-    midi_select = f"<select name='midi_input'>{''.join(options)}</select>"
+    for name in inputs:
+        sel = " selected" if name == current else ""
+        options.append(f"<option{sel}>{html.escape(name, quote=True)}</option>")
+    osc_port = html.escape(str(data.get("osc_port", 1024)), quote=True)
+    osc_ips = html.escape(",".join(data.get("osc_ips", ["127.0.0.1"])), quote=True)
+    ui_port = html.escape(str(data.get("ui_port", 9001)), quote=True)
 
-    # construye HTML base
-    body = page("OMIMIDI Web UI", "__BODY__").body.decode("utf-8")
+    body = f"""
+<form id="settingsForm" method="post" action="/settings/save" class="stack">
+  <section class="card stack">
+    <div class="section-title">
+      <h2>Dispositivo MIDI</h2>
+      <p class="muted">Selecciona la entrada MIDI disponible.</p>
+    </div>
+    <select name="midi_input">{''.join(options)}</select>
+  </section>
 
-    # reemplazos
-    body = body.replace("{{MIDI_SELECT}}", midi_select)
-    body = body.replace("{{OSC_PORT}}", str(data.get("osc_port", 1024)))
-    body = body.replace("{{OSC_IPS}}", ",".join(data.get("osc_ips", ["127.0.0.1"])))
-    body = body.replace("{{UI_PORT}}", str(data.get("ui_port", 9001)))
-    body = body.replace("{{ROUTES_ROWS}}", rows if rows else "<tr><td colspan='6' class='small'>(sin rutas)</td></tr>")
+  <section class="card stack">
+    <div class="section-title">
+      <h2>Targets OSC</h2>
+      <p class="muted">Define el puerto y las IPs destino (separadas por coma).</p>
+    </div>
+    <div class="form-grid">
+      <div>
+        <label>Puerto</label>
+        <input type="text" name="osc_port" value="{osc_port}">
+      </div>
+      <div class="full">
+        <label>IPs</label>
+        <input type="text" name="osc_ips" value="{osc_ips}">
+      </div>
+    </div>
+    <small class="muted">Ejemplo: 192.168.0.52, 127.0.0.1</small>
+  </section>
 
-    return HTMLResponse(body)
+  <section class="card stack">
+    <div class="section-title">
+      <h2>Web UI</h2>
+      <p class="muted">Al guardar se reiniciará el servicio.</p>
+    </div>
+    <div class="form-grid">
+      <div>
+        <label>Puerto WebUI</label>
+        <input type="text" name="ui_port" value="{ui_port}">
+      </div>
+    </div>
+    <small>Actual: <code>http://&lt;host&gt;:{ui_port}</code></small>
+  </section>
 
+  <div class="actions">
+    <button class="btn primary" type="submit">Guardar cambios</button>
+    <button class="btn" type="button" id="pingBtn">Ping OSC</button>
+    <a class="btn" href="/">Cancelar</a>
+  </div>
+</form>
+<div class="small muted" id="pingStatus" style="display:none;"></div>
+"""
+
+    extra_js = """
+<script>
+(function(){
+  const form = document.getElementById('settingsForm');
+  if (form){
+    form.addEventListener('submit', function(ev){
+      if (!confirm('Se reiniciará el servicio, ¿desea continuar?')){
+        ev.preventDefault();
+      }
+    });
+  }
+  const pingBtn = document.getElementById('pingBtn');
+  const pingStatus = document.getElementById('pingStatus');
+  if (pingBtn && pingStatus){
+    pingBtn.addEventListener('click', async function(){
+      const original = pingBtn.textContent;
+      pingBtn.disabled = true;
+      pingBtn.textContent = 'Enviando…';
+      try {
+        const res = await fetch('/ping_osc', {method:'POST'});
+        pingStatus.style.display = 'block';
+        pingStatus.textContent = res.ok ? 'Ping enviado a los targets OSC.' : 'Error enviando ping OSC.';
+      } catch (e){
+        pingStatus.style.display = 'block';
+        pingStatus.textContent = 'Error enviando ping OSC.';
+      } finally {
+        setTimeout(()=>{ pingStatus.style.display = 'none'; }, 3500);
+        pingBtn.disabled = false;
+        pingBtn.textContent = original;
+      }
+    });
+  }
+})();
+</script>
+"""
+
+    response = render_layout(body, active="settings", extra_js=extra_js)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/add", response_class=HTMLResponse)
+def add_route_landing():
+    body = """
+<section class="card stack">
+  <div class="section-title">
+    <h2>Añadir ruta</h2>
+    <p class="muted">Elige cómo quieres crear la ruta MIDI → OSC.</p>
+  </div>
+  <div class="option-grid">
+    <a class="option-card" href="/add/manual">
+      <h3>Manual</h3>
+      <p>Introduce nota/CC, canal y ruta OSC a mano.</p>
+    </a>
+    <a class="option-card" href="/add/learn">
+      <h3>LEARN automático</h3>
+      <p>Activa LEARN y toca tu controlador para mapearlo al instante.</p>
+    </a>
+  </div>
+</section>
+"""
+    return render_layout(body, active="add")
+
+@app.get("/add/manual", response_class=HTMLResponse)
+def add_route_manual_page():
+    body = """
+<section class="card stack">
+  <div class="section-title">
+    <h2>Añadir ruta manual</h2>
+    <p class="muted">Configura la ruta MIDI → OSC rellenando los campos.</p>
+  </div>
+  <form method="post" action="/add_route" class="stack">
+    <div class="form-grid">
+      <div>
+        <label>Tipo</label>
+        <select name="rtype"><option value="note">note</option><option value="cc">cc</option></select>
+      </div>
+      <div>
+        <label>Nota o CC (0..127)</label>
+        <input type="text" name="num">
+      </div>
+      <div>
+        <label>Canal (solo CC, opcional)</label>
+        <input type="text" name="channel" placeholder="(opcional)">
+      </div>
+      <div class="full">
+        <label>OSC Path</label>
+        <input type="text" name="osc" value="/D3/x">
+      </div>
+      <div>
+        <label>Tipo de valor OSC</label>
+        <select name="vtype">
+          <option value="float">float (0..1)</option>
+          <option value="int">int (0..127)</option>
+          <option value="bool">bool</option>
+          <option value="const">const</option>
+        </select>
+      </div>
+      <div>
+        <label>Const (si vtype=const)</label>
+        <input type="text" name="const" placeholder="ej: 1.0">
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn primary" type="submit">Añadir ruta</button>
+      <a class="btn" href="/">Cancelar</a>
+    </div>
+  </form>
+</section>
+"""
+    return render_layout(body, active="add")
+
+@app.get("/add/learn", response_class=HTMLResponse)
+def add_route_learn_page():
+    body = """
+<section class="card stack">
+  <div class="section-title">
+    <h2>LEARN automático</h2>
+    <p class="muted">Activa LEARN y mueve un control para crear la ruta automáticamente.</p>
+  </div>
+  <form method="post" action="/arm_learn" id="learnForm" class="stack">
+    <div class="form-grid">
+      <div class="full">
+        <label>OSC Path</label>
+        <input type="text" name="osc" value="/D3/learn" id="oscInput">
+      </div>
+      <div>
+        <label>Tipo de valor OSC</label>
+        <select name="vtype" id="vtypeInput">
+          <option value="float">float (0..1)</option>
+          <option value="int">int (0..127)</option>
+          <option value="bool">bool</option>
+          <option value="const">const</option>
+        </select>
+      </div>
+      <div id="constRow" style="display:none;">
+        <label>Const (si vtype=const)</label>
+        <input type="text" name="const" id="constInput" placeholder="ej: 1.0">
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn ghost" id="learnToggle" type="submit">LEARN DISABLED</button>
+      <a class="btn ghost" href="/cancel_learn" id="cancelLink" style="display:none;">Cancelar</a>
+    </div>
+    <small>El próximo evento MIDI creará la ruta y te llevará de vuelta a Home.</small>
+  </form>
+  <div class="info-block" id="learnResult" style="display:none;">
+    <div class="muted">Último LEARN</div>
+    <code id="resultCode" style="display:block; margin-top:6px; white-space:pre-wrap;"></code>
+    <form method="post" action="/clear_learn_result" style="margin-top:12px;">
+      <button class="btn" type="submit">Ocultar resultado</button>
+    </form>
+  </div>
+</section>
+"""
+    extra_js = """
+<script>
+(function(){
+  const vtypeSel = document.getElementById('vtypeInput');
+  const constRow = document.getElementById('constRow');
+  if (vtypeSel){
+    const toggleConst = () => { constRow.style.display = (vtypeSel.value === 'const') ? 'block' : 'none'; };
+    vtypeSel.addEventListener('change', toggleConst);
+    toggleConst();
+  }
+  let prevArmed = null;
+  async function refreshLearnUI(){
+    try {
+      const res = await fetch('/learn_state');
+      const st = await res.json();
+      const toggle = document.getElementById('learnToggle');
+      const cancelLink = document.getElementById('cancelLink');
+      if (st.armed){
+        toggle.textContent = 'LEARN ENABLED';
+        toggle.classList.add('danger');
+        toggle.classList.remove('ghost');
+        cancelLink.style.display = 'inline-flex';
+      } else {
+        toggle.textContent = 'LEARN DISABLED';
+        toggle.classList.remove('danger');
+        toggle.classList.add('ghost');
+        cancelLink.style.display = 'none';
+      }
+      const lr = document.getElementById('learnResult');
+      const rc = document.getElementById('resultCode');
+      if (st.result){
+        lr.style.display = 'block';
+        rc.textContent = JSON.stringify(st.result, null, 2);
+      } else {
+        lr.style.display = 'none';
+      }
+      if (prevArmed === true && st.armed === false && st.result){
+        window.location.href = '/';
+      }
+      prevArmed = st.armed;
+    } catch(e){}
+  }
+  refreshLearnUI();
+  setInterval(refreshLearnUI, 600);
+})();
+</script>
+"""
+    return render_layout(body, active="add", extra_js=extra_js)
 # ---------- WS / Push ----------
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
@@ -547,19 +667,41 @@ def cancel_learn():
     save_json(LEARN_REQ_FILE, st)
     return RedirectResponse("/", status_code=303)
 
+
 # ---------- MIDI / OSC / UI settings ----------
-@app.post("/set_device")
-def set_device(midi_input: str = Form("")):
+def request_restart_flag() -> None:
+    with open(RESTART_REQ_FILE, "w") as f:
+        f.write("restart")
+
+def restart_page(message: str = "Reiniciando servicio OMIMIDI…") -> HTMLResponse:
+    template = """<!doctype html><html><head><meta charset='utf-8'>
+    <title>Reiniciando…</title></head>
+    <body style="font-family:system-ui; background:#111; color:#eee; display:flex; align-items:center; justify-content:center; height:100vh;">
+    <div>
+      <h2>🔄 {{MESSAGE}}</h2>
+      <p>La página intentará reconectar automáticamente.</p>
+      <script>
+      (function retry(){
+        fetch('/')
+          .then(()=>{ window.location.href='/'; })
+          .catch(()=>{ setTimeout(retry, 800); });
+      })();
+      </script>
+    </div>
+    </body></html>"""
+    return HTMLResponse(template.replace("{{MESSAGE}}", message))
+
+@app.post("/settings/save")
+def save_settings(midi_input: str = Form(""), osc_port: str = Form(""),
+                 osc_ips: str = Form(""), ui_port: str = Form("")):
     data = get_map()
     data["midi_input"] = midi_input.strip()
-    persist_map(data)
-    return RedirectResponse("/", status_code=303)
 
-@app.post("/set_osc")
-def set_osc(osc_port: str = Form(...), osc_ips: str = Form(...)):
-    data = get_map()
     try:
-        data["osc_port"] = int(osc_port)
+        port = int(osc_port)
+        if not (1 <= port <= 65535):
+            raise ValueError
+        data["osc_port"] = port
     except ValueError:
         data["osc_port"] = 1024
 
@@ -567,24 +709,23 @@ def set_osc(osc_port: str = Form(...), osc_ips: str = Form(...)):
     valid_ips = []
     for ip in ips_in:
         try:
-            ipaddress.ip_address(ip); valid_ips.append(ip)
+            ipaddress.ip_address(ip)
+            valid_ips.append(ip)
         except Exception:
             pass
     data["osc_ips"] = valid_ips or ["127.0.0.1"]
-    persist_map(data)
-    return RedirectResponse("/", status_code=303)
 
-@app.post("/set_ui")
-def set_ui(ui_port: str = Form(...)):
-    data = get_map()
     try:
-        data["ui_port"] = int(ui_port)
-        if not (1 <= data["ui_port"] <= 65535):
+        uport = int(ui_port)
+        if not (1 <= uport <= 65535):
             raise ValueError
+        data["ui_port"] = uport
     except ValueError:
         data["ui_port"] = 9001
+
     persist_map(data)
-    return RedirectResponse("/", status_code=303)
+    request_restart_flag()
+    return restart_page("Aplicando cambios y reiniciando…")
 
 @app.post("/ping_osc")
 def ping_osc():
@@ -599,7 +740,7 @@ def ping_osc():
             c.send_message("/omimidi/ping", ts)
         except Exception:
             pass
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/settings", status_code=303)
 
 # ---------- Mapping CRUD ----------
 @app.post("/add_route")
@@ -647,21 +788,5 @@ def delete_route(idx: int = Form(...)):
 # ---------- Restart ----------
 @app.post("/restart")
 def restart():
-    # Crear flag para que el core mate la WebUI y se auto-reinicie
-    with open(RESTART_REQ_FILE, "w") as f:
-        f.write("restart")
-    # Pantalla de "Reiniciando..."
-    html = """<!doctype html><html><head><meta charset="utf-8">
-    <title>Reiniciando…</title></head>
-    <body style="font-family:system-ui; background:#111; color:#eee; display:flex; align-items:center; justify-content:center; height:100vh;">
-    <div>
-      <h2>🔄 Reiniciando servicio OMIMIDI…</h2>
-      <p>La página intentará reconectar automáticamente.</p>
-      <script>
-      (function retry(){
-        fetch('/').then(()=>{ window.location.href='/' }).catch(()=>{ setTimeout(retry, 800); });
-      })();
-      </script>
-    </div>
-    </body></html>"""
-    return HTMLResponse(html)
+    request_restart_flag()
+    return restart_page()

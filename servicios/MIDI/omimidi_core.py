@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import os, json, time, threading, socket, ipaddress, sys, signal, tempfile
+import os, json, time, threading, socket, ipaddress, sys, signal, tempfile, atexit
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 import urllib.request
@@ -16,6 +16,24 @@ LEARN_REQ_FILE   = os.path.join(BASE_DIR, "OMIMIDI_learn_request.json")   # WebU
 STATE_FILE       = os.path.join(BASE_DIR, "OMIMIDI_state.json")           # último valor por ruta OSC
 RESTART_REQ_FILE = os.path.join(BASE_DIR, "OMIMIDI_restart.flag")         # WebUI solicita reinicio; el core se re-ejecuta
 WEBUI_PID_FILE   = os.path.join(BASE_DIR, "OMIMIDI_webui.pid")            # PID de la WebUI para poder matarla
+
+CLEANUP_FILES = [
+    LAST_EVENT_FILE,
+    LEARN_REQ_FILE,
+    STATE_FILE,
+    WEBUI_PID_FILE,
+]
+
+def cleanup_runtime_files():
+    for path in CLEANUP_FILES:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+atexit.register(cleanup_runtime_files)
 
 CHECK_INTERVAL = 0.5   # s (hot-reload)
 STATE_FLUSH_MS = 200   # ms (frecuencia de volcado de estado)
@@ -343,6 +361,7 @@ class OmiMidiCore:
             self._stop.set()
             if self.inport:
                 self.inport.close()
+            cleanup_runtime_files()
             print("[CORE] Bye!")
 
 # ---- Arranque WebUI desde el core ----

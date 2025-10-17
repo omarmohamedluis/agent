@@ -44,6 +44,12 @@
       "note": 5,
       "osc": "/D3/learn",
       "vtype": "float"
+    },
+    {
+      "type": "note",
+      "note": 0,
+      "osc": "/D3/hola",
+      "vtype": "float"
     }
   ]
 }
