@@ -473,319 +473,316 @@ select { background:#1e1e1e; color:var(--text); border:1px solid #3a3a3a; border
   <iframe id="configFrame" src="about:blank"></iframe>
 </div>
 <script>
-const configCache = {};
-let currentDevices = [];
-let currentClients = [];
+(function(){
+  var configCache = {};
+  var currentDevices = [];
+  var currentClients = [];
 
-function escapeHtml(str){
-  return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c] || c));
-}
-
-function formatDate(value){
-  if(!value) return '—';
-  const date = new Date(value);
-  if(Number.isNaN(date.getTime())) return escapeHtml(String(value));
-  return date.toLocaleString();
-}
-
-async function fetchDevices(){
-  const res = await fetch('/api/devices');
-  if(!res.ok) throw new Error('Error cargando dispositivos');
-  return (await res.json()).devices || [];
-}
-
-async function fetchClients(){
-  const res = await fetch('/api/clients');
-  if(!res.ok) throw new Error('Error cargando clientes');
-  return (await res.json()).clients || [];
-}
-
-async function ensureConfigs(service, force=false){
-  if(service === 'standby') return [];
-  if(!force && configCache[service]) return configCache[service];
-  const res = await fetch(`/api/configs/${service}`);
-  if(!res.ok) throw new Error('Error cargando configuraciones');
-  const data = await res.json();
-  configCache[service] = data.configs || [];
-  return configCache[service];
-}
-
-function renderConfigOptions(service, active){
-  const configs = configCache[service] || [];
-  let html = '<option value="">(actual)</option>';
-  configs.forEach(cfg => {
-    const selected = cfg.name === active ? 'selected' : '';
-    html += `<option value="${escapeHtml(cfg.name)}" ${selected}>${escapeHtml(cfg.name)}</option>`;
-  });
-  return html;
-}
-
-function renderDevice(dev){
-  const online = dev.online;
-  const serviceState = dev.service_state || {};
-  const heartbeat = dev.heartbeat || {};
-  const services = dev.services || [];
-  const available = dev.available_services || [];
-  const activeEntry = services.find(s => s.enabled);
-  const active = serviceState.expected || (activeEntry ? activeEntry.name : 'standby');
-  const activeLabel = active || 'standby';
-  const cpu = heartbeat.cpu != null ? heartbeat.cpu.toFixed(0) + '%' : '--';
-  const temp = heartbeat.temp != null ? heartbeat.temp.toFixed(0) + '°C' : '--';
-  const serviceReturn = serviceState.returncode != null ? serviceState.returncode : '—';
-  const serviceError = serviceState.error || serviceState.last_error || '';
-  const serviceConfig = serviceState.config_name || '—';
-  const webUrl = serviceState.web_url || '';
-  const desiredService = dev.desired_service || '—';
-  const desiredConfig = dev.desired_config || '—';
-  const ip = dev.ip || '-';
-  const lastSeen = dev.last_seen ? formatDate(dev.last_seen) : '—';
-  const nameHeader = escapeHtml(dev.host || dev.serial || 'Agente');
-  const availableOptions = available.map(name => `<option value="${escapeHtml(name)}" ${name===activeLabel?'selected':''}>${escapeHtml(name)}</option>`).join('');
-  const configsHtml = activeLabel !== 'standby' ? `<select class="config-select" data-config-for="${escapeHtml(dev.serial || '')}" ${!online ? 'disabled' : ''}>${renderConfigOptions(activeLabel, serviceState.config_name)}</select>` : '<div class="small">Sin opciones de configuración.</div>';
-  const configBtn = webUrl ? `<button class="btn" data-config-url="${escapeHtml(webUrl)}" data-config-title="${escapeHtml(dev.host || dev.serial || 'Configuración')}">Configurar</button>` : '<button class="btn" disabled>Configurar</button>';
-
-  return `
-  <div class="card" data-serial="${escapeHtml(dev.serial || '')}">
-    <h2>${nameHeader}${online ? '' : '<span class="tag">Offline</span>'}</h2>
-    <div class="small">Serial: ${escapeHtml(dev.serial || '?')}</div>
-    <div class="small">IP: ${escapeHtml(ip)}</div>
-    <div class="small">Último contacto: ${escapeHtml(lastSeen)}</div>
-    <table class="table">
-      <tr><th>Estado</th><td class="${online ? 'status-ok':'status-bad'}">${online ? 'Online' : 'Offline'}</td></tr>
-      <tr><th>Servicio activo</th><td>${escapeHtml(activeLabel)}</td></tr>
-      <tr><th>Config actual</th><td>${escapeHtml(serviceConfig)}</td></tr>
-      <tr><th>Return code</th><td>${escapeHtml(serviceReturn)}</td></tr>
-      <tr><th>Error servicio</th><td>${serviceError ? escapeHtml(serviceError) : '—'}</td></tr>
-      <tr><th>CPU</th><td>${cpu}</td></tr>
-      <tr><th>Temperatura</th><td>${temp}</td></tr>
-      <tr><th>Deseado</th><td>${escapeHtml(desiredService)} / ${escapeHtml(desiredConfig)}</td></tr>
-      <tr><th>Servicio</th><td>
-        <select data-service-select data-serial="${escapeHtml(dev.serial || '')}" ${!online ? 'disabled' : ''}>
-          ${availableOptions}
-        </select>
-        ${configsHtml}
-        <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn" data-apply-service="${escapeHtml(dev.serial || '')}" ${!online ? 'disabled' : ''}>Aplicar</button>
-          ${configBtn}
-        </div>
-      </td></tr>
-    </table>
-  </div>`;
-}
-
-function renderDevices(devices){
-  currentDevices = devices;
-  const container = document.getElementById('devicesView');
-  if(!devices.length){
-    container.innerHTML = '<div class="card">No se detectaron agentes.</div>';
-    return;
+  function escapeHtml(str){
+    var map = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',''':'&#39;'};
+    var value = (str === undefined || str === null) ? '' : String(str);
+    return value.replace(/[&<>"']/g, function(c){ return map[c] || c; });
   }
-  container.innerHTML = devices.map(dev => renderDevice(dev)).join('');
 
-  container.querySelectorAll('select[data-service-select]').forEach(sel => {
-    sel.addEventListener('change', async () => {
-      const service = sel.value;
-      try {
-        await ensureConfigs(service);
-      } catch (err) {
-        console.error(err);
-      }
-      const card = sel.closest('.card');
-      const configSelect = card ? card.querySelector('select[data-config-for]') : null;
-      if(configSelect){
-        configSelect.innerHTML = renderConfigOptions(service, null);
-        configSelect.disabled = service === 'standby' || sel.disabled;
-      }
-    });
-  });
+  function toArray(list){ return Array.prototype.slice.call(list || []); }
 
-  container.querySelectorAll('button[data-apply-service]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const serial = btn.dataset.applyService;
-      const card = btn.closest('.card');
-      if(!card) return;
-      const serviceSel = card.querySelector('select[data-service-select]');
-      const configSel = card.querySelector('select[data-config-for]');
-      const service = serviceSel ? serviceSel.value : '';
-      const config = configSel ? configSel.value : '';
-      await sendServiceChange(serial, service, config);
-    });
-  });
-
-  container.querySelectorAll('button[data-config-url]').forEach(btn => {
-    const url = btn.dataset.configUrl;
-    const title = btn.dataset.configTitle || 'Configuración';
-    btn.addEventListener('click', () => openConfig(url, title));
-  });
-}
-
-function renderServicesView(){
-  const container = document.getElementById('servicesView');
-  const midi = configCache['MIDI'] || [];
-  let html = '<div class="card"><h2>Configuraciones MIDI</h2>';
-  if(!midi.length){
-    html += '<div class="small">Todavía no hay configuraciones guardadas.</div>';
-  } else {
-    html += '<table class="table"><tr><th>Nombre</th><th>Última actualización</th><th></th></tr>';
-    midi.forEach(cfg => {
-      html += `<tr><td>${escapeHtml(cfg.name)}</td><td>${escapeHtml(cfg.updated_at || '')}</td><td><button class="btn" data-delete-config="MIDI::${escapeHtml(cfg.name)}">Eliminar</button></td></tr>`;
-    });
-    html += '</table>';
+  function formatDate(value){
+    if(!value) return '—';
+    var date = new Date(value);
+    if(isNaN(date.getTime())) return escapeHtml(value);
+    return date.toLocaleString();
   }
-  html += '<div class="small">Las configuraciones se sincronizan automáticamente cuando cada Pi guarda sus ajustes.</div></div>';
-  container.innerHTML = html;
 
-  container.querySelectorAll('button[data-delete-config]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const [service, name] = btn.dataset.deleteConfig.split('::');
-      if(!confirm(`¿Eliminar la configuración "${name}"?`)) return;
-      try {
-        await fetch(`/api/configs/${service}/${encodeURIComponent(name)}`, { method:'DELETE' });
-        delete configCache[service];
-        await loadServiceConfigs();
-        await loadDevices();
-      } catch (err) {
-        alert('No se pudo eliminar la configuración: ' + err);
-      }
+  function getJson(url){
+    return fetch(url).then(function(res){
+      if(!res.ok) throw new Error(url + ' => ' + res.status);
+      return res.json();
     });
-  });
-}
-
-function renderClientsView(clients){
-  currentClients = clients;
-  const container = document.getElementById('clientsView');
-  if(!clients.length){
-    container.innerHTML = '<div class="card">No hay clientes registrados.</div>';
-    return;
   }
-  let html = '<div class="card"><h2>Clientes registrados</h2>';
-  html += '<table class="table"><tr><th>Serial</th><th>Host</th><th>Servicio deseado</th><th>Configuración</th><th>Actualizado</th><th></th></tr>';
-  clients.forEach(client => {
-    html += `<tr>
-      <td>${escapeHtml(client.serial || '')}</td>
-      <td>${escapeHtml(client.host || '—')}</td>
-      <td>${escapeHtml(client.desired_service || '—')}</td>
-      <td>${escapeHtml(client.desired_config || '—')}</td>
-      <td>${escapeHtml(client.updated_at || '')}</td>
-      <td><button class="btn" data-remove-client="${escapeHtml(client.serial || '')}">Eliminar</button></td>
-    </tr>`;
-  });
-  html += '</table></div>';
-  container.innerHTML = html;
 
-  container.querySelectorAll('button[data-remove-client]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const serial = btn.dataset.removeClient;
-      if(!serial || !confirm(`¿Eliminar el cliente ${serial}?`)) return;
-      try {
-        await fetch(`/api/devices/${serial}`, { method:'DELETE' });
-        await loadClients();
-        await loadDevices();
-      } catch (err) {
-        alert('No se pudo eliminar el cliente: ' + err);
-      }
+  function fetchDevices(){
+    return getJson('/api/devices').then(function(data){ return data.devices || []; });
+  }
+
+  function fetchClients(){
+    return getJson('/api/clients').then(function(data){ return data.clients || []; });
+  }
+
+  function ensureConfigs(service, force){
+    if(!service || service === 'standby') return Promise.resolve([]);
+    if(!force && configCache[service]) return Promise.resolve(configCache[service]);
+    return getJson('/api/configs/' + encodeURIComponent(service)).then(function(data){
+      configCache[service] = data.configs || [];
+      return configCache[service];
     });
-  });
-}
-
-async function sendServiceChange(serial, service, config){
-  if(!service){
-    alert('Selecciona un servicio.');
-    return;
   }
-  try {
-    const body = { service };
+
+  function renderConfigOptions(service, active){
+    var configs = configCache[service] || [];
+    var html = '<option value="">(actual)</option>';
+    configs.forEach(function(cfg){
+      var selected = cfg.name === active ? 'selected' : '';
+      html += '<option value="' + escapeHtml(cfg.name) + '" ' + selected + '>' + escapeHtml(cfg.name) + '</option>';
+    });
+    return html;
+  }
+
+  function renderDevice(dev){
+    var online = !!dev.online;
+    var state = dev.service_state || {};
+    var heartbeat = dev.heartbeat || {};
+    var services = dev.services || [];
+    var available = dev.available_services || [];
+    var activeEntry = services.find(function(s){ return s.enabled; });
+    var active = state.expected || (activeEntry ? activeEntry.name : 'standby');
+    var cpu = (heartbeat.cpu != null) ? Number(heartbeat.cpu).toFixed(0) + '%' : '--';
+    var temp = (heartbeat.temp != null) ? Number(heartbeat.temp).toFixed(0) + '°C' : '--';
+    var serviceReturn = state.returncode != null ? state.returncode : '—';
+    var serviceError = state.error || state.last_error || '';
+    var serviceConfig = state.config_name || '—';
+    var webUrl = state.web_url || '';
+    var desiredService = dev.desired_service || '—';
+    var desiredConfig = dev.desired_config || '—';
+    var ip = dev.ip || '-';
+    var lastSeen = formatDate(dev.last_seen);
+    var nameHeader = escapeHtml(dev.host || dev.serial || 'Agente');
+    var availableOptions = available.map(function(name){
+      return '<option value="' + escapeHtml(name) + '" ' + (name===active ? 'selected' : '') + '>' + escapeHtml(name) + '</option>';
+    }).join('');
+    var configsHtml = (active !== 'standby')
+      ? '<select class="config-select" data-config-for="' + escapeHtml(dev.serial || '') + '" ' + (!online ? 'disabled' : '') + '>' + renderConfigOptions(active, state.config_name) + '</select>'
+      : '<div class="small">Sin opciones de configuración.</div>';
+    var configBtn = webUrl
+      ? '<button class="btn" data-config-url="' + escapeHtml(webUrl) + '" data-config-title="' + escapeHtml(dev.host || dev.serial || 'Configuración') + '">Configurar</button>'
+      : '<button class="btn" disabled>Configurar</button>';
+
+    return (
+      '<div class="card" data-serial="' + escapeHtml(dev.serial || '') + '">' +
+      '<h2>' + nameHeader + (online ? '' : '<span class="tag">Offline</span>') + '</h2>' +
+      '<div class="small">Serial: ' + escapeHtml(dev.serial || '?') + '</div>' +
+      '<div class="small">IP: ' + escapeHtml(ip) + '</div>' +
+      '<div class="small">Último contacto: ' + escapeHtml(lastSeen) + '</div>' +
+      '<table class="table">' +
+        '<tr><th>Estado</th><td class="' + (online ? 'status-ok' : 'status-bad') + '">' + (online ? 'Online' : 'Offline') + '</td></tr>' +
+        '<tr><th>Servicio activo</th><td>' + escapeHtml(active) + '</td></tr>' +
+        '<tr><th>Config actual</th><td>' + escapeHtml(serviceConfig) + '</td></tr>' +
+        '<tr><th>Return code</th><td>' + escapeHtml(serviceReturn) + '</td></tr>' +
+        '<tr><th>Error servicio</th><td>' + (serviceError ? escapeHtml(serviceError) : '—') + '</td></tr>' +
+        '<tr><th>CPU</th><td>' + cpu + '</td></tr>' +
+        '<tr><th>Temperatura</th><td>' + temp + '</td></tr>' +
+        '<tr><th>Deseado</th><td>' + escapeHtml(desiredService) + ' / ' + escapeHtml(desiredConfig) + '</td></tr>' +
+        '<tr><th>Servicio</th><td>' +
+          '<select data-service-select data-serial="' + escapeHtml(dev.serial || '') + '" ' + (!online ? 'disabled' : '') + '>' +
+            availableOptions +
+          '</select>' +
+          configsHtml +
+          '<div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">' +
+            '<button class="btn" data-apply-service="' + escapeHtml(dev.serial || '') + '" ' + (!online ? 'disabled' : '') + '>Aplicar</button>' +
+            configBtn +
+          '</div>' +
+        '</td></tr>' +
+      '</table>' +
+      '</div>'
+    );
+  }
+
+  function renderDevices(devices){
+    currentDevices = devices;
+    var container = document.getElementById('devicesView');
+    if(!devices.length){
+      container.innerHTML = '<div class="card">No se detectaron agentes.</div>';
+      return;
+    }
+    container.innerHTML = devices.map(renderDevice).join('');
+
+    toArray(container.querySelectorAll('select[data-service-select]')).forEach(function(sel){
+      sel.addEventListener('change', function(){
+        var service = sel.value;
+        ensureConfigs(service).then(function(){
+          var card = sel.closest('.card');
+          var configSelect = card ? card.querySelector('select[data-config-for]') : null;
+          if(configSelect){
+            configSelect.innerHTML = renderConfigOptions(service, null);
+            configSelect.disabled = (service === 'standby' || sel.disabled);
+          }
+        }).catch(console.error);
+      });
+    });
+
+    toArray(container.querySelectorAll('button[data-apply-service]')).forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var serial = btn.dataset.applyService;
+        var card = btn.closest('.card');
+        if(!card) return;
+        var serviceSel = card.querySelector('select[data-service-select]');
+        var configSel = card.querySelector('select[data-config-for]');
+        var service = serviceSel ? serviceSel.value : '';
+        var config = configSel ? configSel.value : '';
+        sendServiceChange(serial, service, config);
+      });
+    });
+
+    toArray(container.querySelectorAll('button[data-config-url]')).forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var url = btn.dataset.configUrl;
+        var title = btn.dataset.configTitle || 'Configuración';
+        openConfig(url, title);
+      });
+    });
+  }
+
+  function renderServicesView(){
+    var container = document.getElementById('servicesView');
+    var midi = configCache['MIDI'] || [];
+    var html = '<div class="card"><h2>Configuraciones MIDI</h2>';
+    if(!midi.length){
+      html += '<div class="small">Todavía no hay configuraciones guardadas.</div>';
+    } else {
+      html += '<table class="table"><tr><th>Nombre</th><th>Última actualización</th><th></th></tr>';
+      midi.forEach(function(cfg){
+        html += '<tr><td>' + escapeHtml(cfg.name) + '</td><td>' + escapeHtml(cfg.updated_at || '') + '</td><td><button class="btn" data-delete-config="MIDI::' + escapeHtml(cfg.name) + '">Eliminar</button></td></tr>';
+      });
+      html += '</table>';
+    }
+    html += '<div class="small">Las configuraciones se sincronizan automáticamente cuando cada Pi guarda sus ajustes.</div></div>';
+    container.innerHTML = html;
+
+    toArray(container.querySelectorAll('button[data-delete-config]')).forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var parts = btn.dataset.deleteConfig.split('::');
+        var service = parts[0];
+        var name = parts[1];
+        if(!service || !name) return;
+        if(!confirm('¿Eliminar la configuración "' + name + '"?')) return;
+        fetch('/api/configs/' + encodeURIComponent(service) + '/' + encodeURIComponent(name), { method:'DELETE' })
+          .then(function(){ delete configCache[service]; return Promise.all([loadServiceConfigs(), loadDevices()]); })
+          .catch(function(err){ alert('No se pudo eliminar la configuración: ' + err); });
+      });
+    });
+  }
+
+  function renderClientsView(clients){
+    currentClients = clients;
+    var container = document.getElementById('clientsView');
+    if(!clients.length){
+      container.innerHTML = '<div class="card">No hay clientes registrados.</div>';
+      return;
+    }
+    var html = '<div class="card"><h2>Clientes registrados</h2>';
+    html += '<table class="table"><tr><th>Serial</th><th>Host</th><th>Servicio deseado</th><th>Configuración</th><th>Actualizado</th><th></th></tr>';
+    clients.forEach(function(client){
+      html += '<tr>' +
+        '<td>' + escapeHtml(client.serial || '') + '</td>' +
+        '<td>' + escapeHtml(client.host || '—') + '</td>' +
+        '<td>' + escapeHtml(client.desired_service || '—') + '</td>' +
+        '<td>' + escapeHtml(client.desired_config || '—') + '</td>' +
+        '<td>' + escapeHtml(client.updated_at || '') + '</td>' +
+        '<td><button class="btn" data-remove-client="' + escapeHtml(client.serial || '') + '">Eliminar</button></td>' +
+      '</tr>';
+    });
+    html += '</table></div>';
+    container.innerHTML = html;
+
+    toArray(container.querySelectorAll('button[data-remove-client]')).forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var serial = btn.dataset.removeClient;
+        if(!serial || !confirm('¿Eliminar el cliente ' + serial + '?')) return;
+        fetch('/api/devices/' + encodeURIComponent(serial), { method:'DELETE' })
+          .then(function(){ return Promise.all([loadClients(), loadDevices()]); })
+          .catch(function(err){ alert('No se pudo eliminar el cliente: ' + err); });
+      });
+    });
+  }
+
+  function sendServiceChange(serial, service, config){
+    if(!service){
+      alert('Selecciona un servicio.');
+      return;
+    }
+    var body = { service: service };
     if(config) body.config = config;
-    const resp = await fetch(`/api/devices/${serial}/service`, {
-      method: 'POST',
+    fetch('/api/devices/' + encodeURIComponent(serial) + '/service', {
+      method:'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
+    }).then(function(res){
+      if(!res.ok){
+        return res.json().catch(function(){ return { detail:'error' }; }).then(function(detail){
+          throw new Error(detail.detail || res.status);
+        });
+      }
+    }).catch(function(err){
+      alert('Error cambiando servicio: ' + err);
+    }).finally(function(){
+      ensureConfigs(service, true).finally(function(){ setTimeout(loadDevices, 500); });
     });
-    if(!resp.ok){
-      const detail = await resp.json().catch(()=>({detail:'error'}));
-      alert('Error cambiando servicio: ' + (detail.detail || resp.status));
+  }
+
+  function showView(view){
+    toArray(document.querySelectorAll('[data-view-btn]')).forEach(function(btn){
+      btn.classList.toggle('active', btn.dataset.viewBtn === view);
+    });
+    document.getElementById('devicesView').classList.toggle('hidden', view !== 'devices');
+    document.getElementById('clientsView').classList.toggle('hidden', view !== 'clients');
+    document.getElementById('servicesView').classList.toggle('hidden', view !== 'services');
+    if(view === 'services'){
+      loadServiceConfigs();
+    } else if(view === 'clients'){
+      loadClients();
     }
-  } catch(err){
-    alert('Error cambiando servicio: ' + err);
-  } finally {
-    if(service) await ensureConfigs(service, true);
-    setTimeout(loadDevices, 500);
   }
-}
 
-function showView(view){
-  document.querySelectorAll('[data-view-btn]').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.viewBtn === view);
+  function openConfig(url, title){
+    if(!url) return;
+    var overlay = document.getElementById('configOverlay');
+    document.getElementById('configFrame').src = url;
+    document.getElementById('overlayTitle').textContent = title || 'Configuración';
+    overlay.classList.add('active');
+  }
+
+  function closeConfig(){
+    var overlay = document.getElementById('configOverlay');
+    overlay.classList.remove('active');
+    document.getElementById('configFrame').src = 'about:blank';
+  }
+
+  var closeBtn = document.getElementById('closeOverlayBtn');
+  if(closeBtn){
+    closeBtn.addEventListener('click', function(){
+      closeConfig();
+      showView('devices');
+    });
+  }
+
+  toArray(document.querySelectorAll('[data-view-btn]')).forEach(function(btn){
+    btn.addEventListener('click', function(){ showView(btn.dataset.viewBtn); });
   });
-  document.getElementById('devicesView').classList.toggle('hidden', view !== 'devices');
-  document.getElementById('clientsView').classList.toggle('hidden', view !== 'clients');
-  document.getElementById('servicesView').classList.toggle('hidden', view !== 'services');
-  if(view === 'services'){
-    loadServiceConfigs();
-  } else if(view === 'clients'){
-    loadClients();
+
+  function loadDevices(){
+    fetchDevices().then(function(devices){
+      var services = new Set();
+      devices.forEach(function(dev){ (dev.available_services || []).forEach(function(s){ services.add(s); }); });
+      return Promise.all(Array.from(services).map(function(service){ return ensureConfigs(service); })).then(function(){
+        renderDevices(devices);
+      });
+    }).catch(console.error);
   }
-}
 
-function openConfig(url, title){
-  if(!url) return;
-  const overlay = document.getElementById('configOverlay');
-  document.getElementById('configFrame').src = url;
-  document.getElementById('overlayTitle').textContent = title;
-  overlay.classList.add('active');
-}
-
-function closeConfig(){
-  const overlay = document.getElementById('configOverlay');
-  overlay.classList.remove('active');
-  document.getElementById('configFrame').src = 'about:blank';
-}
-
-document.getElementById('closeOverlayBtn').addEventListener('click', () => {
-  closeConfig();
-  showView('devices');
-});
-
-document.querySelectorAll('[data-view-btn]').forEach(btn => {
-  btn.addEventListener('click', () => showView(btn.dataset.viewBtn));
-});
-
-async function loadDevices(){
-  try{
-    const devices = await fetchDevices();
-    const services = new Set();
-    devices.forEach(dev => (dev.available_services || []).forEach(s => services.add(s)));
-    await Promise.all(Array.from(services).map(s => ensureConfigs(s)));
-    renderDevices(devices);
-  }catch(err){
-    console.error(err);
+  function loadServiceConfigs(){
+    ensureConfigs('MIDI', true).then(renderServicesView).catch(console.error);
   }
-}
 
-async function loadServiceConfigs(){
-  try{
-    await ensureConfigs('MIDI', true);
-    renderServicesView();
-  }catch(err){
-    console.error(err);
+  function loadClients(){
+    fetchClients().then(renderClientsView).catch(console.error);
   }
-}
 
-async function loadClients(){
-  try{
-    const clients = await fetchClients();
-    renderClientsView(clients);
-  }catch(err){
-    console.error(err);
-  }
-}
-
-setInterval(loadDevices, 4000);
-setInterval(loadServiceConfigs, 15000);
-setInterval(loadClients, 15000);
-loadDevices();
-loadServiceConfigs();
-loadClients();
+  setInterval(loadDevices, 4000);
+  setInterval(loadServiceConfigs, 15000);
+  setInterval(loadClients, 15000);
+  loadDevices();
+  loadServiceConfigs();
+  loadClients();
+})();
 </script>
 </body>
 </html>
