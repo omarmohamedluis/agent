@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import os, json, socket, ipaddress, time, asyncio, tempfile, html
+from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import FastAPI, Form, WebSocket, WebSocketDisconnect, Request
@@ -19,6 +20,8 @@ RESTART_REQ_FILE = os.path.join(BASE_DIR, "OMIMIDI_restart.flag")
 mido.set_backend("mido.backends.rtmidi")
 
 app = FastAPI(title="OMIMIDI Web UI", version="0.6")
+
+STRUCTURE_PATH = Path(__file__).resolve().parents[2] / "agent_pi" / "data" / "structure.json"
 
 # ---------- utils JSON ----------
 def load_json(path: str, default: Any) -> Any:
@@ -88,6 +91,14 @@ ws_manager = WSManager()
 
 
 # ---------- HTML ----------
+def get_identity_host() -> str:
+    data = load_json(str(STRUCTURE_PATH), {})
+    host = data.get("identity", {}).get("host")
+    if isinstance(host, str) and host.strip():
+        return host.strip()
+    return "unknown-host"
+
+
 NAV_ITEMS = [
     ("home", "Home", "/"),
     ("settings", "Ajustes", "/settings"),
@@ -95,6 +106,11 @@ NAV_ITEMS = [
 ]
 
 def render_layout(body_html: str, *, title: str = "OMIMIDI Web UI", active: str = "home", extra_head: str = "", extra_js: str = "") -> HTMLResponse:
+    host_label = get_identity_host()
+    brand_text = f"OMIMIDI @ {host_label} Web UI"
+    brand_html = html.escape(brand_text, quote=True)
+    page_title = title if title != "OMIMIDI Web UI" else brand_text
+    page_title_html = html.escape(page_title, quote=True)
     nav_links = []
     for key, label, href in NAV_ITEMS:
         cls = "nav-link"
@@ -105,7 +121,7 @@ def render_layout(body_html: str, *, title: str = "OMIMIDI Web UI", active: str 
 <html>
 <head>
 <meta charset="utf-8">
-<title>{title}</title>
+<title>{page_title_html}</title>
 <style>
 :root {{
   --bg:#111;
@@ -216,7 +232,7 @@ input[type=text], select {{
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">OMIMIDI Web UI</div>
+  <div class="brand">{brand_html}</div>
   <nav class="nav">{''.join(nav_links)}</nav>
 </header>
 <main class="container stack">

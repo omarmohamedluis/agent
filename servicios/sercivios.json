@@ -12,11 +12,11 @@
   },
   "OmiMIDI":{
     "display_name": "MIDI",
-    "exec_path": "servicios/MIDI/OmiMIDI.py",
-    "entry": ["python3", "OmiMIDI.py"],
+    "exec_path": "servicios/MIDI/omimidi_core.py",
+    "entry": ["python3", "omimidi_core.py"],
     "args": [],
     "cwd": ".",
-    "env": {},
+    "env": {"path": "${workspaceFolder}/.venv/bin/python"},
     "stop": { "method": "signal", "signal": "TERM" },
     "healthcheck": { "type": "process" },
     "config_paths": ["setvicios/MIDI/conifgMIDI.json"]

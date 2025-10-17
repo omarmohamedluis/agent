@@ -26,30 +26,6 @@
       "channel": 2,
       "osc": "/composition/layers/1/video/opacity",
       "vtype": "float"
-    },
-    {
-      "type": "note",
-      "note": 39,
-      "osc": "/D3/test",
-      "vtype": "bool"
-    },
-    {
-      "type": "note",
-      "note": 38,
-      "osc": "/D3/test1",
-      "vtype": "bool"
-    },
-    {
-      "type": "note",
-      "note": 5,
-      "osc": "/D3/learn",
-      "vtype": "float"
-    },
-    {
-      "type": "note",
-      "note": 0,
-      "osc": "/D3/hola",
-      "vtype": "float"
     }
   ]
 }

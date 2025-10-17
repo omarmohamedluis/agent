@@ -67,6 +67,7 @@ def listen_and_reply():
                         "serial":  CFG["identity"]["serial"] or "pi-unknown",
                         "index":   CFG["identity"]["index"],
                         "name":    CFG["identity"]["name"],
+                        "host":    CFG["identity"].get("host") or "unknown-host",
                         "version": CFG["version"]["version"],
                         "services": CFG["services"],  # lista tal cual
                         "heartbeat": {

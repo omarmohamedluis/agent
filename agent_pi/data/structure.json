@@ -5,7 +5,8 @@
   "identity": {
     "index": null,
     "name": "",
-    "serial": "4f30ea9e2b4bbfbc"
+    "serial": "4f30ea9e2b4bbfbc",
+    "host": "omipitest"
   },
   "network": {
     "interfaces": [

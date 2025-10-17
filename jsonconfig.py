@@ -1,7 +1,8 @@
 import json
-from pathlib import Path
-from typing import Dict, Any
+import socket
 import subprocess
+from pathlib import Path
+from typing import Any, Dict
 
 DEFAULT_SERVICES = [
     {"name": "standby",              "enabled": True},
@@ -27,10 +28,23 @@ def get_serial() -> str:
         pass
     return "unknown-serial"
 
-def _default_structure(version: str, serial: str) -> Dict[str, Any]:
+def get_host() -> str:
+    """
+    Devuelve el hostname de la máquina.
+    Si falla, devuelve un identificador de fallback.
+    """
+    try:
+        host = socket.gethostname()
+        if host:
+            return host
+    except Exception:
+        pass
+    return "unknown-host"
+
+def _default_structure(version: str, serial: str, host: str) -> Dict[str, Any]:
     return {
         "version": {"version": version},
-        "identity": {"index": None, "name": "", "serial": serial},
+        "identity": {"index": None, "name": "", "serial": serial, "host": host},
         "network": {"interfaces": []},
         "services": list(DEFAULT_SERVICES),
         "config": {"heartbeat_interval_s": 5},
@@ -53,29 +67,40 @@ def ensure_config(path: str | Path, version: str = "0.0.1") -> Dict[str, Any]:
     """
     p = Path(path)
     serial = get_serial()
+    host = get_host()
 
     if not p.exists():
-        data = _default_structure(version, serial)
+        data = _default_structure(version, serial, host)
         _write_json(p, data)
         return data
 
     try:
         data = _read_json(p)
     except Exception:
-        data = _default_structure(version, serial)
+        data = _default_structure(version, serial, host)
         _write_json(p, data)
         return data
 
     current_serial = str(data.get("identity", {}).get("serial", ""))
     if current_serial != serial:
         # Si el serial no coincide, se regenera
-        data = _default_structure(version, serial)
+        data = _default_structure(version, serial, host)
         _write_json(p, data)
         return data
+
+    has_changes = False
 
     # Actualiza la versión si cambió
     if data.get("version", {}).get("version") != version:
         data["version"]["version"] = version
+        has_changes = True
+
+    identity = data.setdefault("identity", {})
+    if identity.get("host") != host:
+        identity["host"] = host
+        has_changes = True
+
+    if has_changes:
         _write_json(p, data)
 
     return data
