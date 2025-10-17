@@ -1,14 +1,57 @@
 {
-    "schema": "omi.services/v1",
-
-    "services": [
-      {
-        "name": "standby",
-        "enabled": true,
-        "exec": { "cmd": "python3", "args": ["servicios/standby/service.py"], "cwd": ".", "env": {} },
-        "stop": { "signal": "TERM", "graceful_timeout_s": 5, "pattern": null },
-        "options": { "type": "object", "properties": { "verbose": { "type": "boolean", "default": false } } }
-      }
-    ]
-  }
-  
+  "satellite":{
+  "display_name": "Companion Satellite",
+  "exec_path": "ruta/random",
+  "entry": ["python3", "service.py"],
+  "args": [],
+  "cwd": ".",
+  "env": {},
+  "stop": { "method": "signal", "signal": "TERM" },
+  "healthcheck": { "type": "process" },
+  "config_paths": ["~/.config/companion-satellite"]
+  },
+  "OmiMIDI":{
+    "display_name": "MIDI",
+    "exec_path": "servicios/MIDI/OmiMIDI.py",
+    "entry": ["python3", "OmiMIDI.py"],
+    "args": [],
+    "cwd": ".",
+    "env": {},
+    "stop": { "method": "signal", "signal": "TERM" },
+    "healthcheck": { "type": "process" },
+    "config_paths": ["setvicios/MIDI/conifgMIDI.json"]
+    },
+    "OmiOSC":{
+      "display_name": "OSC",
+      "exec_path": "servicios/OSC/OmiOSC.py",
+      "entry": ["python3", "OmiOSC.py"],
+      "args": [],
+      "cwd": ".",
+      "env": {},
+      "stop": { "method": "signal", "signal": "TERM" },
+      "healthcheck": { "type": "process" },
+      "config_paths": ["setvicios/OSC/conifgOSC.json"]
+      },
+    "OmiScaut":{
+      "display_name": "SCAUTING",
+      "exec_path": "servicios/scauting/OmiScaut.py",
+      "entry": ["python3", "OmiScaut.py"],
+      "args": [],
+      "cwd": ".",
+      "env": {},
+      "stop": { "method": "signal", "signal": "TERM" },
+      "healthcheck": { "type": "process" },
+      "config_paths": ["setvicios/scauting/conifgScauting.json"]
+      },
+      "companion":{
+        "display_name": "companion",
+        "exec_path": "servicios/companion/OmiScaut.py",
+        "entry": ["python3", "companion.py"],
+        "args": [],
+        "cwd": ".",
+        "env": {},
+        "stop": { "method": "signal", "signal": "TERM" },
+        "healthcheck": { "type": "process" },
+        "config_paths": ["."]
+        }
+}
