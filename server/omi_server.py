@@ -25,7 +25,7 @@ from db import (
 )
 from logger import get_server_logger
 
-HTTP_PORT = 8000
+HTTP_PORT = 6969
 BCAST_IP = "255.255.255.255"
 BCAST_PORT = 37020
 REPLY_PORT = 37021

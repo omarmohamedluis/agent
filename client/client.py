@@ -39,6 +39,7 @@ SERVICE_MONITOR_INTERVAL_S = 2.0
 logger = get_agent_logger()
 
 SERVER_HTTP_PORT_DEFAULT = 8000
+SERVER_INFO_PATH = Path(__file__).resolve().parent / "agent_pi" / "data" / "server.json"
 SERVER_API_BASE: Optional[str] = None
 
 SNAPSHOT_LOCK = threading.Lock()
@@ -82,16 +83,31 @@ def _update_server_api(server_ip: str, http_port: Optional[int]) -> None:
     port = http_port or SERVER_HTTP_PORT_DEFAULT
     SERVER_API_BASE = f"http://{server_ip}:{port}"
     identity = _current_config().get("identity", {}) if CFG else {}
+    info = {
+        "api": SERVER_API_BASE,
+        "serial": (identity or {}).get("serial", ""),
+        "host": (identity or {}).get("host", ""),
+    }
     set_runtime_env(
         {
-            "OMI_SERVER_API": SERVER_API_BASE,
-            "OMI_AGENT_SERIAL": (identity or {}).get("serial", ""),
-            "OMI_AGENT_HOST": (identity or {}).get("host", ""),
+            "OMI_SERVER_API": info["api"],
+            "OMI_AGENT_SERIAL": info["serial"],
+            "OMI_AGENT_HOST": info["host"],
         }
     )
+    _write_server_info(info)
+    _upload_midi_config_to_server()
     logger.info("Servidor API detectado en %s", SERVER_API_BASE)
 
 
+
+
+def _write_server_info(info: Dict[str, Any]) -> None:
+    try:
+        SERVER_INFO_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SERVER_INFO_PATH.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("No se pudo escribir server.json: %s", exc)
 def _current_config() -> Dict[str, Any]:
     with CONFIG_LOCK:
         return copy.deepcopy(CFG)
@@ -125,6 +141,29 @@ def _write_midi_config(data: Dict[str, Any]) -> None:
     _midi_map_path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+
+def _upload_midi_config_to_server() -> None:
+    if not SERVER_API_BASE:
+        return
+    data = _read_midi_config()
+    if not data:
+        return
+    info = {
+        "name": data.get("config_name", "default"),
+        "data": data,
+        "serial": (_current_config().get("identity", {}) or {}).get("serial", ""),
+        "host": (_current_config().get("identity", {}) or {}).get("host", ""),
+        "source": "client_sync",
+        "overwrite": True,
+    }
+    try:
+        payload = json.dumps(info).encode('utf-8')
+        req = urllib.request.Request(f"{SERVER_API_BASE}/api/configs/MIDI", data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=5)
+        logger.info("Preset MIDI sincronizado con el servidor")
+    except Exception as exc:
+        logger.warning("No se pudo sincronizar preset local con servidor: %s", exc)
+
 def _download_service_config(service: str, config_name: str) -> None:
     if not SERVER_API_BASE:
         raise RuntimeError("sin servidor API disponible")
@@ -134,6 +173,9 @@ def _download_service_config(service: str, config_name: str) -> None:
         with urllib.request.urlopen(req, timeout=5) as resp:
             payload = json.load(resp)
     except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            logger.warning("Preset %s/%s no existe en servidor, se mantiene configuración local", service, config_name)
+            return
         raise RuntimeError(f"configuración '{config_name}' no disponible ({exc.code})") from exc
     except Exception as exc:
         raise RuntimeError(f"no se pudo descargar la configuración '{config_name}'") from exc

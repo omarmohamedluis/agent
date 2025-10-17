@@ -27,5 +27,6 @@
       "osc": "/composition/layers/1/video/opacity",
       "vtype": "float"
     }
-  ]
+  ],
+  "config_name": "default"
 }

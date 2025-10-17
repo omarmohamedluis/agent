@@ -19,3 +19,9 @@ Thumbs.db
 
 # VS Code
 .vscode/
+
+# servicio midi
+OMIMIDI_state.json
+OMIMIDI_learn_request.json
+OMIMIDI_last_event.json
+OMIMIDI_webui.pid

@@ -6,6 +6,7 @@ import urllib.request
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 import urllib.request
+from pathlib import Path
 
 import mido
 from pythonosc.udp_client import SimpleUDPClient
@@ -18,6 +19,9 @@ LEARN_REQ_FILE   = os.path.join(BASE_DIR, "OMIMIDI_learn_request.json")   # WebU
 STATE_FILE       = os.path.join(BASE_DIR, "OMIMIDI_state.json")           # último valor por ruta OSC
 RESTART_REQ_FILE = os.path.join(BASE_DIR, "OMIMIDI_restart.flag")         # WebUI solicita reinicio; el core se re-ejecuta
 WEBUI_PID_FILE   = os.path.join(BASE_DIR, "OMIMIDI_webui.pid")            # PID de la WebUI para poder matarla
+SERVER_INFO_PATH = Path(__file__).resolve().parents[3] / 'client' / 'agent_pi' / 'data' / 'server.json'
+
+
 
 CLEANUP_FILES = [
     LAST_EVENT_FILE,
@@ -26,6 +30,38 @@ CLEANUP_FILES = [
     WEBUI_PID_FILE,
 ]
 
+
+def _load_server_info() -> Dict[str, Any]:
+    try:
+        with SERVER_INFO_PATH.open('r', encoding='utf-8') as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+def push_map_to_server(map_data: Dict[str, Any], *, source: str = "omimidi_core") -> None:
+    info = _load_server_info()
+    server_api = info.get("api")
+    serial = info.get("serial")
+    host = info.get("host")
+    if not server_api or not serial:
+        return
+    config_name = str(map_data.get("config_name") or "default")
+    payload = json.dumps(
+        {
+            "name": config_name,
+            "data": map_data,
+            "serial": serial,
+            "host": host,
+            "source": source,
+            "overwrite": True,
+        }
+    ).encode("utf-8")
+    url = f"{server_api}/api/configs/MIDI"
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as exc:
+        print(f"[WARN] Falló sincronización de preset '{config_name}': {exc}")
 def cleanup_runtime_files():
     for path in CLEANUP_FILES:
         try:
@@ -414,26 +450,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-def push_map_to_server(map_data: Dict[str, Any], *, source: str = "omimidi_core") -> None:
-    server_api = os.environ.get("OMI_SERVER_API")
-    serial = os.environ.get("OMI_AGENT_SERIAL")
-    host = os.environ.get("OMI_AGENT_HOST")
-    if not server_api or not serial:
-        return
-    config_name = str(map_data.get("config_name") or "default")
-    payload = json.dumps(
-        {
-            "name": config_name,
-            "data": map_data,
-            "serial": serial,
-            "host": host,
-            "source": source,
-            "overwrite": True,
-        }
-    ).encode("utf-8")
-    url = f"{server_api}/api/configs/MIDI"
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
-    try:
-        urllib.request.urlopen(req, timeout=5)
-    except Exception as exc:
-        print(f"[WARN] Falló sincronización de preset '{config_name}': {exc}")
