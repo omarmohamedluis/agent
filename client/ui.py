@@ -3,6 +3,7 @@
 from __future__ import annotations
 from pathlib import Path
 import json
+import time
 from PIL import Image, ImageDraw, ImageFont
 
 
@@ -155,6 +156,18 @@ def ErrorUI(label: str = "ERROR"):
     img = _base_canvas()
     _draw_header_error(img, label)
     _display(img)
+
+
+def ErrorUIBlink(label: str = "ERROR", times: int = 3, interval: float = 0.25) -> None:
+    """Muestra ErrorUI con parpadeo simple."""
+    times = max(1, int(times))
+    delay = max(0.05, float(interval))
+    for _ in range(times):
+        ErrorUI(label)
+        time.sleep(delay)
+        UIOFF()
+        time.sleep(delay)
+    ErrorUI(label)
 
 def UIShutdownProceess(percent: int, label: str = "Apagando"):
     """Igual que LOADING, separado por semántica (con icono)."""

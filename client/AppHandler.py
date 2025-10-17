@@ -4,6 +4,8 @@ import os
 import sys
 import time
 import subprocess
+import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, TextIO
 
@@ -24,14 +26,17 @@ ENTRYPOINT = "service.py"
 _proc: Optional[subprocess.Popen] = None
 _name: Optional[str] = None
 _logical: Optional[str] = STANDBY_SERVICE
-_stdout_handle: Optional[TextIO] = None
-_stderr_handle: Optional[TextIO] = None
+_stdout_thread: Optional[threading.Thread] = None
+_stderr_thread: Optional[threading.Thread] = None
+_stdout_stream: Optional[TextIO] = None
+_stderr_stream: Optional[TextIO] = None
 _last_error: Optional[str] = None
 _last_command: list[str] | None = None
 _last_env: Dict[str, str] | None = None
 _last_cwd: Optional[Path] = None
 _last_returncode: Optional[int] = None
 _runtime_env: Dict[str, str] = {}
+_spool_stop: Optional[threading.Event] = None
 
 _logger = get_agent_logger()
 
@@ -64,6 +69,10 @@ def list_available_services(include_logical: bool = False) -> list[str]:
 def set_runtime_env(extra_env: Dict[str, str]) -> None:
     global _runtime_env
     _runtime_env = dict(extra_env)
+    for key, value in _runtime_env.items():
+        if value is None:
+            continue
+        os.environ[key] = value
 
 
 def get_active_service(logical: bool = False) -> Optional[str]:
@@ -121,25 +130,91 @@ def _resolve_paths(definition: dict, name: str) -> tuple[list[str], Path, Dict[s
     return command, cwd_path, env, log_paths
 
 
-def _close_streams() -> None:
-    global _stdout_handle, _stderr_handle
-    for handle in (_stdout_handle, _stderr_handle):
-        if handle:
+def _stop_stream_threads() -> None:
+    global _stdout_thread, _stderr_thread, _stdout_stream, _stderr_stream, _spool_stop
+    if _spool_stop:
+        _spool_stop.set()
+    if _stdout_stream:
+        try:
+            _stdout_stream.close()
+        except Exception:
+            pass
+    if _stderr_stream:
+        try:
+            _stderr_stream.close()
+        except Exception:
+            pass
+    for thread in (_stdout_thread, _stderr_thread):
+        if thread and thread.is_alive():
+            thread.join(timeout=1.0)
+    _stdout_thread = None
+    _stderr_thread = None
+    _stdout_stream = None
+    _stderr_stream = None
+    _spool_stop = None
+
+
+def _pump_stream(stream: Optional[TextIO], path: Path, service_name: str, stream_label: str) -> None:
+    if stream is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    with path.open("a", encoding="utf-8") as handle:
+        while True:
+            if _spool_stop and _spool_stop.is_set():
+                break
+            line = stream.readline()
+            if not line:
+                break
+            text = line.rstrip("\n")
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            prefix = ''
+            if service_name.upper() == "MIDI" and 'error' in text.lower():
+                prefix = 'MIDI ERROR ' if not text.lower().startswith('error') else ''
+            formatted = f"[{timestamp}] {prefix}{text}"
             try:
+                handle.write(formatted + "\n")
                 handle.flush()
-                handle.close()
             except Exception:
                 pass
-    _stdout_handle = None
-    _stderr_handle = None
+            _logger.debug("%s %s: %s", service_name, stream_label, text)
+            if service_name.upper() == "MIDI" and 'error' in text.lower():
+                _logger.error("MIDI ERROR: %s", text)
+    try:
+        stream.close()
+    except Exception:
+        pass
+
+
+def _start_stream_threads(proc: subprocess.Popen[str], service_name: str, log_paths: Dict[str, Path]) -> None:
+    global _stdout_thread, _stderr_thread, _stdout_stream, _stderr_stream, _spool_stop
+    _spool_stop = threading.Event()
+    _stdout_stream = proc.stdout
+    _stderr_stream = proc.stderr
+    _stdout_thread = threading.Thread(
+        target=_pump_stream,
+        args=(_stdout_stream, log_paths["stdout"], service_name, "stdout"),
+        daemon=True,
+    )
+    _stderr_thread = threading.Thread(
+        target=_pump_stream,
+        args=(_stderr_stream, log_paths["stderr"], service_name, "stderr"),
+        daemon=True,
+    )
+    _stdout_thread.start()
+    _stderr_thread.start()
 
 
 def start_service(name: str) -> bool:
-    global _proc, _name, _logical, _stdout_handle, _stderr_handle, _last_error, _last_command, _last_env, _last_cwd, _last_returncode
+    global _proc, _name, _logical, _last_error, _last_command, _last_env, _last_cwd, _last_returncode
 
     if name == STANDBY_SERVICE:
         if _is_running():
             stop_service()
+        else:
+            _stop_stream_threads()
         _logical = STANDBY_SERVICE
         _last_error = None
         _last_command = None
@@ -167,19 +242,19 @@ def start_service(name: str) -> bool:
         env_map.update(_runtime_env)
         env_map.update(env)
         env_map.setdefault("PYTHONUNBUFFERED", "1")
-        stdout_handle = log_paths["stdout"].open("a", encoding="utf-8", buffering=1)
-        stderr_handle = log_paths["stderr"].open("a", encoding="utf-8", buffering=1)
-        _close_streams()
-        _stdout_handle = stdout_handle
-        _stderr_handle = stderr_handle
-
+        env_map["OMI_SERVICE_ID"] = name
+        _stop_stream_threads()
         _logger.info("Lanzando servicio '%s' → %s (cwd=%s)", name, command, cwd_path)
         _proc = subprocess.Popen(
             command,
             cwd=str(cwd_path),
             env=env_map,
-            stdout=_stdout_handle,
-            stderr=_stderr_handle,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
         )
         _name = name
         _logical = name
@@ -188,6 +263,7 @@ def start_service(name: str) -> bool:
         _last_env = env_map
         _last_cwd = cwd_path
         _last_returncode = None
+        _start_stream_threads(_proc, name, log_paths)
         _logger.info("Servicio '%s' iniciado (pid=%s)", name, _proc.pid)
         return True
     except Exception as e:
@@ -197,19 +273,19 @@ def start_service(name: str) -> bool:
         _last_error = str(e)
         _last_returncode = None
         _logger.error("Error iniciando '%s': %s", name, e)
-        _close_streams()
+        _stop_stream_threads()
         return False
 
 
 def stop_service(timeout: float = 5.0) -> bool:
-    global _proc, _name, _logical, _stdout_handle, _stderr_handle, _last_error, _last_returncode
+    global _proc, _name, _logical, _last_error, _last_returncode
     if not _is_running():
         _proc = None
         _name = None
         _logical = STANDBY_SERVICE
         _last_error = None
         _last_returncode = None
-        _close_streams()
+        _stop_stream_threads()
         _logger.info("No hay servicio en ejecución.")
         return True
 
@@ -229,7 +305,7 @@ def stop_service(timeout: float = 5.0) -> bool:
         _logical = STANDBY_SERVICE
         _last_error = None
         _last_returncode = rc
-        _close_streams()
+        _stop_stream_threads()
         return True
     except Exception as e:
         _logger.error("Error al detener '%s': %s", _name, e)
@@ -238,7 +314,7 @@ def stop_service(timeout: float = 5.0) -> bool:
         _logical = STANDBY_SERVICE
         _last_error = str(e)
         _last_returncode = None
-        _close_streams()
+        _stop_stream_threads()
         return False
 
 

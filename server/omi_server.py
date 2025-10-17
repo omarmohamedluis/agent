@@ -3,6 +3,7 @@ import socket
 import threading
 import time
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from contextlib import asynccontextmanager
@@ -45,6 +46,12 @@ def build_devices_payload() -> List[Dict[str, Any]]:
         serial = dev.get("serial")
         extra = desired_devices.get(serial or "") if serial else None
         payload = dict(dev)
+        last_seen = payload.get("last_seen")
+        if isinstance(last_seen, (int, float)):
+            try:
+                payload["last_seen"] = datetime.fromtimestamp(last_seen).isoformat()
+            except Exception:
+                payload["last_seen"] = None
         if extra:
             payload["desired_service"] = extra.get("desired_service")
             payload["desired_config"] = extra.get("desired_config")
@@ -63,7 +70,7 @@ def build_devices_payload() -> List[Dict[str, Any]]:
                 "available_services": [],
                 "heartbeat": {},
                 "logical_service": None,
-                "last_seen": None,
+                "last_seen": extra.get("updated_at"),
                 "ip": None,
                 "online": False,
                 "desired_service": extra.get("desired_service"),
@@ -345,6 +352,11 @@ async def api_devices() -> Dict[str, Any]:
     return {"devices": build_devices_payload()}
 
 
+@app.get("/api/clients")
+async def api_clients() -> Dict[str, Any]:
+    return {"clients": list_devices()}
+
+
 @app.post("/api/devices/{serial}/service")
 async def api_set_service(serial: str, payload: ServiceRequest) -> Dict[str, Any]:
     try:
@@ -404,10 +416,10 @@ async def api_delete_device(serial: str) -> Dict[str, Any]:
 
 
 HTML_PAGE = """<!doctype html>
-<html lang=\"es\">
+<html lang="es">
 <head>
-<meta charset=\"utf-8\">
-<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OMI Control Server</title>
 <style>
 :root { --bg:#111; --card:#1c1c1c; --line:#2c2c2c; --text:#eee; --muted:#aaa; --accent:#2ea043; --danger:#f06262; }
@@ -438,8 +450,6 @@ select { background:#1e1e1e; color:var(--text); border:1px solid #3a3a3a; border
 .overlay header h3 { margin:0; font-size:16px; color:var(--text); }
 .overlay iframe { flex:1; border:0; background:#fff; }
 .config-select { margin-top:6px; width:100%; }
-#servicesView table { width:100%; border-collapse:collapse; }
-#servicesView th, #servicesView td { padding:8px; border-bottom:1px solid #2f2f2f; text-align:left; }
 .tag { display:inline-block; padding:2px 8px; border-radius:999px; background:#2f2f2f; font-size:12px; margin-left:6px; }
 </style>
 </head>
@@ -448,10 +458,12 @@ select { background:#1e1e1e; color:var(--text); border:1px solid #3a3a3a; border
   <div class="brand">OMI Control Server</div>
   <nav class="nav">
     <button class="nav-link active" data-view-btn="devices">Home</button>
+    <button class="nav-link" data-view-btn="clients">Clientes</button>
     <button class="nav-link" data-view-btn="services">Servicios</button>
   </nav>
 </header>
 <main class="container stack view" id="devicesView"></main>
+<section class="container stack view hidden" id="clientsView"></section>
 <section class="container stack view hidden" id="servicesView"></section>
 <div class="overlay hidden" id="configOverlay">
   <header>
@@ -463,15 +475,29 @@ select { background:#1e1e1e; color:var(--text); border:1px solid #3a3a3a; border
 <script>
 const configCache = {};
 let currentDevices = [];
+let currentClients = [];
 
 function escapeHtml(str){
   return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c] || c));
+}
+
+function formatDate(value){
+  if(!value) return '—';
+  const date = new Date(value);
+  if(Number.isNaN(date.getTime())) return escapeHtml(String(value));
+  return date.toLocaleString();
 }
 
 async function fetchDevices(){
   const res = await fetch('/api/devices');
   if(!res.ok) throw new Error('Error cargando dispositivos');
   return (await res.json()).devices || [];
+}
+
+async function fetchClients(){
+  const res = await fetch('/api/clients');
+  if(!res.ok) throw new Error('Error cargando clientes');
+  return (await res.json()).clients || [];
 }
 
 async function ensureConfigs(service, force=false){
@@ -508,20 +534,22 @@ function renderDevice(dev){
   const serviceReturn = serviceState.returncode != null ? serviceState.returncode : '—';
   const serviceError = serviceState.error || serviceState.last_error || '';
   const serviceConfig = serviceState.config_name || '—';
-  const availableOptions = available.map(name => `<option value="${escapeHtml(name)}" ${name===activeLabel?'selected':''}>${escapeHtml(name)}</option>`).join('');
-  const configsHtml = activeLabel !== 'standby' ? `<select class="config-select" data-config-for="${escapeHtml(dev.serial || '')}" ${!online ? 'disabled' : ''}>${renderConfigOptions(activeLabel, serviceState.config_name)}</select>` : '<div class="small">Sin opciones de configuración.</div>';
-  const applyDisabled = !online;
   const webUrl = serviceState.web_url || '';
-  const configBtn = webUrl ? `<button class="btn" data-config-url="${escapeHtml(webUrl)}" data-config-title="${escapeHtml(dev.host || dev.serial || 'Configuración')}">Configurar</button>` : '<button class="btn" disabled>Configurar</button>';
   const desiredService = dev.desired_service || '—';
   const desiredConfig = dev.desired_config || '—';
   const ip = dev.ip || '-';
+  const lastSeen = dev.last_seen ? formatDate(dev.last_seen) : '—';
   const nameHeader = escapeHtml(dev.host || dev.serial || 'Agente');
+  const availableOptions = available.map(name => `<option value="${escapeHtml(name)}" ${name===activeLabel?'selected':''}>${escapeHtml(name)}</option>`).join('');
+  const configsHtml = activeLabel !== 'standby' ? `<select class="config-select" data-config-for="${escapeHtml(dev.serial || '')}" ${!online ? 'disabled' : ''}>${renderConfigOptions(activeLabel, serviceState.config_name)}</select>` : '<div class="small">Sin opciones de configuración.</div>';
+  const configBtn = webUrl ? `<button class="btn" data-config-url="${escapeHtml(webUrl)}" data-config-title="${escapeHtml(dev.host || dev.serial || 'Configuración')}">Configurar</button>` : '<button class="btn" disabled>Configurar</button>';
+
   return `
   <div class="card" data-serial="${escapeHtml(dev.serial || '')}">
     <h2>${nameHeader}${online ? '' : '<span class="tag">Offline</span>'}</h2>
     <div class="small">Serial: ${escapeHtml(dev.serial || '?')}</div>
     <div class="small">IP: ${escapeHtml(ip)}</div>
+    <div class="small">Último contacto: ${escapeHtml(lastSeen)}</div>
     <table class="table">
       <tr><th>Estado</th><td class="${online ? 'status-ok':'status-bad'}">${online ? 'Online' : 'Offline'}</td></tr>
       <tr><th>Servicio activo</th><td>${escapeHtml(activeLabel)}</td></tr>
@@ -537,7 +565,7 @@ function renderDevice(dev){
         </select>
         ${configsHtml}
         <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn" data-apply-service="${escapeHtml(dev.serial || '')}" ${applyDisabled ? 'disabled' : ''}>Aplicar</button>
+          <button class="btn" data-apply-service="${escapeHtml(dev.serial || '')}" ${!online ? 'disabled' : ''}>Aplicar</button>
           ${configBtn}
         </div>
       </td></tr>
@@ -623,6 +651,43 @@ function renderServicesView(){
   });
 }
 
+function renderClientsView(clients){
+  currentClients = clients;
+  const container = document.getElementById('clientsView');
+  if(!clients.length){
+    container.innerHTML = '<div class="card">No hay clientes registrados.</div>';
+    return;
+  }
+  let html = '<div class="card"><h2>Clientes registrados</h2>';
+  html += '<table class="table"><tr><th>Serial</th><th>Host</th><th>Servicio deseado</th><th>Configuración</th><th>Actualizado</th><th></th></tr>';
+  clients.forEach(client => {
+    html += `<tr>
+      <td>${escapeHtml(client.serial || '')}</td>
+      <td>${escapeHtml(client.host || '—')}</td>
+      <td>${escapeHtml(client.desired_service || '—')}</td>
+      <td>${escapeHtml(client.desired_config || '—')}</td>
+      <td>${escapeHtml(client.updated_at || '')}</td>
+      <td><button class="btn" data-remove-client="${escapeHtml(client.serial || '')}">Eliminar</button></td>
+    </tr>`;
+  });
+  html += '</table></div>';
+  container.innerHTML = html;
+
+  container.querySelectorAll('button[data-remove-client]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const serial = btn.dataset.removeClient;
+      if(!serial || !confirm(`¿Eliminar el cliente ${serial}?`)) return;
+      try {
+        await fetch(`/api/devices/${serial}`, { method:'DELETE' });
+        await loadClients();
+        await loadDevices();
+      } catch (err) {
+        alert('No se pudo eliminar el cliente: ' + err);
+      }
+    });
+  });
+}
+
 async function sendServiceChange(serial, service, config){
   if(!service){
     alert('Selecciona un servicio.');
@@ -643,7 +708,7 @@ async function sendServiceChange(serial, service, config){
   } catch(err){
     alert('Error cambiando servicio: ' + err);
   } finally {
-    await ensureConfigs(service, true);
+    if(service) await ensureConfigs(service, true);
     setTimeout(loadDevices, 500);
   }
 }
@@ -653,7 +718,13 @@ function showView(view){
     btn.classList.toggle('active', btn.dataset.viewBtn === view);
   });
   document.getElementById('devicesView').classList.toggle('hidden', view !== 'devices');
+  document.getElementById('clientsView').classList.toggle('hidden', view !== 'clients');
   document.getElementById('servicesView').classList.toggle('hidden', view !== 'services');
+  if(view === 'services'){
+    loadServiceConfigs();
+  } else if(view === 'clients'){
+    loadClients();
+  }
 }
 
 function openConfig(url, title){
@@ -700,10 +771,21 @@ async function loadServiceConfigs(){
   }
 }
 
+async function loadClients(){
+  try{
+    const clients = await fetchClients();
+    renderClientsView(clients);
+  }catch(err){
+    console.error(err);
+  }
+}
+
 setInterval(loadDevices, 4000);
-setInterval(loadServiceConfigs, 12000);
+setInterval(loadServiceConfigs, 15000);
+setInterval(loadClients, 15000);
 loadDevices();
 loadServiceConfigs();
+loadClients();
 </script>
 </body>
 </html>

@@ -27,7 +27,7 @@ from jsonconfig import (
     set_active_service,
 )
 from logger import get_agent_logger
-from ui import EstandardUse, LoadingUI, ErrorUI, UIOFF
+from ui import EstandardUse, LoadingUI, ErrorUI, ErrorUIBlink, UIOFF
 
 SOFVERSION = "0.0.1"
 BCAST_PORT = 37020
@@ -196,10 +196,16 @@ def _set_service_error(message: str) -> None:
     global SERVICE_ERROR
     SERVICE_ERROR = message
     logger.warning(message)
+    state = _get_service_state()
+    service_label = (state.get("expected") or "").upper()
+    ui_label = f"{service_label[:10]} ERR" if service_label else "ERROR"
     try:
-        ErrorUI(message[:14])
+        ErrorUIBlink(ui_label)
     except Exception:
-        pass
+        try:
+            ErrorUI(ui_label)
+        except Exception:
+            pass
     _update_service_status()
 
 
@@ -314,7 +320,8 @@ def _service_monitor_loop() -> None:
 
             if expected != STANDBY_SERVICE and not runtime.get("running"):
                 rc = runtime.get("returncode")
-                message = f"Servicio '{expected}' detenido (rc={rc})" if rc is not None else f"Servicio '{expected}' detenido"
+                label = (expected or "").upper()
+                message = f"{label} ERROR (rc={rc})" if rc is not None else f"{label} ERROR"
                 _set_service_error(message)
                 try:
                     _apply_active_service(expected, config_name=current_config_name)

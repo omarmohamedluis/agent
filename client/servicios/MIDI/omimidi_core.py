@@ -414,27 +414,26 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-SERVER_API = os.environ.get("OMI_SERVER_API")
-AGENT_SERIAL = os.environ.get("OMI_AGENT_SERIAL")
-
-
 def push_map_to_server(map_data: Dict[str, Any], *, source: str = "omimidi_core") -> None:
-    if not SERVER_API or not AGENT_SERIAL:
+    server_api = os.environ.get("OMI_SERVER_API")
+    serial = os.environ.get("OMI_AGENT_SERIAL")
+    host = os.environ.get("OMI_AGENT_HOST")
+    if not server_api or not serial:
         return
     config_name = str(map_data.get("config_name") or "default")
     payload = json.dumps(
         {
             "name": config_name,
             "data": map_data,
-            "serial": AGENT_SERIAL,
+            "serial": serial,
+            "host": host,
             "source": source,
             "overwrite": True,
         }
     ).encode("utf-8")
-    url = f"{SERVER_API}/api/configs/MIDI"
+    url = f"{server_api}/api/configs/MIDI"
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
     try:
         urllib.request.urlopen(req, timeout=5)
-    except Exception:
-        # Fail silently; logging happens in main process logs
-        pass
+    except Exception as exc:
+        print(f"[WARN] Falló sincronización de preset '{config_name}': {exc}")
