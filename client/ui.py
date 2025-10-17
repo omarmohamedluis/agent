@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
 import json
+from PIL import Image, ImageDraw, ImageFont
 
 
-DEFAULT_JSON_PATH = Path("agent_pi/data/structure.json")
+DEFAULT_JSON_PATH = Path(__file__).resolve().parent / "agent_pi" / "data" / "structure.json"
+ASSETS_PATH = Path(__file__).resolve().parent / "utilitys"
 
 OLED_W, OLED_H = 128, 64
 HEADER_H = 16
@@ -21,9 +22,9 @@ _device = ssd1306(serial, width=OLED_W, height=OLED_H)
 
 # -------- Carga estricta de fuentes e icono --------
 
-_FONT = ImageFont.truetype("utilitys/PixelOperator.ttf",14)
-_ICON_FONT = ImageFont.truetype("utilitys/lineawesome-webfont.ttf",16)
-_ICON  = Image.open("utilitys/omarpi.png")
+_FONT = ImageFont.truetype(str(ASSETS_PATH / "PixelOperator.ttf"), 14)
+_ICON_FONT = ImageFont.truetype(str(ASSETS_PATH / "lineawesome-webfont.ttf"), 16)
+_ICON  = Image.open(ASSETS_PATH / "omarpi.png")
 
 
 # -------- Lienzos --------

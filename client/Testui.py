@@ -12,7 +12,7 @@ from ui import (
 )
 
 # ---- Heartbeat (opcional: se arranca si está disponible) ----
-STRUCTURE_PATH = Path("agent_pi/data/structure.json")
+STRUCTURE_PATH = Path(__file__).resolve().parent / "agent_pi" / "data" / "structure.json"
 APP_VERSION = "0.0.1"
 
 hb_running = False

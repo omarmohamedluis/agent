@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 import psutil
 import netifaces
 
-STRUCTURE_PATH = Path("agent_pi/data/structure.json")
+STRUCTURE_PATH = Path(__file__).resolve().parent / "agent_pi" / "data" / "structure.json"
 
 # ---------------- Vars de estado expuestas ----------------
 CpuUsage: Optional[float] = None  # %

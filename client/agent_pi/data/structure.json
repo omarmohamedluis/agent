@@ -25,19 +25,15 @@
       "enabled": true
     },
     {
-      "name": "MIDI",
-      "enabled": false
-    },
-    {
-      "name": "satellite",
-      "enabled": false
-    },
-    {
       "name": "companion",
       "enabled": false
     },
     {
-      "name": "OSCkey",
+      "name": "OSC",
+      "enabled": false
+    },
+    {
+      "name": "satellite",
       "enabled": false
     },
     {
