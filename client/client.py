@@ -56,6 +56,7 @@ SERVICE_STATUS: Dict[str, Any] = {
     "running": False,
     "pid": None,
     "last_error": None,
+    "returncode": None,
     "timestamp": 0.0,
     "error": None,
 }
@@ -86,6 +87,7 @@ def _update_service_status(*, expected: Optional[str] = None, runtime: Optional[
         "running": bool(runtime.get("running")),
         "pid": runtime.get("pid"),
         "last_error": runtime.get("last_error"),
+        "returncode": runtime.get("returncode"),
         "timestamp": time.time(),
         "error": SERVICE_ERROR,
     }
@@ -214,11 +216,12 @@ def _service_monitor_loop() -> None:
             _update_service_status(expected=expected, runtime=runtime)
 
             if expected != STANDBY_SERVICE and not runtime.get("running"):
-                message = f"Servicio '{expected}' detenido"
+                rc = runtime.get("returncode")
+                message = f"Servicio '{expected}' detenido (rc={rc})" if rc is not None else f"Servicio '{expected}' detenido"
                 _set_service_error(message)
                 try:
                     _apply_active_service(expected)
-                    logger.info("Servicio '%s' relanzado después de una caída", expected)
+                    logger.info("Servicio '%s' relanzado después de una caída (rc=%s)", expected, rc)
                 except Exception as exc:
                     logger.error("No se pudo relanzar '%s': %s", expected, exc)
                     try:

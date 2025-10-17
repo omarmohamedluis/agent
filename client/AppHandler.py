@@ -30,6 +30,7 @@ _last_error: Optional[str] = None
 _last_command: list[str] | None = None
 _last_env: Dict[str, str] | None = None
 _last_cwd: Optional[Path] = None
+_last_returncode: Optional[int] = None
 
 _logger = get_agent_logger()
 
@@ -39,7 +40,17 @@ def _service_path(name: str) -> Path:
 
 
 def _is_running() -> bool:
-    return _proc is not None and _proc.poll() is None
+    global _last_returncode, _last_error
+    if _proc is None:
+        return False
+    rc = _proc.poll()
+    if rc is None:
+        _last_returncode = None
+        return True
+    _last_returncode = rc
+    if _last_error is None:
+        _last_error = f"return code {rc}"
+    return False
 
 
 def list_available_services(include_logical: bool = False) -> list[str]:
@@ -118,7 +129,7 @@ def _close_streams() -> None:
 
 
 def start_service(name: str) -> bool:
-    global _proc, _name, _logical, _stdout_handle, _stderr_handle, _last_error, _last_command, _last_env, _last_cwd
+    global _proc, _name, _logical, _stdout_handle, _stderr_handle, _last_error, _last_command, _last_env, _last_cwd, _last_returncode
 
     if name == STANDBY_SERVICE:
         if _is_running():
@@ -128,6 +139,7 @@ def start_service(name: str) -> bool:
         _last_command = None
         _last_env = None
         _last_cwd = None
+        _last_returncode = None
         return True
 
     definition = _resolve_definition(name)
@@ -147,6 +159,7 @@ def start_service(name: str) -> bool:
     try:
         env_map = os.environ.copy()
         env_map.update(env)
+        env_map.setdefault("PYTHONUNBUFFERED", "1")
         stdout_handle = log_paths["stdout"].open("a", encoding="utf-8", buffering=1)
         stderr_handle = log_paths["stderr"].open("a", encoding="utf-8", buffering=1)
         _close_streams()
@@ -167,6 +180,7 @@ def start_service(name: str) -> bool:
         _last_command = command
         _last_env = env_map
         _last_cwd = cwd_path
+        _last_returncode = None
         _logger.info("Servicio '%s' iniciado (pid=%s)", name, _proc.pid)
         return True
     except Exception as e:
@@ -174,18 +188,20 @@ def start_service(name: str) -> bool:
         _name = None
         _logical = STANDBY_SERVICE
         _last_error = str(e)
+        _last_returncode = None
         _logger.error("Error iniciando '%s': %s", name, e)
         _close_streams()
         return False
 
 
 def stop_service(timeout: float = 5.0) -> bool:
-    global _proc, _name, _logical, _stdout_handle, _stderr_handle, _last_error
+    global _proc, _name, _logical, _stdout_handle, _stderr_handle, _last_error, _last_returncode
     if not _is_running():
         _proc = None
         _name = None
         _logical = STANDBY_SERVICE
         _last_error = None
+        _last_returncode = None
         _close_streams()
         _logger.info("No hay servicio en ejecución.")
         return True
@@ -205,6 +221,7 @@ def stop_service(timeout: float = 5.0) -> bool:
         _name = None
         _logical = STANDBY_SERVICE
         _last_error = None
+        _last_returncode = rc
         _close_streams()
         return True
     except Exception as e:
@@ -213,6 +230,7 @@ def stop_service(timeout: float = 5.0) -> bool:
         _name = None
         _logical = STANDBY_SERVICE
         _last_error = str(e)
+        _last_returncode = None
         _close_streams()
         return False
 
@@ -222,12 +240,15 @@ def current_logical_service() -> Optional[str]:
 
 
 def get_status() -> Dict[str, Any]:
+    running = _is_running()
+    pid = int(_proc.pid) if running and _proc else None
     return {
         "name": _name,
         "logical": _logical,
-        "running": _is_running(),
-        "pid": int(_proc.pid) if _is_running() else None,
+        "running": running,
+        "pid": pid,
         "last_error": _last_error,
+        "returncode": _last_returncode,
         "command": list(_last_command) if _last_command else None,
         "cwd": str(_last_cwd) if _last_cwd else None,
     }

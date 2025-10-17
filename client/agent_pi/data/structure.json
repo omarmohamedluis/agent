@@ -22,11 +22,11 @@
   "services": [
     {
       "name": "standby",
-      "enabled": true
+      "enabled": false
     },
     {
       "name": "MIDI",
-      "enabled": false
+      "enabled": true
     },
     {
       "name": "satellite",

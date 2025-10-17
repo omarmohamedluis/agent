@@ -5,6 +5,8 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -243,23 +245,24 @@ class BroadcastManager:
 
 registry = DeviceRegistry()
 manager = BroadcastManager(registry)
-app = FastAPI(title="OMI Control Server", version="0.1")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    manager.start()
+    logger.info("Gestor de broadcast iniciado")
+    try:
+        yield
+    finally:
+        manager.stop()
+        logger.info("Gestor de broadcast detenido")
+
+
+app = FastAPI(title="OMI Control Server", version="0.1", lifespan=lifespan)
 
 
 class ServiceRequest(BaseModel):
     service: str
-
-
-@app.on_event("startup")
-async def on_startup() -> None:
-    manager.start()
-    logger.info("Gestor de broadcast iniciado")
-
-
-@app.on_event("shutdown")
-async def on_shutdown() -> None:
-    manager.stop()
-    logger.info("Gestor de broadcast detenido")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -366,6 +369,7 @@ function renderDevice(dev){
   const serviceRunning = serviceState.running ? 'En ejecución' : 'Detenido';
   const servicePid = serviceState.pid != null ? serviceState.pid : '-';
   const serviceError = serviceState.error || serviceState.last_error || '';
+  const serviceReturn = serviceState.returncode != null ? serviceState.returncode : '—';
   const options = available.map(name => `<option value="${name}" ${name===active?'selected':''}>${name}</option>`).join('');
   return `
   <div class="card">
@@ -376,6 +380,7 @@ function renderDevice(dev){
       <tr><th>Estado</th><td class="${online ? 'status-ok':'status-bad'}">${online ? 'Online' : 'Offline'}</td></tr>
       <tr><th>Servicio activo</th><td>${active}</td></tr>
       <tr><th>Estado servicio</th><td>${serviceRunning}${servicePid !== '-' ? ' (pid ' + servicePid + ')' : ''}</td></tr>
+      <tr><th>Return code</th><td>${serviceReturn}</td></tr>
       <tr><th>CPU</th><td>${cpu}</td></tr>
       <tr><th>Temperatura</th><td>${temp}</td></tr>
       <tr><th>Error servicio</th><td>${serviceError || '—'}</td></tr>

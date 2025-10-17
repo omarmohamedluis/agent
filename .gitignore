@@ -9,6 +9,8 @@ __pycache__/
 # Logs y temporales
 *.log
 *.tmp
+client/logs/
+server/logs/
 
 # Archivos del sistema
 .DS_Store
