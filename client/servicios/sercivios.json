@@ -1,57 +1,85 @@
 {
-  "satellite":{
-  "display_name": "Companion Satellite",
-  "exec_path": "ruta/random",
-  "entry": ["python3", "service.py"],
-  "args": [],
-  "cwd": ".",
-  "env": {},
-  "stop": { "method": "signal", "signal": "TERM" },
-  "healthcheck": { "type": "process" },
-  "config_paths": ["~/.config/companion-satellite"]
-  },
-  "OmiMIDI":{
-    "display_name": "MIDI",
-    "exec_path": "servicios/MIDI/omimidi_core.py",
-    "entry": ["python3", "omimidi_core.py"],
-    "args": [],
-    "cwd": ".",
-    "env": {"path": "${workspaceFolder}/.venv/bin/python"},
-    "stop": { "method": "signal", "signal": "TERM" },
-    "healthcheck": { "type": "process" },
-    "config_paths": ["setvicios/MIDI/conifgMIDI.json"]
+  "services": [
+    {
+      "id": "standby",
+      "display_name": "Standby",
+      "type": "logical",
+      "description": "Sin proceso activo; el agente permanece en reposo."
     },
-    "OmiOSC":{
-      "display_name": "OSC",
-      "exec_path": "servicios/OSC/OmiOSC.py",
-      "entry": ["python3", "OmiOSC.py"],
-      "args": [],
-      "cwd": ".",
-      "env": {},
-      "stop": { "method": "signal", "signal": "TERM" },
-      "healthcheck": { "type": "process" },
-      "config_paths": ["setvicios/OSC/conifgOSC.json"]
+    {
+      "id": "MIDI",
+      "display_name": "OMI MIDI",
+      "type": "process",
+      "cwd": "servicios/MIDI",
+      "entry": [
+        "${PYTHON}",
+        "service.py"
+      ],
+      "logs": {
+        "stdout": "logs/services/midilog.out",
+        "stderr": "logs/services/midilog.err"
       },
-    "OmiScaut":{
-      "display_name": "SCAUTING",
-      "exec_path": "servicios/scauting/OmiScaut.py",
-      "entry": ["python3", "OmiScaut.py"],
-      "args": [],
-      "cwd": ".",
-      "env": {},
-      "stop": { "method": "signal", "signal": "TERM" },
-      "healthcheck": { "type": "process" },
-      "config_paths": ["setvicios/scauting/conifgScauting.json"]
+      "description": "Traduce eventos MIDI a OSC y gestiona la Web UI."
+    },
+    {
+      "id": "satellite",
+      "display_name": "Companion Satellite",
+      "type": "process",
+      "cwd": "servicios/satellite",
+      "entry": [
+        "${PYTHON}",
+        "service.py"
+      ],
+      "logs": {
+        "stdout": "logs/services/satellitelog.out",
+        "stderr": "logs/services/satellitelog.err"
       },
-      "companion":{
-        "display_name": "companion",
-        "exec_path": "servicios/companion/OmiScaut.py",
-        "entry": ["python3", "companion.py"],
-        "args": [],
-        "cwd": ".",
-        "env": {},
-        "stop": { "method": "signal", "signal": "TERM" },
-        "healthcheck": { "type": "process" },
-        "config_paths": ["."]
-        }
+      "description": "Servicio de integración Companion Satellite."
+    },
+    {
+      "id": "companion",
+      "display_name": "Companion",
+      "type": "process",
+      "cwd": "servicios/companion",
+      "entry": [
+        "${PYTHON}",
+        "service.py"
+      ],
+      "logs": {
+        "stdout": "logs/services/companionlog.out",
+        "stderr": "logs/services/companionlog.err"
+      },
+      "description": "Cliente Companion local."
+    },
+    {
+      "id": "OSC",
+      "display_name": "OSC Key",
+      "type": "process",
+      "cwd": "servicios/OSC",
+      "entry": [
+        "${PYTHON}",
+        "service.py"
+      ],
+      "logs": {
+        "stdout": "logs/services/osclog.out",
+        "stderr": "logs/services/osclog.err"
+      },
+      "description": "Gateway OSC."
+    },
+    {
+      "id": "scauting",
+      "display_name": "Scauting",
+      "type": "process",
+      "cwd": "servicios/scauting",
+      "entry": [
+        "${PYTHON}",
+        "service.py"
+      ],
+      "logs": {
+        "stdout": "logs/services/scautinglog.out",
+        "stderr": "logs/services/scautinglog.err"
+      },
+      "description": "Servicio de scauting y estadísticas."
+    }
+  ]
 }

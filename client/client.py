@@ -1,13 +1,19 @@
 # agent_listener.py
+from __future__ import annotations
+
 import copy
 import json
 import socket
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from AppHandler import current_logical_service, start_service
+from AppHandler import (
+    current_logical_service,
+    get_status as get_service_runtime_status,
+    start_service,
+)
 from heartbeat import UPDATEHB
 from jsonconfig import (
     STANDBY_SERVICE,
@@ -17,22 +23,98 @@ from jsonconfig import (
     read_config,
     set_active_service,
 )
-from ui import EstandardUse, LoadingUI, UIOFF
+from logger import get_agent_logger
+from ui import EstandardUse, LoadingUI, ErrorUI, UIOFF
 
 SOFVERSION = "0.0.1"
 BCAST_PORT = 37020
 SERVER_REPLY_PORT = 37021
 STRUCTURE_PATH = Path(__file__).resolve().parent / "agent_pi" / "data" / "structure.json"
+SERVER_TIMEOUT_S = 5.0
+SERVICE_MONITOR_INTERVAL_S = 2.0
+
+logger = get_agent_logger()
 
 SNAPSHOT_LOCK = threading.Lock()
 CONFIG_LOCK = threading.Lock()
+SERVICE_LOCK = threading.RLock()
+
 CURRENT_SNAPSHOT: Dict[str, Any] | None = None
 CFG: Dict[str, Any] = {}
 SERVER_ONLINE = False
 LAST_SERVER_CONTACT = 0.0
-SERVER_TIMEOUT_S = 5.0
+
 STOP_REFRESH = threading.Event()
-REFRESH_THREAD: threading.Thread | None = None
+REFRESH_THREAD: Optional[threading.Thread] = None
+SERVICE_MONITOR_STOP = threading.Event()
+SERVICE_MONITOR_THREAD: Optional[threading.Thread] = None
+
+SERVICE_STATUS: Dict[str, Any] = {
+    "expected": STANDBY_SERVICE,
+    "actual": None,
+    "logical": STANDBY_SERVICE,
+    "running": False,
+    "pid": None,
+    "last_error": None,
+    "timestamp": 0.0,
+    "error": None,
+}
+SERVICE_ERROR: Optional[str] = None
+
+
+def _set_config(data: Dict[str, Any]) -> None:
+    global CFG
+    with CONFIG_LOCK:
+        CFG = data
+
+
+def _current_config() -> Dict[str, Any]:
+    with CONFIG_LOCK:
+        return copy.deepcopy(CFG)
+
+
+def _update_service_status(*, expected: Optional[str] = None, runtime: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    global SERVICE_STATUS
+    if runtime is None:
+        runtime = get_service_runtime_status()
+    if expected is None:
+        expected = get_enabled_service(_current_config()) or STANDBY_SERVICE
+    state = {
+        "expected": expected,
+        "actual": runtime.get("name"),
+        "logical": runtime.get("logical"),
+        "running": bool(runtime.get("running")),
+        "pid": runtime.get("pid"),
+        "last_error": runtime.get("last_error"),
+        "timestamp": time.time(),
+        "error": SERVICE_ERROR,
+    }
+    with SERVICE_LOCK:
+        SERVICE_STATUS.update(state)
+        return copy.deepcopy(SERVICE_STATUS)
+
+
+def _get_service_state() -> Dict[str, Any]:
+    with SERVICE_LOCK:
+        return copy.deepcopy(SERVICE_STATUS)
+
+
+def _set_service_error(message: str) -> None:
+    global SERVICE_ERROR
+    SERVICE_ERROR = message
+    logger.warning(message)
+    try:
+        ErrorUI(message[:14])
+    except Exception:
+        pass
+    _update_service_status()
+
+
+def _clear_service_error() -> None:
+    global SERVICE_ERROR
+    if SERVICE_ERROR:
+        SERVICE_ERROR = None
+        _update_service_status()
 
 
 def _reset_server_status() -> None:
@@ -85,7 +167,7 @@ def _refresh_loop() -> None:
             except Exception:
                 pass
         except Exception as exc:
-            print(f"[agent] error actualizando snapshot: {exc}")
+            logger.exception("Error actualizando snapshot: %s", exc)
         STOP_REFRESH.wait(1.0)
 
 
@@ -106,42 +188,93 @@ def _stop_refresh_thread() -> None:
     REFRESH_THREAD = None
 
 
-def _current_config() -> Dict[str, Any]:
-    with CONFIG_LOCK:
-        return copy.deepcopy(CFG)
+def _start_service_monitor() -> None:
+    global SERVICE_MONITOR_THREAD
+    if SERVICE_MONITOR_THREAD and SERVICE_MONITOR_THREAD.is_alive():
+        return
+    SERVICE_MONITOR_STOP.clear()
+    SERVICE_MONITOR_THREAD = threading.Thread(target=_service_monitor_loop, name="omi-service-monitor", daemon=True)
+    SERVICE_MONITOR_THREAD.start()
+
+
+def _stop_service_monitor() -> None:
+    global SERVICE_MONITOR_THREAD
+    SERVICE_MONITOR_STOP.set()
+    if SERVICE_MONITOR_THREAD and SERVICE_MONITOR_THREAD.is_alive():
+        SERVICE_MONITOR_THREAD.join(timeout=1.5)
+    SERVICE_MONITOR_THREAD = None
+
+
+def _service_monitor_loop() -> None:
+    while not SERVICE_MONITOR_STOP.is_set():
+        try:
+            cfg = _current_config()
+            expected = get_enabled_service(cfg) or STANDBY_SERVICE
+            runtime = get_service_runtime_status()
+            _update_service_status(expected=expected, runtime=runtime)
+
+            if expected != STANDBY_SERVICE and not runtime.get("running"):
+                message = f"Servicio '{expected}' detenido"
+                _set_service_error(message)
+                try:
+                    _apply_active_service(expected)
+                    logger.info("Servicio '%s' relanzado después de una caída", expected)
+                except Exception as exc:
+                    logger.error("No se pudo relanzar '%s': %s", expected, exc)
+                    try:
+                        _apply_active_service(STANDBY_SERVICE)
+                    except Exception as inner:
+                        logger.error("No se pudo forzar standby tras fallo: %s", inner)
+            elif runtime.get("running") and SERVICE_ERROR:
+                _clear_service_error()
+        except Exception as exc:
+            logger.exception("Error en monitor de servicios: %s", exc)
+        finally:
+            SERVICE_MONITOR_STOP.wait(SERVICE_MONITOR_INTERVAL_S)
 
 
 def _apply_active_service(service: str) -> Dict[str, Any]:
     service = (service or "").strip()
     if not service:
-        raise ValueError("empty service name")
+        raise ValueError("nombre de servicio vacío")
 
     available = discover_services()
     if service not in available:
-        raise ValueError(f"unknown service: {service}")
+        raise ValueError(f"servicio desconocido: {service}")
 
-    before = _current_config() or read_config(STRUCTURE_PATH)
-    previous = get_enabled_service(before) or STANDBY_SERVICE
+    with SERVICE_LOCK:
+        snapshot = _current_config() or read_config(STRUCTURE_PATH)
+        previous = get_enabled_service(snapshot) or STANDBY_SERVICE
+        runtime = get_service_runtime_status()
+        running_same = runtime.get("running") and runtime.get("name") == service
 
-    if service == previous:
-        cfg = set_active_service(STRUCTURE_PATH, service)
-        with CONFIG_LOCK:
-            CFG = cfg
+        if service == previous and running_same:
+            cfg = set_active_service(STRUCTURE_PATH, service)
+            _set_config(cfg)
+            _update_service_status(expected=service, runtime=runtime)
+            return cfg
+
+        if service == STANDBY_SERVICE:
+            start_service(STANDBY_SERVICE)
+            cfg = set_active_service(STRUCTURE_PATH, service)
+            _set_config(cfg)
+            _update_service_status(expected=service)
+            _clear_service_error()
+            return cfg
+
+        if not start_service(service):
+            raise RuntimeError(f"no se pudo iniciar el servicio '{service}'")
+
+        try:
+            cfg = set_active_service(STRUCTURE_PATH, service)
+        except Exception as exc:
+            start_service(previous)
+            raise exc
+
+        _set_config(cfg)
+        _update_service_status(expected=service)
+        _clear_service_error()
         return cfg
-
-    if not start_service(service):
-        raise RuntimeError(f"no se pudo iniciar el servicio '{service}'")
-
-    try:
-        cfg = set_active_service(STRUCTURE_PATH, service)
-    except Exception as exc:
-        # revertir estado lógico al anterior
-        start_service(previous)
-        raise exc
-
-    with CONFIG_LOCK:
-        CFG = cfg
-    return cfg
 
 
 def _handle_service_command(payload: Dict[str, Any], s_reply: socket.socket, addr) -> None:
@@ -158,30 +291,33 @@ def _handle_service_command(payload: Dict[str, Any], s_reply: socket.socket, add
         "ok": False,
         "error": None,
         "services": None,
+        "service_state": None,
     }
 
-    services_state = None
     try:
         cfg = _apply_active_service(service)
         response["ok"] = True
-        services_state = cfg.get("services")
-        print(f"[agent] servicio activo cambiado a {service}")
+        response["services"] = cfg.get("services")
+        response["service_state"] = _get_service_state()
+        logger.info("Servicio activo cambiado a '%s' por petición de %s", service, addr[0])
     except Exception as exc:
-        response["error"] = str(exc)
-        services_state = _current_config().get("services")
-        print(f"[agent] error cambiando servicio a {service}: {exc}")
-
-    response["services"] = services_state
+        message = str(exc)
+        _set_service_error(message)
+        response["error"] = message
+        response["services"] = _current_config().get("services")
+        response["service_state"] = _get_service_state()
+        logger.error("Error cambiando servicio a '%s': %s", service, exc)
 
     try:
         s_reply.sendto(json.dumps(response).encode("utf-8"), (addr[0], reply_port))
     except Exception as exc:
-        print(f"[agent] error enviando ACK: {exc}")
+        logger.error("Error enviando ACK al servidor: %s", exc)
 
 
 def _build_status_payload(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     cfg = _current_config()
     identity = cfg.get("identity", {})
+    state = _update_service_status()
     return {
         "type": "AGENT_STATUS",
         "serial": identity.get("serial") or "pi-unknown",
@@ -191,6 +327,7 @@ def _build_status_payload(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         "version": cfg.get("version", {}).get("version", SOFVERSION),
         "services": cfg.get("services", []),
         "available_services": discover_services(),
+        "service_state": state,
         "heartbeat": {
             "cpu": snapshot.get("cpu"),
             "temp": snapshot.get("temp"),
@@ -206,9 +343,19 @@ time.sleep(1)
 
 LoadingUI(30, "LEYENDO")
 
+logger.info("Inicializando agente OMI")
 _reset_server_status()
 
-CFG = ensure_config(STRUCTURE_PATH, version=SOFVERSION)
+cfg_boot = ensure_config(STRUCTURE_PATH, version=SOFVERSION)
+_set_config(cfg_boot)
+_update_service_status()
+
+initial_service = get_enabled_service(cfg_boot) or STANDBY_SERVICE
+try:
+    _apply_active_service(initial_service)
+except Exception as exc:
+    _set_service_error(f"Inicio fallido: {exc}")
+
 _initial_snap = UPDATEHB(STRUCTURE_PATH)
 _set_snapshot(_initial_snap)
 
@@ -224,12 +371,13 @@ def listen_and_reply():
         pass
 
     _start_refresh_thread()
+    _start_service_monitor()
 
     s_listen = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s_listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s_listen.bind(("", BCAST_PORT))
     s_listen.settimeout(0.5)
-    print(f"[agent] escuchando broadcast en :{BCAST_PORT}")
+    logger.info("Escuchando broadcast en :%s", BCAST_PORT)
 
     s_reply = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -240,13 +388,10 @@ def listen_and_reply():
             except socket.timeout:
                 continue
 
-            msg = data.decode("utf-8", "ignore")
-            print(f"✓ mensaje recibido de {addr[0]}:{addr[1]} → {msg}")
-
             try:
-                payload = json.loads(msg)
+                payload = json.loads(data.decode("utf-8", "ignore"))
             except Exception as exc:
-                print(f"[agent] JSON inválido: {exc}")
+                logger.warning("Mensaje inválido desde %s: %s", addr[0], exc)
                 continue
 
             msg_type = payload.get("type")
@@ -258,21 +403,23 @@ def listen_and_reply():
                 reply = _build_status_payload(snap)
                 try:
                     s_reply.sendto(json.dumps(reply).encode("utf-8"), (server_ip, reply_port))
-                    print(f"→ estado enviado a {server_ip}:{reply_port}")
+                    logger.info("Estado enviado a %s:%s", server_ip, reply_port)
                     _mark_server_seen()
                 except Exception as exc:
-                    print(f"[agent] error enviando estado: {exc}")
+                    logger.error("Error enviando estado al servidor: %s", exc)
 
             elif msg_type == "SET_SERVICE":
+                logger.info("Solicitud de cambio de servicio desde %s → %s", addr[0], payload.get("service"))
                 _handle_service_command(payload, s_reply, addr)
                 _mark_server_seen()
 
             else:
-                print(f"[agent] tipo de mensaje desconocido: {msg_type}")
+                logger.debug("Mensaje no reconocido de %s: %s", addr[0], msg_type)
 
     except KeyboardInterrupt:
-        print("\n[agent] detenido por usuario.")
+        logger.info("Agente detenido por usuario")
     finally:
+        _stop_service_monitor()
         _stop_refresh_thread()
         try:
             s_listen.close()

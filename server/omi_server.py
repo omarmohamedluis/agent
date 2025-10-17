@@ -9,11 +9,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from logger import get_server_logger
+
 BCAST_IP = "255.255.255.255"
 BCAST_PORT = 37020
 REPLY_PORT = 37021
 DISCOVER_INTERVAL_S = 3.0
 STATUS_TTL_S = 6.0
+
+logger = get_server_logger()
 
 
 class PendingRequest:
@@ -49,6 +53,7 @@ class DeviceRegistry:
             "services": payload.get("services", []),
             "available_services": payload.get("available_services", []),
             "heartbeat": payload.get("heartbeat", {}),
+            "service_state": payload.get("service_state"),
             "logical_service": payload.get("logical_service"),
             "last_seen": time.time(),
             "ip": addr[0],
@@ -56,12 +61,15 @@ class DeviceRegistry:
         with self._lock:
             self._devices[serial] = info
 
-    def update_services(self, serial: str, services: Optional[List[Dict[str, Any]]]) -> None:
-        if services is None:
+    def update_services(self, serial: str, services: Optional[List[Dict[str, Any]]], service_state: Optional[Dict[str, Any]] = None) -> None:
+        if services is None and service_state is None:
             return
         with self._lock:
             if serial in self._devices:
-                self._devices[serial]["services"] = services
+                if services is not None:
+                    self._devices[serial]["services"] = services
+                if service_state is not None:
+                    self._devices[serial]["service_state"] = service_state
                 self._devices[serial]["last_seen"] = time.time()
 
     def list_devices(self) -> List[Dict[str, Any]]:
@@ -132,9 +140,9 @@ class BroadcastManager:
                 }
                 try:
                     s.sendto(json.dumps(payload).encode("utf-8"), (BCAST_IP, BCAST_PORT))
-                    # print("→ broadcast DISCOVER")
+                    logger.debug("Broadcast DISCOVER → %s:%s", BCAST_IP, BCAST_PORT)
                 except Exception as exc:
-                    print(f"[server] error enviando broadcast: {exc}")
+                    logger.error("Error enviando broadcast: %s", exc)
                 for _ in range(int(DISCOVER_INTERVAL_S * 10)):
                     if self.stop_evt.is_set():
                         break
@@ -154,19 +162,20 @@ class BroadcastManager:
                 except socket.timeout:
                     continue
                 except Exception as exc:
-                    print(f"[server] socket error: {exc}")
+                    logger.error("Error de socket en listener: %s", exc)
                     continue
 
                 try:
                     payload = json.loads(data.decode("utf-8", "ignore"))
                 except Exception:
-                    print(f"[server] JSON inválido: {data!r}")
+                    logger.warning("JSON inválido recibido: %r", data)
                     continue
 
                 msg_type = payload.get("type")
 
                 if msg_type == "AGENT_STATUS":
                     self.registry.update_from_status(payload, addr)
+                    logger.info("Estado recibido de %s", payload.get("serial") or addr[0])
                 elif msg_type == "SERVICE_ACK":
                     request_id = payload.get("request_id")
                     if request_id:
@@ -176,9 +185,10 @@ class BroadcastManager:
                             pending.set(payload)
                     serial = payload.get("serial")
                     if serial:
-                        self.registry.update_services(serial, payload.get("services"))
+                        self.registry.update_services(serial, payload.get("services"), payload.get("service_state"))
+                        logger.info("ACK de servicio recibido de %s (ok=%s)", serial, payload.get("ok"))
                 else:
-                    print(f"[server] mensaje desconocido: {payload}")
+                    logger.debug("Mensaje desconocido de %s: %s", addr[0], payload)
         finally:
             s.close()
 
@@ -215,6 +225,7 @@ class BroadcastManager:
             if not self.command_socket:
                 raise RuntimeError("Socket de comando no disponible")
             self.command_socket.sendto(json.dumps(message).encode("utf-8"), (device["ip"], BCAST_PORT))
+            logger.info("Comando SET_SERVICE → %s (%s)", serial, service)
         except Exception as exc:
             with self.pending_lock:
                 self.pending.pop(request_id, None)
@@ -242,13 +253,13 @@ class ServiceRequest(BaseModel):
 @app.on_event("startup")
 async def on_startup() -> None:
     manager.start()
-    print("[server] manager iniciado")
+    logger.info("Gestor de broadcast iniciado")
 
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
     manager.stop()
-    print("[server] manager detenido")
+    logger.info("Gestor de broadcast detenido")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -271,8 +282,10 @@ async def api_set_service(serial: str, payload: ServiceRequest) -> Dict[str, Any
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not reply.get("ok"):
+        logger.warning("Cambio de servicio en %s falló: %s", serial, reply.get("error"))
         raise HTTPException(status_code=400, detail=reply.get("error") or "error desconocido")
 
+    logger.info("Servicio en %s confirmado como '%s'", serial, reply.get("service"))
     return reply
 
 
@@ -349,6 +362,10 @@ function renderDevice(dev){
   const active = (services.find(s => s.enabled) || {}).name || 'desconocido';
   const cpu = heartbeat.cpu != null ? heartbeat.cpu.toFixed(0) + '%' : '--';
   const temp = heartbeat.temp != null ? heartbeat.temp.toFixed(0) + '°C' : '--';
+  const serviceState = dev.service_state || {};
+  const serviceRunning = serviceState.running ? 'En ejecución' : 'Detenido';
+  const servicePid = serviceState.pid != null ? serviceState.pid : '-';
+  const serviceError = serviceState.error || serviceState.last_error || '';
   const options = available.map(name => `<option value="${name}" ${name===active?'selected':''}>${name}</option>`).join('');
   return `
   <div class="card">
@@ -358,8 +375,10 @@ function renderDevice(dev){
     <table class="table">
       <tr><th>Estado</th><td class="${online ? 'status-ok':'status-bad'}">${online ? 'Online' : 'Offline'}</td></tr>
       <tr><th>Servicio activo</th><td>${active}</td></tr>
+      <tr><th>Estado servicio</th><td>${serviceRunning}${servicePid !== '-' ? ' (pid ' + servicePid + ')' : ''}</td></tr>
       <tr><th>CPU</th><td>${cpu}</td></tr>
       <tr><th>Temperatura</th><td>${temp}</td></tr>
+      <tr><th>Error servicio</th><td>${serviceError || '—'}</td></tr>
       <tr><th>Cambiar servicio</th><td>
         <select data-serial="${dev.serial}" ${!online ? 'disabled' : ''}>
           ${options}

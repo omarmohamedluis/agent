@@ -6,18 +6,74 @@ from typing import Any, Dict, List
 
 STANDBY_SERVICE = "standby"
 SERVICES_DIR = Path(__file__).resolve().parent / "servicios"
+SERVICES_MANIFEST = SERVICES_DIR / "sercivios.json"
+_MANIFEST_CACHE: Dict[str, Any] | None = None
+
+
+def _load_manifest() -> Dict[str, Any]:
+    global _MANIFEST_CACHE
+    if _MANIFEST_CACHE is not None:
+        return _MANIFEST_CACHE
+    if SERVICES_MANIFEST.exists():
+        try:
+            with SERVICES_MANIFEST.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+                if isinstance(data, dict):
+                    _MANIFEST_CACHE = data
+                    return data
+        except Exception:
+            pass
+    _MANIFEST_CACHE = {"services": []}
+    return _MANIFEST_CACHE
+
+
+def get_service_definition(service_id: str) -> Dict[str, Any] | None:
+    manifest = _load_manifest()
+    for entry in manifest.get("services", []):
+        if isinstance(entry, dict) and entry.get("id") == service_id:
+            return entry
+    if service_id == STANDBY_SERVICE:
+        return {
+            "id": STANDBY_SERVICE,
+            "display_name": "Standby",
+            "type": "logical",
+            "description": "Sin proceso activo.",
+        }
+    return None
+
+
+def list_service_definitions() -> List[Dict[str, Any]]:
+    manifest = _load_manifest()
+    defs: List[Dict[str, Any]] = []
+    seen = set()
+    for entry in manifest.get("services", []):
+        if not isinstance(entry, dict):
+            continue
+        sid = entry.get("id")
+        if isinstance(sid, str) and sid not in seen:
+            defs.append(entry)
+            seen.add(sid)
+    if STANDBY_SERVICE not in seen:
+        defs.insert(0, get_service_definition(STANDBY_SERVICE) or {"id": STANDBY_SERVICE})
+    return defs
 
 
 def discover_services() -> List[str]:
-    names: List[str] = []
-    if SERVICES_DIR.exists():
-        for child in SERVICES_DIR.iterdir():
-            if child.is_dir() and (child / "service.py").exists():
-                names.append(child.name)
-    if STANDBY_SERVICE not in names:
-        names.append(STANDBY_SERVICE)
-    names.sort(key=lambda n: (0 if n == STANDBY_SERVICE else 1, n.lower()))
-    return names
+    manifest = _load_manifest()
+    services = []
+    for entry in manifest.get("services", []):
+        if not isinstance(entry, dict):
+            continue
+        sid = entry.get("id")
+        if isinstance(sid, str) and sid.strip():
+            services.append(sid.strip())
+    if STANDBY_SERVICE not in services:
+        services.append(STANDBY_SERVICE)
+    services = list(dict.fromkeys(services))  # preserve order, remove dupes
+    if STANDBY_SERVICE in services:
+        # ensure standby stays first
+        services = [STANDBY_SERVICE] + [s for s in services if s != STANDBY_SERVICE]
+    return services
 
 
 def get_serial() -> str:
@@ -76,13 +132,15 @@ def _read_json(path: Path) -> Dict[str, Any]:
 def _sync_services(data: Dict[str, Any]) -> bool:
     services = data.setdefault("services", [])
     discovered = discover_services()
-    by_name = {s.get("name"): bool(s.get("enabled")) for s in services if isinstance(s, dict) and s.get("name")}
+    by_name = {
+        s.get("name"): bool(s.get("enabled"))
+        for s in services
+        if isinstance(s, dict) and s.get("name")
+    }
     active = next((name for name, enabled in by_name.items() if enabled), None)
     if active not in discovered:
         active = STANDBY_SERVICE if STANDBY_SERVICE in discovered else None
-    updated = []
-    for name in discovered:
-        updated.append({"name": name, "enabled": name == active})
+    updated = [{"name": name, "enabled": name == active} for name in discovered]
     if not any(item["enabled"] for item in updated) and updated:
         updated[0]["enabled"] = True
     if updated != services:
