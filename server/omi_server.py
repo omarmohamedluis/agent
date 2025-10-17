@@ -488,7 +488,7 @@ select { background:#1e1e1e; color:var(--text); border:1px solid #3a3a3a; border
   var currentClients = [];
 
   function escapeHtml(str){
-    var map = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',''':'&#39;'};
+    var map = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
     var value = (str === undefined || str === null) ? '' : String(str);
     return value.replace(/[&<>"']/g, function(c){ return map[c] || c; });
   }
