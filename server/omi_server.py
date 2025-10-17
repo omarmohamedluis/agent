@@ -349,16 +349,19 @@ async def index() -> HTMLResponse:
 
 @app.get("/api/devices")
 async def api_devices() -> Dict[str, Any]:
+    logger.info("API GET /api/devices")
     return {"devices": build_devices_payload()}
 
 
 @app.get("/api/clients")
 async def api_clients() -> Dict[str, Any]:
+    logger.info("API GET /api/clients")
     return {"clients": list_devices()}
 
 
 @app.post("/api/devices/{serial}/service")
 async def api_set_service(serial: str, payload: ServiceRequest) -> Dict[str, Any]:
+    logger.info("API POST /api/devices/%s/service → service=%s config=%s", serial, payload.service, payload.config)
     try:
         reply = manager.request_service_change(serial, payload.service, config=payload.config)
     except TimeoutError as exc:
@@ -377,11 +380,13 @@ async def api_set_service(serial: str, payload: ServiceRequest) -> Dict[str, Any
 
 @app.get("/api/configs/{service_id}")
 async def api_list_service_configs(service_id: str) -> Dict[str, Any]:
+    logger.info("API GET /api/configs/%s", service_id)
     return {"configs": list_configs(service_id)}
 
 
 @app.get("/api/configs/{service_id}/{name}")
 async def api_get_service_config(service_id: str, name: str) -> Dict[str, Any]:
+    logger.info("API GET /api/configs/%s/%s", service_id, name)
     cfg = get_config(service_id, name)
     if not cfg:
         raise HTTPException(status_code=404, detail="configuración no encontrada")
@@ -390,6 +395,7 @@ async def api_get_service_config(service_id: str, name: str) -> Dict[str, Any]:
 
 @app.post("/api/configs/{service_id}")
 async def api_save_service_config(service_id: str, payload: ConfigPayload) -> Dict[str, Any]:
+    logger.info("API POST /api/configs/%s → name=%s overwrite=%s serial=%s", service_id, payload.name, payload.overwrite, payload.serial)
     existing = get_config(service_id, payload.name)
     if existing and not payload.overwrite:
         raise HTTPException(status_code=409, detail="ya existe una configuración con ese nombre")
@@ -399,18 +405,21 @@ async def api_save_service_config(service_id: str, payload: ConfigPayload) -> Di
 
 @app.delete("/api/configs/{service_id}/{name}")
 async def api_delete_service_config(service_id: str, name: str) -> Dict[str, Any]:
+    logger.info("API DELETE /api/configs/%s/%s", service_id, name)
     delete_config(service_id, name)
     return {"ok": True}
 
 
 @app.put("/api/devices/{serial}")
 async def api_update_device(serial: str, payload: DeviceDesiredPayload) -> Dict[str, Any]:
+    logger.info("API PUT /api/devices/%s → desired_service=%s desired_config=%s", serial, payload.desired_service, payload.desired_config)
     upsert_device(serial, desired_service=payload.desired_service, desired_config=payload.desired_config)
     return {"ok": True}
 
 
 @app.delete("/api/devices/{serial}")
 async def api_delete_device(serial: str) -> Dict[str, Any]:
+    logger.info("API DELETE /api/devices/%s", serial)
     delete_device(serial)
     return {"ok": True}
 
