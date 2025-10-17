@@ -6,12 +6,15 @@ import json
 import socket
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from AppHandler import (
     current_logical_service,
     get_status as get_service_runtime_status,
+    set_runtime_env,
     start_service,
 )
 from heartbeat import UPDATEHB
@@ -35,6 +38,9 @@ SERVICE_MONITOR_INTERVAL_S = 2.0
 
 logger = get_agent_logger()
 
+SERVER_HTTP_PORT_DEFAULT = 8000
+SERVER_API_BASE: Optional[str] = None
+
 SNAPSHOT_LOCK = threading.Lock()
 CONFIG_LOCK = threading.Lock()
 SERVICE_LOCK = threading.RLock()
@@ -57,6 +63,8 @@ SERVICE_STATUS: Dict[str, Any] = {
     "pid": None,
     "last_error": None,
     "returncode": None,
+    "config_name": None,
+    "web_url": None,
     "timestamp": 0.0,
     "error": None,
 }
@@ -69,9 +77,76 @@ def _set_config(data: Dict[str, Any]) -> None:
         CFG = data
 
 
+def _update_server_api(server_ip: str, http_port: Optional[int]) -> None:
+    global SERVER_API_BASE
+    port = http_port or SERVER_HTTP_PORT_DEFAULT
+    SERVER_API_BASE = f"http://{server_ip}:{port}"
+    identity = _current_config().get("identity", {}) if CFG else {}
+    set_runtime_env(
+        {
+            "OMI_SERVER_API": SERVER_API_BASE,
+            "OMI_AGENT_SERIAL": (identity or {}).get("serial", ""),
+            "OMI_AGENT_HOST": (identity or {}).get("host", ""),
+        }
+    )
+    logger.info("Servidor API detectado en %s", SERVER_API_BASE)
+
+
 def _current_config() -> Dict[str, Any]:
     with CONFIG_LOCK:
         return copy.deepcopy(CFG)
+
+
+def _primary_ip(snapshot: Dict[str, Any] | None) -> Optional[str]:
+    if not snapshot:
+        return None
+    ifaces = snapshot.get("ifaces") or []
+    wifi = [i for i in ifaces if isinstance(i.get("iface"), str) and i["iface"].lower().startswith("wl")]
+    candidates = wifi or ifaces
+    for iface in candidates:
+        ip = iface.get("ip")
+        if ip and not ip.startswith("127."):
+            return ip
+    return None
+
+
+def _midi_map_path() -> Path:
+    return Path(__file__).resolve().parent / "servicios" / "MIDI" / "OMIMIDI_map.json"
+
+
+def _read_midi_config() -> Dict[str, Any]:
+    try:
+        return json.loads(_midi_map_path().read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_midi_config(data: Dict[str, Any]) -> None:
+    _midi_map_path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _download_service_config(service: str, config_name: str) -> None:
+    if not SERVER_API_BASE:
+        raise RuntimeError("sin servidor API disponible")
+    url = f"{SERVER_API_BASE}/api/configs/{service}/{config_name}"
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            payload = json.load(resp)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"configuración '{config_name}' no disponible ({exc.code})") from exc
+    except Exception as exc:
+        raise RuntimeError(f"no se pudo descargar la configuración '{config_name}'") from exc
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if service == "MIDI":
+        if not isinstance(data, dict):
+            raise RuntimeError("datos de configuración MIDI inválidos")
+        if config_name and not data.get("config_name"):
+            data["config_name"] = config_name
+        _write_midi_config(data)
+    else:
+        raise RuntimeError(f"descarga de configuración no soportada para {service}")
 
 
 def _update_service_status(*, expected: Optional[str] = None, runtime: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -80,6 +155,19 @@ def _update_service_status(*, expected: Optional[str] = None, runtime: Optional[
         runtime = get_service_runtime_status()
     if expected is None:
         expected = get_enabled_service(_current_config()) or STANDBY_SERVICE
+
+    config_name = None
+    web_url = None
+    if expected == "MIDI":
+        midi_cfg = _read_midi_config()
+        config_name = midi_cfg.get("config_name")
+        if bool(runtime.get("running")):
+            snap = _current_snapshot()
+            primary_ip = _primary_ip(snap)
+            port = midi_cfg.get("ui_port", 9001)
+            if primary_ip:
+                web_url = f"http://{primary_ip}:{port}"
+
     state = {
         "expected": expected,
         "actual": runtime.get("name"),
@@ -88,9 +176,12 @@ def _update_service_status(*, expected: Optional[str] = None, runtime: Optional[
         "pid": runtime.get("pid"),
         "last_error": runtime.get("last_error"),
         "returncode": runtime.get("returncode"),
+        "config_name": config_name,
+        "web_url": web_url,
         "timestamp": time.time(),
         "error": SERVICE_ERROR,
     }
+
     with SERVICE_LOCK:
         SERVICE_STATUS.update(state)
         return copy.deepcopy(SERVICE_STATUS)
@@ -130,6 +221,11 @@ def _set_snapshot(data: Dict[str, Any]) -> None:
     global CURRENT_SNAPSHOT
     with SNAPSHOT_LOCK:
         CURRENT_SNAPSHOT = data
+
+
+def _current_snapshot() -> Optional[Dict[str, Any]]:
+    with SNAPSHOT_LOCK:
+        return copy.deepcopy(CURRENT_SNAPSHOT)
 
 
 def _get_snapshot(use_fallback: bool = True) -> Dict[str, Any]:
@@ -213,14 +309,15 @@ def _service_monitor_loop() -> None:
             cfg = _current_config()
             expected = get_enabled_service(cfg) or STANDBY_SERVICE
             runtime = get_service_runtime_status()
-            _update_service_status(expected=expected, runtime=runtime)
+            state = _update_service_status(expected=expected, runtime=runtime)
+            current_config_name = state.get("config_name") if isinstance(state, dict) else None
 
             if expected != STANDBY_SERVICE and not runtime.get("running"):
                 rc = runtime.get("returncode")
                 message = f"Servicio '{expected}' detenido (rc={rc})" if rc is not None else f"Servicio '{expected}' detenido"
                 _set_service_error(message)
                 try:
-                    _apply_active_service(expected)
+                    _apply_active_service(expected, config_name=current_config_name)
                     logger.info("Servicio '%s' relanzado después de una caída (rc=%s)", expected, rc)
                 except Exception as exc:
                     logger.error("No se pudo relanzar '%s': %s", expected, exc)
@@ -236,7 +333,7 @@ def _service_monitor_loop() -> None:
             SERVICE_MONITOR_STOP.wait(SERVICE_MONITOR_INTERVAL_S)
 
 
-def _apply_active_service(service: str) -> Dict[str, Any]:
+def _apply_active_service(service: str, *, config_name: Optional[str] = None) -> Dict[str, Any]:
     service = (service or "").strip()
     if not service:
         raise ValueError("nombre de servicio vacío")
@@ -252,6 +349,8 @@ def _apply_active_service(service: str) -> Dict[str, Any]:
         running_same = runtime.get("running") and runtime.get("name") == service
 
         if service == previous and running_same:
+            if config_name and service != STANDBY_SERVICE:
+                _download_service_config(service, config_name)
             cfg = set_active_service(STRUCTURE_PATH, service)
             _set_config(cfg)
             _update_service_status(expected=service, runtime=runtime)
@@ -264,6 +363,9 @@ def _apply_active_service(service: str) -> Dict[str, Any]:
             _update_service_status(expected=service)
             _clear_service_error()
             return cfg
+
+        if config_name:
+            _download_service_config(service, config_name)
 
         if not start_service(service):
             raise RuntimeError(f"no se pudo iniciar el servicio '{service}'")
@@ -283,6 +385,7 @@ def _apply_active_service(service: str) -> Dict[str, Any]:
 def _handle_service_command(payload: Dict[str, Any], s_reply: socket.socket, addr) -> None:
     request_id = payload.get("request_id")
     service = payload.get("service")
+    config_target = payload.get("config")
     reply_port = int(payload.get("reply_port", addr[1])) if payload.get("reply_port") else SERVER_REPLY_PORT
     serial = (_current_config().get("identity", {}) or {}).get("serial")
 
@@ -298,7 +401,7 @@ def _handle_service_command(payload: Dict[str, Any], s_reply: socket.socket, add
     }
 
     try:
-        cfg = _apply_active_service(service)
+        cfg = _apply_active_service(service, config_name=config_target)
         response["ok"] = True
         response["services"] = cfg.get("services")
         response["service_state"] = _get_service_state()
@@ -310,6 +413,9 @@ def _handle_service_command(payload: Dict[str, Any], s_reply: socket.socket, add
         response["services"] = _current_config().get("services")
         response["service_state"] = _get_service_state()
         logger.error("Error cambiando servicio a '%s': %s", service, exc)
+
+    if config_target:
+        response["config"] = config_target
 
     try:
         s_reply.sendto(json.dumps(response).encode("utf-8"), (addr[0], reply_port))
@@ -331,6 +437,7 @@ def _build_status_payload(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         "services": cfg.get("services", []),
         "available_services": discover_services(),
         "service_state": state,
+        "server_api": SERVER_API_BASE,
         "heartbeat": {
             "cpu": snapshot.get("cpu"),
             "temp": snapshot.get("temp"),
@@ -351,6 +458,13 @@ _reset_server_status()
 
 cfg_boot = ensure_config(STRUCTURE_PATH, version=SOFVERSION)
 _set_config(cfg_boot)
+identity_boot = cfg_boot.get("identity", {})
+set_runtime_env(
+    {
+        "OMI_AGENT_SERIAL": identity_boot.get("serial", ""),
+        "OMI_AGENT_HOST": identity_boot.get("host", ""),
+    }
+)
 _update_service_status()
 
 initial_service = get_enabled_service(cfg_boot) or STANDBY_SERVICE
@@ -402,6 +516,7 @@ def listen_and_reply():
             if msg_type == "DISCOVER":
                 server_ip = payload.get("server_ip") or addr[0]
                 reply_port = int(payload.get("reply_port", SERVER_REPLY_PORT))
+                _update_server_api(server_ip, payload.get("http_port"))
                 snap = _get_snapshot()
                 reply = _build_status_payload(snap)
                 try:

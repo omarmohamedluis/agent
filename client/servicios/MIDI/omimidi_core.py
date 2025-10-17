@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import os, json, time, threading, socket, ipaddress, sys, signal, tempfile, atexit
+import urllib.error
+import urllib.request
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 import urllib.request
@@ -78,6 +80,7 @@ class MidiMap:
         self.osc_ips: List[str] = ["127.0.0.1"]
         self.ui_port: int = 9001
         self.routes: List[Dict[str, Any]] = []
+        self.config_name: str = "default"
 
     @classmethod
     def from_file(cls, path: str) -> "MidiMap":
@@ -88,16 +91,20 @@ class MidiMap:
         mm.osc_ips = data.get("osc_ips", ["127.0.0.1"])
         mm.ui_port = int(data.get("ui_port", 9001))
         mm.routes = data.get("routes", [])
+        mm.config_name = str(data.get("config_name") or "default")
         return mm
 
     def persist(self) -> None:
-        save_json(MAP_FILE, {
+        payload = {
             "midi_input": self.midi_input_name,
             "osc_port": self.osc_port,
             "osc_ips": self.osc_ips,
             "ui_port": self.ui_port,
-            "routes": self.routes
-        })
+            "routes": self.routes,
+            "config_name": self.config_name,
+        }
+        save_json(MAP_FILE, payload)
+        push_map_to_server(payload)
 
     def match(self, msg: mido.Message) -> List[Dict[str, Any]]:
         """Devuelve lista de rutas que aplican (normalmente 0 o 1)."""
@@ -339,6 +346,14 @@ class OmiMidiCore:
             except Exception as e:
                 print(f"[WARN] Error enviando OSC a {c._address}:{c._port} → {e}")
 
+    def stop(self) -> None:
+        self._stop.set()
+        try:
+            if self.inport:
+                self.inport.close()
+        except Exception:
+            pass
+
     def run(self) -> None:
         print("🎹 OMIMIDI Core — MIDI→OSC")
         self.open_input()
@@ -356,7 +371,7 @@ class OmiMidiCore:
                     val = self.value_from_msg(msg, r)
                     self.send_osc(r["osc"], val)
         except KeyboardInterrupt:
-            pass
+            self._stop.set()
         finally:
             self._stop.set()
             if self.inport:
@@ -373,13 +388,53 @@ def start_webui(host: str = "0.0.0.0", port: int = 9001):
             f.write(str(os.getpid()))
         from midiwebui import app
         uvicorn.run(app, host=host, port=port, log_level="warning")
-    p = multiprocessing.Process(target=run_server, daemon=True)
+    p = multiprocessing.Process(target=run_server, daemon=False)
     p.start()
     print(f"[CORE] 🌐 WebUI en http://{host}:{port}")
     return p
 
-if __name__ == "__main__":
+def main() -> None:
     core = OmiMidiCore()
-    # levanta WebUI en el puerto configurado en el mapa
+
+    def handle_stop(signum, frame):
+        core.stop()
+
+    signal.signal(signal.SIGTERM, handle_stop)
+    signal.signal(signal.SIGINT, handle_stop)
+
     web_proc = start_webui(port=core.map.ui_port)
-    core.run()
+    try:
+        core.run()
+    finally:
+        if web_proc.is_alive():
+            web_proc.terminate()
+            web_proc.join(timeout=2.0)
+        cleanup_runtime_files()
+
+
+if __name__ == "__main__":
+    main()
+SERVER_API = os.environ.get("OMI_SERVER_API")
+AGENT_SERIAL = os.environ.get("OMI_AGENT_SERIAL")
+
+
+def push_map_to_server(map_data: Dict[str, Any], *, source: str = "omimidi_core") -> None:
+    if not SERVER_API or not AGENT_SERIAL:
+        return
+    config_name = str(map_data.get("config_name") or "default")
+    payload = json.dumps(
+        {
+            "name": config_name,
+            "data": map_data,
+            "serial": AGENT_SERIAL,
+            "source": source,
+            "overwrite": True,
+        }
+    ).encode("utf-8")
+    url = f"{SERVER_API}/api/configs/MIDI"
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        # Fail silently; logging happens in main process logs
+        pass

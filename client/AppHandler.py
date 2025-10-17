@@ -31,6 +31,7 @@ _last_command: list[str] | None = None
 _last_env: Dict[str, str] | None = None
 _last_cwd: Optional[Path] = None
 _last_returncode: Optional[int] = None
+_runtime_env: Dict[str, str] = {}
 
 _logger = get_agent_logger()
 
@@ -58,6 +59,11 @@ def list_available_services(include_logical: bool = False) -> list[str]:
     if include_logical:
         return services
     return [name for name in services if name != STANDBY_SERVICE]
+
+
+def set_runtime_env(extra_env: Dict[str, str]) -> None:
+    global _runtime_env
+    _runtime_env = dict(extra_env)
 
 
 def get_active_service(logical: bool = False) -> Optional[str]:
@@ -158,6 +164,7 @@ def start_service(name: str) -> bool:
 
     try:
         env_map = os.environ.copy()
+        env_map.update(_runtime_env)
         env_map.update(env)
         env_map.setdefault("PYTHONUNBUFFERED", "1")
         stdout_handle = log_paths["stdout"].open("a", encoding="utf-8", buffering=1)

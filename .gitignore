@@ -11,6 +11,7 @@ __pycache__/
 *.tmp
 client/logs/
 server/logs/
+server/omi.db
 
 # Archivos del sistema
 .DS_Store

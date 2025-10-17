@@ -10,6 +10,8 @@ from pythonosc.udp_client import SimpleUDPClient
 from datetime import datetime
 import mido
 
+from omimidi_core import push_map_to_server
+
 BASE_DIR         = os.path.dirname(os.path.abspath(__file__))
 MAP_FILE         = os.path.join(BASE_DIR, "OMIMIDI_map.json")
 LEARN_REQ_FILE   = os.path.join(BASE_DIR, "OMIMIDI_learn_request.json")
@@ -52,14 +54,18 @@ def get_map() -> Dict[str, Any]:
         "osc_port": 1024,
         "osc_ips": ["127.0.0.1"],
         "ui_port": 9001,
-        "routes": []
+        "routes": [],
+        "config_name": "default",
     })
 
 def persist_map(data: Dict[str, Any]) -> None:
+    config_name = str(data.get("config_name") or "").strip() or "default"
+    data["config_name"] = config_name
     data["osc_port"] = int(data.get("osc_port", 1024))
     data["ui_port"] = int(data.get("ui_port", 9001))
     data["osc_ips"] = list(data.get("osc_ips", ["127.0.0.1"]))
     save_json(MAP_FILE, data)
+    push_map_to_server(data, source="midiwebui")
 
 # ---------- WS manager ----------
 class WSManager:
@@ -356,6 +362,7 @@ def settings_page():
     osc_port = html.escape(str(data.get("osc_port", 1024)), quote=True)
     osc_ips = html.escape(",".join(data.get("osc_ips", ["127.0.0.1"])), quote=True)
     ui_port = html.escape(str(data.get("ui_port", 9001)), quote=True)
+    config_name = html.escape(str(data.get("config_name", "default")), quote=True)
 
     body = f"""
 <form id="settingsForm" method="post" action="/settings/save" class="stack">
@@ -365,6 +372,14 @@ def settings_page():
       <p class="muted">Selecciona la entrada MIDI disponible.</p>
     </div>
     <select name="midi_input">{''.join(options)}</select>
+  </section>
+
+  <section class="card stack">
+    <div class="section-title">
+      <h2>Preset</h2>
+      <p class="muted">Nombre identificador para guardar y compartir esta configuración.</p>
+    </div>
+    <input type="text" name="config_name" value="{config_name}" maxlength="64">
   </section>
 
   <section class="card stack">
@@ -709,7 +724,7 @@ def restart_page(message: str = "Reiniciando servicio OMIMIDI…") -> HTMLRespon
 
 @app.post("/settings/save")
 def save_settings(midi_input: str = Form(""), osc_port: str = Form(""),
-                 osc_ips: str = Form(""), ui_port: str = Form("")):
+                 osc_ips: str = Form(""), ui_port: str = Form(""), config_name: str = Form("")):
     data = get_map()
     data["midi_input"] = midi_input.strip()
 
@@ -738,6 +753,8 @@ def save_settings(midi_input: str = Form(""), osc_port: str = Form(""),
         data["ui_port"] = uport
     except ValueError:
         data["ui_port"] = 9001
+
+    data["config_name"] = config_name.strip() or data.get("config_name", "default")
 
     persist_map(data)
     request_restart_flag()
