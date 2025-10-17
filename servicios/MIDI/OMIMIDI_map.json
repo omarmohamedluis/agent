@@ -1,0 +1,49 @@
+{
+  "midi_input": "APC40 mkII:APC40 mkII MIDI 1 24:0",
+  "osc_port": 7000,
+  "osc_ips": [
+    "192.168.0.52"
+  ],
+  "ui_port": 9001,
+  "routes": [
+    {
+      "type": "cc",
+      "cc": 7,
+      "channel": 0,
+      "osc": "/composition/layers/3/video/opacity",
+      "vtype": "float"
+    },
+    {
+      "type": "cc",
+      "cc": 7,
+      "channel": 1,
+      "osc": "/composition/layers/2/video/opacity",
+      "vtype": "float"
+    },
+    {
+      "type": "cc",
+      "cc": 7,
+      "channel": 2,
+      "osc": "/composition/layers/1/video/opacity",
+      "vtype": "float"
+    },
+    {
+      "type": "note",
+      "note": 39,
+      "osc": "/D3/test",
+      "vtype": "bool"
+    },
+    {
+      "type": "note",
+      "note": 38,
+      "osc": "/D3/test1",
+      "vtype": "bool"
+    },
+    {
+      "type": "note",
+      "note": 5,
+      "osc": "/D3/learn",
+      "vtype": "float"
+    }
+  ]
+}
