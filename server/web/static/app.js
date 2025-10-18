@@ -140,9 +140,17 @@
     var availableOptions = available.map(function(name){
       return '<option value="' + escapeHtml(name) + '" ' + (name===active ? 'selected' : '') + '>' + escapeHtml(name) + '</option>';
     }).join('');
-    var configsHtml = (active !== 'standby')
-      ? '<select class="config-select" data-config-for="' + escapeHtml(dev.serial || '') + '" data-active-config="' + escapeHtml(state.config_name || '') + '" ' + (!online || transition ? 'disabled' : '') + '>' + renderConfigOptions(active, state.config_name) + '</select>'
-      : '<div class="small">Sin opciones de configuración.</div>';
+    var configsHtml;
+    if(active !== 'standby'){
+      var configOptions = '<select class="config-select" data-config-for="' + escapeHtml(dev.serial || '') + '" data-active-config="' + escapeHtml(state.config_name || '') + '" ' + (!online || transition ? 'disabled' : '') + '>' + renderConfigOptions(active, state.config_name) + '</select>';
+      configOptions += '<div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">' +
+        '<button class="btn" data-refresh-configs="' + escapeHtml(dev.serial || '') + '" data-service="' + escapeHtml(active) + '" ' + (!online || transition ? 'disabled' : '') + '>↻ Actualizar</button>' +
+        '<button class="btn" data-manage-configs="' + escapeHtml(active) + '" ' + (!online ? 'disabled' : '') + '>Gestionar configs</button>' +
+      '</div>';
+      configsHtml = configOptions;
+    } else {
+      configsHtml = '<div class="small">Sin opciones de configuración.</div>';
+    }
     var configBtn = webUrl
       ? '<button class="btn" data-config-url="' + escapeHtml(webUrl) + '" data-config-title="' + escapeHtml(dev.host || dev.serial || 'Configuración') + '" ' + (!online || transition ? 'disabled' : '') + '>Configurar</button>'
       : '<button class="btn" disabled>Configurar</button>';
@@ -199,9 +207,13 @@
       if(!serial) return;
       var serviceSel = card.querySelector('select[data-service-select]');
       var configSel = card.querySelector('select[data-config-for]');
+      var refreshBtn = card.querySelector('button[data-refresh-configs]');
+      var manageBtn = card.querySelector('button[data-manage-configs]');
       selectionSnapshot[serial] = {
         service: serviceSel ? serviceSel.value : null,
-        config: configSel ? configSel.value : null
+        config: configSel ? configSel.value : null,
+        refreshEnabled: refreshBtn ? !refreshBtn.disabled : null,
+        manageEnabled: manageBtn ? !manageBtn.disabled : null
       };
     });
     if(!devices.length){
@@ -234,9 +246,19 @@
         ensureConfigs(service).then(function(){
           var card = sel.closest('.card');
           var configSelect = card ? card.querySelector('select[data-config-for]') : null;
+          var refreshBtn = card ? card.querySelector('button[data-refresh-configs]') : null;
+          var manageBtn = card ? card.querySelector('button[data-manage-configs]') : null;
           if(configSelect){
             configSelect.innerHTML = renderConfigOptions(service, null);
             configSelect.disabled = (service === 'standby' || sel.disabled);
+          }
+          if(refreshBtn){
+            refreshBtn.dataset.service = service;
+            refreshBtn.disabled = (service === 'standby' || sel.disabled);
+          }
+          if(manageBtn){
+            manageBtn.dataset.manageConfigs = service;
+            manageBtn.disabled = !service || service === 'standby';
           }
         }).catch(console.error);
       });
@@ -942,3 +964,34 @@
   loadServiceConfigs(true);
   loadClients();
 })();
+    toArray(container.querySelectorAll('button[data-refresh-configs]')).forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var service = btn.dataset.service;
+        if(!service || service === 'standby') return;
+        btn.disabled = true;
+        ensureConfigs(service, true).then(function(){
+          renderDevices(currentDevices);
+          if(document.querySelector('[data-view-btn="services"].active')){
+            renderServicesView();
+          }
+        }).finally(function(){
+          btn.disabled = false;
+        }).catch(console.error);
+      });
+    });
+
+    toArray(container.querySelectorAll('button[data-manage-configs]')).forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var service = btn.dataset.manageConfigs;
+        if(!service) return;
+        showView('services');
+        setTimeout(function(){
+          var targetCard = document.querySelector('.service-card[data-service="' + CSS.escape(service) + '"]');
+          if(targetCard){
+            targetCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            targetCard.classList.add('flash');
+            setTimeout(function(){ targetCard.classList.remove('flash'); }, 1200);
+          }
+        }, 150);
+      });
+    });
