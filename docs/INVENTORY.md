@@ -1,4 +1,4 @@
-# Repository inventory (refactor baseline)
+# Repository inventory
 
 ## Directories
 - `client/`
@@ -18,7 +18,7 @@
   - `db.py`: SQLite persistence helpers.
   - `omi_server.py`: entry point (imports server.app.create_app).
   - `logs/`: runtime server logs.
-- `docs/`: documentation (inventory/checklists).
+- `docs/`: documentation (inventory, pruebas, scripts de apoyo).
 
 ## Entry points / scripts
 - `client/client.py` — executed on the Raspberry Pi agent.
@@ -29,7 +29,7 @@
 ## Generated data / config
 - `client/agent_pi/data/structure.json` — device identity + enabled services.
 - `client/agent_pi/data/server.json` — last known server info (API URL, serial, host).
-- `client/servicios/MIDI/OMIMIDI_*.json` — runtime state for MIDI learn/state.
+- `client/servicios/MIDI/OMIMIDI_*.json` — runtime state for MIDI learn/state (generados).
 - `client/logs/`, `server/logs/` — runtime logs (rotating).
 
 ## Logging overview
