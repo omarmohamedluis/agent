@@ -11,6 +11,8 @@ from pathlib import Path
 import mido
 from pythonosc.udp_client import SimpleUDPClient
 
+from logger import get_component_logger
+
 # ==== Archivos ====
 BASE_DIR         = os.path.dirname(os.path.abspath(__file__))
 MAP_FILE         = os.path.join(BASE_DIR, "OMIMIDI_map.json")
@@ -21,6 +23,8 @@ RESTART_REQ_FILE = os.path.join(BASE_DIR, "OMIMIDI_restart.flag")         # WebU
 WEBUI_PID_FILE   = os.path.join(BASE_DIR, "OMIMIDI_webui.pid")            # PID de la WebUI para poder matarla
 SERVER_INFO_PATH = Path(__file__).resolve().parents[3] / 'client' / 'agent_pi' / 'data' / 'server.json'
 
+
+LOGGER = get_component_logger("midi", "midi.log")
 
 
 CLEANUP_FILES = [
@@ -61,7 +65,7 @@ def push_map_to_server(map_data: Dict[str, Any], *, source: str = "omimidi_core"
     try:
         urllib.request.urlopen(req, timeout=5)
     except Exception as exc:
-        print(f"[WARN] Falló sincronización de preset '{config_name}': {exc}")
+        LOGGER.warning("Falló sincronización de preset '%s': %s", config_name, exc)
 def cleanup_runtime_files():
     for path in CLEANUP_FILES:
         try:
@@ -142,22 +146,22 @@ class MidiMap:
         save_json(MAP_FILE, payload)
         push_map_to_server(payload)
 
-    def match(self, msg: mido.Message) -> List[Dict[str, Any]]:
-        """Devuelve lista de rutas que aplican (normalmente 0 o 1)."""
-        hits: List[Dict[str, Any]] = []
+    def match(self, msg: mido.Message) -> List[tuple[int, Dict[str, Any]]]:
+        """Devuelve lista de (idx, ruta) que aplican (normalmente 0 o 1)."""
+        hits: List[tuple[int, Dict[str, Any]]] = []
         if msg.type in ("note_on", "note_off"):
             note = msg.note
-            for r in self.routes:
+            for idx, r in enumerate(self.routes):
                 if r.get("type") == "note" and int(r.get("note", -1)) == note:
-                    hits.append(r)
+                    hits.append((idx, r))
         elif msg.type == "control_change":
             cc = msg.control
             ch = msg.channel
-            for r in self.routes:
+            for idx, r in enumerate(self.routes):
                 if r.get("type") == "cc" and int(r.get("cc", -1)) == cc:
                     rc = r.get("channel", None)
                     if rc is None or int(rc) == ch:
-                        hits.append(r)
+                        hits.append((idx, r))
         return hits
 
 def build_osc_clients_from_map(map_obj: MidiMap) -> List[BroadcastUDPClient]:
@@ -167,18 +171,25 @@ def build_osc_clients_from_map(map_obj: MidiMap) -> List[BroadcastUDPClient]:
             ipaddress.ip_address(ip)
             clients.append(BroadcastUDPClient(ip, map_obj.osc_port))
         except Exception:
-            print(f"[WARN] IP inválida ignorada: {ip}")
-    print(f"[CORE] OSC → {len(clients)} targets @ port {map_obj.osc_port}")
+            LOGGER.warning("IP inválida ignorada: %s", ip)
+    LOGGER.info("OSC → %s targets @ port %s", len(clients), map_obj.osc_port)
     return clients
 
 # ---- Notificación WebUI (push de valores) ----
-def _notify_webui_async(path: str, value: Any, ui_port: int):
+def _notify_webui_async(route_idx: int, path: str, value: Any, route_meta: Dict[str, Any], ui_port: int):
     """POST no bloqueante a la WebUI para empujar estados a los clientes."""
     def _post():
         try:
             payload = json.dumps({
+                "route_idx": route_idx,
                 "path": path,
                 "value": value,
+                "route": {
+                    "type": route_meta.get("type"),
+                    "note": route_meta.get("note"),
+                    "cc": route_meta.get("cc"),
+                    "channel": route_meta.get("channel"),
+                },
                 "ts": datetime.now(timezone.utc).isoformat()
             }).encode("utf-8")
             req = urllib.request.Request(
@@ -211,7 +222,7 @@ class OmiMidiCore:
     def open_input(self) -> None:
         inputs = mido.get_input_names()
         if not inputs:
-            print("[ERROR] No hay dispositivos MIDI. Conecta uno y reinicia.")
+            LOGGER.error("No hay dispositivos MIDI. Conecta uno y reinicia.")
             sys.exit(1)
 
         name = self.map.midi_input_name if self.map.midi_input_name in inputs else inputs[0]
@@ -219,14 +230,14 @@ class OmiMidiCore:
             self.map.midi_input_name = name
             self.map.persist()
 
-        print(f"[CORE] MIDI IN ← '{name}'")
+        LOGGER.info("MIDI IN ← '%s'", name)
         self.inport = mido.open_input(name)
 
     def _rebuild_clients_if_needed(self, new_map: MidiMap):
         ports_changed = (new_map.osc_port != self.map.osc_port)
         ips_changed = (sorted(new_map.osc_ips) != sorted(self.map.osc_ips))
         if ports_changed or ips_changed:
-            print("[CORE] Cambió configuración OSC → reconstruyendo clientes...")
+            LOGGER.info("Cambió configuración OSC → reconstruyendo clientes…")
             self.clients = build_osc_clients_from_map(new_map)
 
     def _flush_state_periodically(self):
@@ -264,7 +275,7 @@ class OmiMidiCore:
                 os.remove(RESTART_REQ_FILE)
             except Exception:
                 pass
-            print("[CORE] Reiniciando proceso...")
+            LOGGER.info("Reiniciando proceso…")
 
             # Cerrar recursos antes de re-ejecutar
             try:
@@ -294,19 +305,19 @@ class OmiMidiCore:
                     new_map = MidiMap.from_file(MAP_FILE)
                     # Reabrir MIDI si cambió el dispositivo
                     if new_map.midi_input_name != self.map.midi_input_name:
-                        print(f"[CORE] Cambió dispositivo MIDI: '{self.map.midi_input_name}' → '{new_map.midi_input_name}'")
+                            LOGGER.info("Cambió dispositivo MIDI: '%s' → '%s'", self.map.midi_input_name, new_map.midi_input_name)
                         self.map = new_map
                         try:
                             if self.inport:
                                 self.inport.close()
                             self.open_input()
                         except Exception as e:
-                            print(f"[ERROR] Reabriendo MIDI input: {e}")
+                            LOGGER.error("Error reabriendo MIDI input: %s", e)
                     else:
                         self._rebuild_clients_if_needed(new_map)
                         # Si cambió el UI port, no lo aplicamos en caliente (requiere restart); se leerá tras reinicio
                         self.map = new_map
-                        print("[CORE] Mapa recargado.")
+                        LOGGER.info("Mapa recargado.")
             except FileNotFoundError:
                 pass
             time.sleep(CHECK_INTERVAL)
@@ -316,29 +327,57 @@ class OmiMidiCore:
         req = load_json(LEARN_REQ_FILE, {})
         if not req.get("armed"):
             return
-        osc = req.get("osc", "/learn")
-        vtype = req.get("vtype", "float")
-        # Construir ruta desde msg
+
+        candidate: Dict[str, Any] | None = None
         if msg.type in ("note_on", "note_off"):
-            new_route = {"type": "note", "note": int(msg.note), "osc": osc, "vtype": vtype}
+            candidate = {
+                "type": "note",
+                "note": int(msg.note),
+                "velocity": int(getattr(msg, "velocity", 0)),
+                "channel": getattr(msg, "channel", None),
+                "message_type": msg.type,
+            }
         elif msg.type == "control_change":
-            new_route = {"type": "cc", "cc": int(msg.control), "channel": int(msg.channel), "osc": osc, "vtype": vtype}
-        else:
+            candidate = {
+                "type": "cc",
+                "cc": int(msg.control),
+                "value": int(msg.value),
+                "channel": int(msg.channel),
+            }
+
+        if not candidate:
             return
-        if vtype == "const":
-            new_route["const"] = float(req.get("const", 1.0))
 
-        self.map.routes.append(new_route)
-        self.map.persist()
-        # Marcar completado
-        save_json(LEARN_REQ_FILE, {"armed": False, "result": new_route})
-        print(f"[CORE][LEARN] Añadida ruta: {new_route}")
+        # Etiqueta amigable para la WebUI
+        if candidate["type"] == "note":
+            note_val = candidate["note"]
+            candidate["label"] = f"nota {note_val}"
+        else:
+            cc_val = candidate["cc"]
+            ch = candidate.get("channel")
+            chan_part = f" canal {ch}" if ch is not None else ""
+            candidate["label"] = f"cc {cc_val}{chan_part}"
 
-    def _update_state(self, path: str, value: Any) -> None:
+        candidate["captured_at"] = datetime.now(timezone.utc).isoformat()
+
+        req["candidate"] = candidate
+        # Limpiamos último resultado para que la UI no muestre datos antiguos
+        req.pop("result", None)
+        save_json(LEARN_REQ_FILE, req)
+
+    def _update_state(self, route_idx: int, path: str, value: Any, route_meta: Dict[str, Any]) -> None:
+        key = str(route_idx)
         with self._state_lock:
-            self._state[path] = {
+            self._state[key] = {
+                "path": path,
                 "value": value,
-                "ts": datetime.now(timezone.utc).isoformat()
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "route": {
+                    "type": route_meta.get("type"),
+                    "note": route_meta.get("note"),
+                    "cc": route_meta.get("cc"),
+                    "channel": route_meta.get("channel"),
+                },
             }
             self._state_dirty = True
 
@@ -370,17 +409,18 @@ class OmiMidiCore:
             return val / 127.0
         return 0.0 if vtype != "bool" else False
 
-    def send_osc(self, path: str, value: Any) -> None:
+    def send_osc(self, route_idx: int, route: Dict[str, Any], value: Any) -> None:
+        path = str(route.get("osc", ""))
         # Actualiza estado visible por WebUI
-        self._update_state(path, value)
+        self._update_state(route_idx, path, value, route_meta=route)
         # Notifica a la WebUI (empuje para websockets) usando puerto configurado
-        _notify_webui_async(path, value, ui_port=self.map.ui_port)
+        _notify_webui_async(route_idx, path, value, route_meta=route, ui_port=self.map.ui_port)
         # Envía a todos los targets
         for c in self.clients:
             try:
                 c.send_message(path, value)
             except Exception as e:
-                print(f"[WARN] Error enviando OSC a {c._address}:{c._port} → {e}")
+                LOGGER.warning("Error enviando OSC a %s:%s → %s", c._address, c._port, e)
 
     def stop(self) -> None:
         self._stop.set()
@@ -391,7 +431,7 @@ class OmiMidiCore:
             pass
 
     def run(self) -> None:
-        print("🎹 OMIMIDI Core — MIDI→OSC")
+        LOGGER.info("🎹 OMIMIDI Core — MIDI→OSC")
         self.open_input()
         t_reload = threading.Thread(target=self.hot_reload_loop, daemon=True)
         t_reload.start()
@@ -403,9 +443,9 @@ class OmiMidiCore:
                 self.write_last_event(msg)
                 self._maybe_consume_learn(msg)
                 routes = self.map.match(msg)
-                for r in routes:
+                for idx, r in routes:
                     val = self.value_from_msg(msg, r)
-                    self.send_osc(r["osc"], val)
+                    self.send_osc(idx, r, val)
         except KeyboardInterrupt:
             self._stop.set()
         finally:
@@ -413,7 +453,7 @@ class OmiMidiCore:
             if self.inport:
                 self.inport.close()
             cleanup_runtime_files()
-            print("[CORE] Bye!")
+            LOGGER.info("Bye!")
 
 # ---- Arranque WebUI desde el core ----
 def start_webui(host: str = "0.0.0.0", port: int = 9001):
@@ -426,7 +466,7 @@ def start_webui(host: str = "0.0.0.0", port: int = 9001):
         uvicorn.run(app, host=host, port=port, log_level="warning")
     p = multiprocessing.Process(target=run_server, daemon=False)
     p.start()
-    print(f"[CORE] 🌐 WebUI en http://{host}:{port}")
+    LOGGER.info("🌐 WebUI en http://%s:%s", host, port)
     return p
 
 def main() -> None:

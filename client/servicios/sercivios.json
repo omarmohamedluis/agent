@@ -16,8 +16,8 @@
         "service.py"
       ],
       "logs": {
-        "stdout": "logs/services/midilog.out",
-        "stderr": "logs/services/midilog.err"
+        "stdout": "logs/services/midi.log",
+        "stderr": "logs/services/midi.log"
       },
       "description": "Traduce eventos MIDI a OSC y gestiona la Web UI."
     },
@@ -34,7 +34,7 @@
         "stdout": "logs/services/satellitelog.out",
         "stderr": "logs/services/satellitelog.err"
       },
-      "description": "Servicio de integración Companion Satellite."
+      "description": "Servicio de integraci\u00f3n Companion Satellite."
     },
     {
       "id": "companion",
@@ -52,10 +52,10 @@
       "description": "Cliente Companion local."
     },
     {
-      "id": "OSC",
-      "display_name": "OSC Key",
+      "id": "OSCnum",
+      "display_name": "OSCnum Key",
       "type": "process",
-      "cwd": "servicios/OSC",
+      "cwd": "servicios/OSCnum",
       "entry": [
         "${PYTHON}",
         "service.py"
@@ -79,7 +79,7 @@
         "stdout": "logs/services/scautinglog.out",
         "stderr": "logs/services/scautinglog.err"
       },
-      "description": "Servicio de scauting y estadísticas."
+      "description": "Servicio de scauting y estad\u00edsticas."
     }
   ]
 }

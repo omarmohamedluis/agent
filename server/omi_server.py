@@ -4,7 +4,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
 from contextlib import asynccontextmanager
 
@@ -22,6 +22,7 @@ from db import (
     list_devices,
     save_config,
     upsert_device,
+    ensure_device_index,
 )
 from logger import get_server_logger
 
@@ -55,6 +56,9 @@ def build_devices_payload() -> List[Dict[str, Any]]:
         if extra:
             payload["desired_service"] = extra.get("desired_service")
             payload["desired_config"] = extra.get("desired_config")
+            if extra.get("device_index") is not None:
+                payload["index"] = extra.get("device_index")
+                payload["device_index"] = extra.get("device_index")
         result.append(payload)
         if serial:
             seen.add(serial)
@@ -76,6 +80,8 @@ def build_devices_payload() -> List[Dict[str, Any]]:
                 "desired_service": extra.get("desired_service"),
                 "desired_config": extra.get("desired_config"),
                 "service_state": None,
+                "index": extra.get("device_index"),
+                "device_index": extra.get("device_index"),
             }
         )
 
@@ -86,6 +92,10 @@ class PendingRequest:
     def __init__(self) -> None:
         self.event = threading.Event()
         self.payload: Optional[Dict[str, Any]] = None
+
+    def update(self, payload: Dict[str, Any]) -> None:
+        # Guardamos último estado para poder inspeccionarlo si se cancela
+        self.payload = payload
 
     def set(self, payload: Dict[str, Any]) -> None:
         self.payload = payload
@@ -102,15 +112,16 @@ class DeviceRegistry:
         self._devices: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
 
-    def update_from_status(self, payload: Dict[str, Any], addr) -> None:
+    def update_from_status(self, payload: Dict[str, Any], addr) -> tuple[Optional[int], Optional[int]]:
         serial = payload.get("serial")
         if not serial:
-            return
+            return None, None
+        assigned_index = ensure_device_index(serial)
         info = {
             "serial": serial,
             "host": payload.get("host"),
             "name": payload.get("name"),
-            "index": payload.get("index"),
+            "index": assigned_index,
             "version": payload.get("version"),
             "services": payload.get("services", []),
             "available_services": payload.get("available_services", []),
@@ -122,10 +133,20 @@ class DeviceRegistry:
         }
         with self._lock:
             self._devices[serial] = info
-        upsert_device(serial, host=info.get("host"))
+        upsert_device(serial, host=info.get("host"), device_index=assigned_index)
+        return assigned_index, payload.get("index")
 
-    def update_services(self, serial: str, services: Optional[List[Dict[str, Any]]], service_state: Optional[Dict[str, Any]] = None) -> None:
-        if services is None and service_state is None:
+    def update_services(
+        self,
+        serial: str,
+        services: Optional[List[Dict[str, Any]]],
+        service_state: Optional[Dict[str, Any]] = None,
+        *,
+        transition: Optional[bool] = None,
+        progress: Optional[int] = None,
+        stage: Optional[str] = None,
+    ) -> None:
+        if services is None and service_state is None and transition is None:
             return
         with self._lock:
             if serial in self._devices:
@@ -133,7 +154,23 @@ class DeviceRegistry:
                     self._devices[serial]["services"] = services
                 if service_state is not None:
                     self._devices[serial]["service_state"] = service_state
+                elif transition is not None or progress is not None or stage is not None:
+                    state = dict(self._devices[serial].get("service_state") or {})
+                    if transition is not None:
+                        state["transition"] = bool(transition)
+                    if progress is not None:
+                        state["progress"] = progress
+                    if stage is not None:
+                        state["stage"] = stage
+                    self._devices[serial]["service_state"] = state
                 self._devices[serial]["last_seen"] = time.time()
+
+    def update_index(self, serial: str, index: Optional[int]) -> None:
+        if index is None:
+            return
+        with self._lock:
+            if serial in self._devices:
+                self._devices[serial]["index"] = int(index)
 
     def list_devices(self) -> List[Dict[str, Any]]:
         now = time.time()
@@ -160,6 +197,7 @@ class BroadcastManager:
         self.command_socket: Optional[socket.socket] = None
         self.pending: Dict[str, PendingRequest] = {}
         self.pending_lock = threading.Lock()
+        self.pending_index: set[str] = set()
 
     def start(self) -> None:
         if self.broadcast_thread and self.broadcast_thread.is_alive():
@@ -238,9 +276,51 @@ class BroadcastManager:
                 msg_type = payload.get("type")
 
                 if msg_type == "AGENT_STATUS":
-                    self.registry.update_from_status(payload, addr)
-                    logger.info("Estado recibido de %s", payload.get("serial") or addr[0])
+                    assigned_index, reported_index = self.registry.update_from_status(payload, addr)
+                    serial = payload.get("serial") or addr[0]
+                    logger.info("Estado recibido de %s", serial)
+                    if assigned_index is not None and payload.get("serial"):
+                        if assigned_index != reported_index:
+                            try:
+                                self.request_index_update(payload["serial"], assigned_index)
+                            except Exception as exc:
+                                logger.error("No se pudo actualizar índice de %s: %s", payload["serial"], exc)
                 elif msg_type == "SERVICE_ACK":
+                    request_id = payload.get("request_id")
+                    transition = bool(payload.get("transition"))
+                    serial = payload.get("serial")
+                    stage = payload.get("stage")
+                    ok_flag = payload.get("ok")
+                    progress = payload.get("progress")
+                    if request_id:
+                        if transition:
+                            with self.pending_lock:
+                                pending = self.pending.get(request_id)
+                            # no set() until transición finalice
+                            if pending:
+                                pending.update(payload)
+                        else:
+                            with self.pending_lock:
+                                pending = self.pending.pop(request_id, None)
+                            if pending:
+                                pending.set(payload)
+                    if serial:
+                        self.registry.update_services(
+                            serial,
+                            payload.get("services"),
+                            payload.get("service_state"),
+                            transition=transition,
+                            progress=progress,
+                            stage=stage,
+                        )
+                        logger.info(
+                            "ACK de servicio recibido de %s (ok=%s, transition=%s, stage=%s)",
+                            serial,
+                            ok_flag,
+                            transition,
+                            stage,
+                        )
+                elif msg_type == "POWER_ACK":
                     request_id = payload.get("request_id")
                     if request_id:
                         with self.pending_lock:
@@ -249,8 +329,30 @@ class BroadcastManager:
                             pending.set(payload)
                     serial = payload.get("serial")
                     if serial:
-                        self.registry.update_services(serial, payload.get("services"), payload.get("service_state"))
-                        logger.info("ACK de servicio recibido de %s (ok=%s)", serial, payload.get("ok"))
+                        logger.info(
+                            "ACK de energía (%s) recibido de %s (ok=%s)",
+                            payload.get("action"),
+                            serial,
+                            payload.get("ok"),
+                        )
+                elif msg_type == "INDEX_ACK":
+                    request_id = payload.get("request_id")
+                    if request_id:
+                        with self.pending_lock:
+                            pending = self.pending.pop(request_id, None)
+                        if pending:
+                            pending.set(payload)
+                    serial = payload.get("serial")
+                    if serial:
+                        with self.pending_lock:
+                            self.pending_index.discard(serial)
+                        self.registry.update_index(serial, payload.get("index"))
+                        logger.info(
+                            "ACK de índice recibido de %s (index=%s, ok=%s)",
+                            serial,
+                            payload.get("index"),
+                            payload.get("ok"),
+                        )
                 else:
                     logger.debug("Mensaje desconocido de %s: %s", addr[0], payload)
         finally:
@@ -266,7 +368,7 @@ class BroadcastManager:
         finally:
             s.close()
 
-    def request_service_change(self, serial: str, service: str, *, config: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
+    def request_service_change(self, serial: str, service: str, *, config: Optional[str] = None, timeout: float = 25.0) -> Dict[str, Any]:
         device = self.registry.get_device(serial)
         if not device:
             raise ValueError("Dispositivo desconocido")
@@ -306,6 +408,95 @@ class BroadcastManager:
 
         return reply
 
+    def request_power_action(self, serial: str, action: str, timeout: float = 10.0) -> Dict[str, Any]:
+        action = (action or "").lower()
+        if action not in {"shutdown", "reboot"}:
+            raise ValueError("Acción de energía no soportada")
+
+        device = self.registry.get_device(serial)
+        if not device:
+            raise ValueError("Dispositivo desconocido")
+        if not device.get("ip"):
+            raise ValueError("No se conoce la IP del dispositivo")
+
+        request_id = str(uuid.uuid4())
+        message = {
+            "type": "POWER",
+            "action": action,
+            "request_id": request_id,
+            "reply_port": REPLY_PORT,
+        }
+
+        pending = PendingRequest()
+        with self.pending_lock:
+            self.pending[request_id] = pending
+
+        try:
+            if not self.command_socket:
+                raise RuntimeError("Socket de comando no disponible")
+            self.command_socket.sendto(json.dumps(message).encode("utf-8"), (device["ip"], BCAST_PORT))
+            logger.info("Comando POWER(%s) → %s", action, serial)
+        except Exception as exc:
+            with self.pending_lock:
+                self.pending.pop(request_id, None)
+            raise RuntimeError(f"Error enviando comando: {exc}") from exc
+
+        try:
+            reply = pending.wait(timeout)
+        except TimeoutError:
+            with self.pending_lock:
+                self.pending.pop(request_id, None)
+            raise TimeoutError("El agente no confirmó la orden de energía")
+
+        return reply or {"ok": False, "error": "sin respuesta"}
+
+    def request_index_update(self, serial: str, index: int, timeout: float = 10.0) -> Dict[str, Any]:
+        device = self.registry.get_device(serial)
+        if not device:
+            raise ValueError("Dispositivo desconocido")
+        if not device.get("ip"):
+            raise ValueError("No se conoce la IP del dispositivo")
+
+        with self.pending_lock:
+            if serial in self.pending_index:
+                return {"ok": True, "pending": True}
+
+        request_id = str(uuid.uuid4())
+        message = {
+            "type": "SET_INDEX",
+            "index": int(index),
+            "request_id": request_id,
+            "reply_port": REPLY_PORT,
+        }
+
+        pending = PendingRequest()
+        with self.pending_lock:
+            self.pending[request_id] = pending
+            self.pending_index.add(serial)
+
+        try:
+            if not self.command_socket:
+                raise RuntimeError("Socket de comando no disponible")
+            self.command_socket.sendto(json.dumps(message).encode("utf-8"), (device["ip"], BCAST_PORT))
+            logger.info("Comando SET_INDEX(%s) → %s", index, serial)
+        except Exception as exc:
+            with self.pending_lock:
+                self.pending.pop(request_id, None)
+                self.pending_index.discard(serial)
+            raise RuntimeError(f"Error enviando comando: {exc}") from exc
+
+        try:
+            reply = pending.wait(timeout)
+        except TimeoutError:
+            with self.pending_lock:
+                self.pending.pop(request_id, None)
+                self.pending_index.discard(serial)
+            raise TimeoutError("El agente no confirmó la actualización de índice")
+
+        with self.pending_lock:
+            self.pending_index.discard(serial)
+        return reply or {"ok": False, "error": "sin respuesta"}
+
 
 registry = DeviceRegistry()
 manager = BroadcastManager(registry)
@@ -328,6 +519,10 @@ app = FastAPI(title="OMI Control Server", version="0.1", lifespan=lifespan)
 class ServiceRequest(BaseModel):
     service: str
     config: Optional[str] = None
+
+
+class PowerRequest(BaseModel):
+    action: Literal["shutdown", "reboot"]
 
 
 class ConfigPayload(BaseModel):
@@ -378,6 +573,22 @@ async def api_set_service(serial: str, payload: ServiceRequest) -> Dict[str, Any
     return reply
 
 
+@app.post("/api/devices/{serial}/power")
+async def api_power_action(serial: str, payload: PowerRequest) -> Dict[str, Any]:
+    logger.info("API POST /api/devices/%s/power → action=%s", serial, payload.action)
+    try:
+        reply = manager.request_power_action(serial, payload.action)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not reply.get("ok"):
+        raise HTTPException(status_code=400, detail=reply.get("error") or "error desconocido")
+
+    return reply
+
+
 @app.get("/api/configs/{service_id}")
 async def api_list_service_configs(service_id: str) -> Dict[str, Any]:
     logger.info("API GET /api/configs/%s", service_id)
@@ -421,67 +632,31 @@ async def api_update_device(serial: str, payload: DeviceDesiredPayload) -> Dict[
 async def api_delete_device(serial: str) -> Dict[str, Any]:
     logger.info("API DELETE /api/devices/%s", serial)
     delete_device(serial)
+    for dev in registry.list_devices():
+        if not dev.get("online"):
+            continue
+        stored = get_device(dev.get("serial", ""))
+        if not stored:
+            continue
+        desired_index = stored.get("device_index")
+        if desired_index is None:
+            continue
+        if dev.get("index") != desired_index:
+            try:
+                manager.request_index_update(dev.get("serial"), desired_index)
+            except Exception as exc:
+                logger.error(
+                    "No se pudo actualizar índice de %s tras borrar dispositivo: %s",
+                    dev.get("serial"),
+                    exc,
+                )
     return {"ok": True}
 
 
-HTML_PAGE = """<!doctype html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OMI Control Server</title>
-<style>
-:root { --bg:#111; --card:#1c1c1c; --line:#2c2c2c; --text:#eee; --muted:#aaa; --accent:#2ea043; --danger:#f06262; }
-body { font-family: system-ui, sans-serif; margin:0; background:var(--bg); color:var(--text); }
-.topbar { display:flex; align-items:center; justify-content:space-between; padding:16px 24px; border-bottom:1px solid var(--line); background:#141414; }
-.brand { font-size:20px; font-weight:600; letter-spacing:0.04em; }
-.nav { display:flex; gap:10px; flex-wrap:wrap; }
-.nav-link { border:1px solid var(--line); background:#242424; color:var(--muted); padding:8px 16px; border-radius:18px; cursor:pointer; }
-.nav-link.active { background:var(--accent); color:#041a07; font-weight:600; border-color:var(--accent); }
-.nav-link:hover { color:var(--text); }
-.container { max-width:1024px; margin:0 auto; padding:24px 24px 48px; }
-.stack > * + * { margin-top:18px; }
-.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
-.card h2 { margin:0 0 8px; font-size:20px; }
-.table { width:100%; border-collapse:collapse; margin-top:12px; }
-.table th, .table td { padding:8px; border-bottom:1px solid #333; text-align:left; vertical-align:top; }
-.status-ok { color:#55d66b; font-weight:600; }
-.status-bad { color:var(--danger); font-weight:600; }
-.small { font-size:12px; color:var(--muted); }
-.btn { background:#272727; color:var(--text); border:1px solid #3a3a3a; border-radius:8px; padding:6px 12px; cursor:pointer; }
-.btn:hover { background:#333; }
-.btn:disabled { cursor:not-allowed; opacity:0.6; }
-select { background:#1e1e1e; color:var(--text); border:1px solid #3a3a3a; border-radius:8px; padding:6px 10px; min-width:140px; }
-.view.hidden { display:none !important; }
-.overlay { position:fixed; inset:0; background:rgba(0,0,0,0.85); display:none; flex-direction:column; z-index:1000; }
-.overlay.active { display:flex; }
-.overlay header { display:flex; align-items:center; justify-content:space-between; padding:12px 20px; background:#101010; border-bottom:1px solid #333; }
-.overlay header h3 { margin:0; font-size:16px; color:var(--text); }
-.overlay iframe { flex:1; border:0; background:#fff; }
-.config-select { margin-top:6px; width:100%; }
-.tag { display:inline-block; padding:2px 8px; border-radius:999px; background:#2f2f2f; font-size:12px; margin-left:6px; }
-</style>
-</head>
-<body>
-<header class="topbar">
-  <div class="brand">OMI Control Server</div>
-  <nav class="nav">
-    <button class="nav-link active" data-view-btn="devices">Home</button>
-    <button class="nav-link" data-view-btn="clients">Clientes</button>
-    <button class="nav-link" data-view-btn="services">Servicios</button>
-  </nav>
-</header>
-<main class="container stack view" id="devicesView"></main>
-<section class="container stack view hidden" id="clientsView"></section>
-<section class="container stack view hidden" id="servicesView"></section>
-<div class="overlay hidden" id="configOverlay">
-  <header>
-    <button class="btn" id="closeOverlayBtn">Volver al Home</button>
-    <h3 id="overlayTitle"></h3>
-  </header>
-  <iframe id="configFrame" src="about:blank"></iframe>
-</div>
-<script>
+HTML_PATH = Path(__file__).resolve().parent / "web" / "index.html"
+HTML_PAGE = HTML_PATH.read_text(encoding="utf-8")
+
+JS_APP = """
 (function(){
   var configCache = {};
   var currentDevices = [];
@@ -544,6 +719,12 @@ select { background:#1e1e1e; color:var(--text); border:1px solid #3a3a3a; border
     var available = dev.available_services || [];
     var activeEntry = services.find(function(s){ return s.enabled; });
     var active = state.expected || (activeEntry ? activeEntry.name : 'standby');
+    var transition = !!state.transition;
+    var progressValue = (typeof state.progress === 'number') ? Math.max(0, Math.min(100, Number(state.progress))) : null;
+    var stageText = state.stage || (transition ? 'Sincronizando' : '');
+    if(stageText){ stageText = stageText.charAt(0).toUpperCase() + stageText.slice(1); }
+    var ledClass = 'status-led ' + (transition ? 'syncing' : (online ? 'online' : 'offline'));
+    var statusLabel = transition ? 'Synking' : (online ? 'Online' : 'Offline');
     var cpu = (heartbeat.cpu != null) ? Number(heartbeat.cpu).toFixed(0) + '%' : '--';
     var temp = (heartbeat.temp != null) ? Number(heartbeat.temp).toFixed(0) + '°C' : '--';
     var serviceReturn = state.returncode != null ? state.returncode : '—';
@@ -554,25 +735,39 @@ select { background:#1e1e1e; color:var(--text); border:1px solid #3a3a3a; border
     var desiredConfig = dev.desired_config || '—';
     var ip = dev.ip || '-';
     var lastSeen = formatDate(dev.last_seen);
-    var nameHeader = escapeHtml(dev.host || dev.serial || 'Agente');
+    var indexLabel = (dev.index !== undefined && dev.index !== null) ? ('#' + dev.index) : '#--';
+    var nameHeader = '<span class="index-label">' + escapeHtml(indexLabel) + '</span>' + escapeHtml(dev.host || dev.serial || 'Agente');
     var availableOptions = available.map(function(name){
       return '<option value="' + escapeHtml(name) + '" ' + (name===active ? 'selected' : '') + '>' + escapeHtml(name) + '</option>';
     }).join('');
     var configsHtml = (active !== 'standby')
-      ? '<select class="config-select" data-config-for="' + escapeHtml(dev.serial || '') + '" ' + (!online ? 'disabled' : '') + '>' + renderConfigOptions(active, state.config_name) + '</select>'
+      ? '<select class="config-select" data-config-for="' + escapeHtml(dev.serial || '') + '" data-active-config="' + escapeHtml(state.config_name || '') + '" ' + (!online || transition ? 'disabled' : '') + '>' + renderConfigOptions(active, state.config_name) + '</select>'
       : '<div class="small">Sin opciones de configuración.</div>';
     var configBtn = webUrl
-      ? '<button class="btn" data-config-url="' + escapeHtml(webUrl) + '" data-config-title="' + escapeHtml(dev.host || dev.serial || 'Configuración') + '">Configurar</button>'
+      ? '<button class="btn" data-config-url="' + escapeHtml(webUrl) + '" data-config-title="' + escapeHtml(dev.host || dev.serial || 'Configuración') + '" ' + (!online || transition ? 'disabled' : '') + '>Configurar</button>'
       : '<button class="btn" disabled>Configurar</button>';
+    var powerButtons = '<div class="card-actions">' +
+      '<button class="btn warning" data-power="reboot" data-serial="' + escapeHtml(dev.serial || '') + '" ' + (!online || transition ? 'disabled' : '') + '>Reiniciar</button>' +
+      '<button class="btn danger-solid" data-power="shutdown" data-serial="' + escapeHtml(dev.serial || '') + '" ' + (!online || transition ? 'disabled' : '') + '>Apagar</button>' +
+    '</div>';
+    var transitionHtml = '—';
+    if(transition){
+      var pct = (progressValue != null ? progressValue : 0);
+      transitionHtml = '<div>' + escapeHtml(stageText || 'Sincronizando') + '</div>' +
+        '<div class="progress' + (pct >= 100 ? ' done' : '') + '"><div class="progress-inner" style="width:' + pct + '%;"></div></div>';
+    } else if(stageText){
+      transitionHtml = escapeHtml(stageText);
+    }
 
     return (
       '<div class="card" data-serial="' + escapeHtml(dev.serial || '') + '">' +
-      '<h2>' + nameHeader + (online ? '' : '<span class="tag">Offline</span>') + '</h2>' +
+      '<div class="card-headline"><h2><span class="' + ledClass + '"></span>' + nameHeader + (online ? '' : ' <span class="tag">Offline</span>') + '</h2>' + powerButtons + '</div>' +
       '<div class="small">Serial: ' + escapeHtml(dev.serial || '?') + '</div>' +
       '<div class="small">IP: ' + escapeHtml(ip) + '</div>' +
       '<div class="small">Último contacto: ' + escapeHtml(lastSeen) + '</div>' +
       '<table class="table">' +
-        '<tr><th>Estado</th><td class="' + (online ? 'status-ok' : 'status-bad') + '">' + (online ? 'Online' : 'Offline') + '</td></tr>' +
+        '<tr><th>Estado</th><td class="' + (online ? 'status-ok' : 'status-bad') + '">' + escapeHtml(statusLabel) + '</td></tr>' +
+        '<tr><th>Transición</th><td>' + transitionHtml + '</td></tr>' +
         '<tr><th>Servicio activo</th><td>' + escapeHtml(active) + '</td></tr>' +
         '<tr><th>Config actual</th><td>' + escapeHtml(serviceConfig) + '</td></tr>' +
         '<tr><th>Return code</th><td>' + escapeHtml(serviceReturn) + '</td></tr>' +
@@ -581,12 +776,12 @@ select { background:#1e1e1e; color:var(--text); border:1px solid #3a3a3a; border
         '<tr><th>Temperatura</th><td>' + temp + '</td></tr>' +
         '<tr><th>Deseado</th><td>' + escapeHtml(desiredService) + ' / ' + escapeHtml(desiredConfig) + '</td></tr>' +
         '<tr><th>Servicio</th><td>' +
-          '<select data-service-select data-serial="' + escapeHtml(dev.serial || '') + '" ' + (!online ? 'disabled' : '') + '>' +
+          '<select data-service-select data-serial="' + escapeHtml(dev.serial || '') + '" data-active-service="' + escapeHtml(active) + '" ' + (!online || transition ? 'disabled' : '') + '>' +
             availableOptions +
           '</select>' +
           configsHtml +
           '<div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">' +
-            '<button class="btn" data-apply-service="' + escapeHtml(dev.serial || '') + '" ' + (!online ? 'disabled' : '') + '>Aplicar</button>' +
+            '<button class="btn" data-apply-service="' + escapeHtml(dev.serial || '') + '" ' + (!online || transition ? 'disabled' : '') + '>Aplicar</button>' +
             configBtn +
           '</div>' +
         '</td></tr>' +
@@ -598,11 +793,40 @@ select { background:#1e1e1e; color:var(--text); border:1px solid #3a3a3a; border
   function renderDevices(devices){
     currentDevices = devices;
     var container = document.getElementById('devicesView');
+    var selectionSnapshot = {};
+    toArray(container.querySelectorAll('.card[data-serial]')).forEach(function(card){
+      var serial = card.dataset.serial;
+      if(!serial) return;
+      var serviceSel = card.querySelector('select[data-service-select]');
+      var configSel = card.querySelector('select[data-config-for]');
+      selectionSnapshot[serial] = {
+        service: serviceSel ? serviceSel.value : null,
+        config: configSel ? configSel.value : null
+      };
+    });
     if(!devices.length){
       container.innerHTML = '<div class="card">No se detectaron agentes.</div>';
       return;
     }
     container.innerHTML = devices.map(renderDevice).join('');
+
+    toArray(container.querySelectorAll('select[data-service-select]')).forEach(function(sel){
+      var serial = sel.dataset.serial;
+      var active = sel.getAttribute('data-active-service');
+      var snapshot = selectionSnapshot[serial];
+      if(snapshot && snapshot.service !== null && snapshot.service !== undefined && snapshot.service !== active && !sel.disabled){
+        sel.value = snapshot.service;
+      }
+    });
+
+    toArray(container.querySelectorAll('select[data-config-for]')).forEach(function(sel){
+      var serial = sel.dataset.configFor;
+      var activeConfig = sel.getAttribute('data-active-config') || '';
+      var snapshot = selectionSnapshot[serial];
+      if(snapshot && snapshot.config !== null && snapshot.config !== undefined && snapshot.config !== activeConfig && !sel.disabled){
+        sel.value = snapshot.config;
+      }
+    });
 
     toArray(container.querySelectorAll('select[data-service-select]')).forEach(function(sel){
       sel.addEventListener('change', function(){
@@ -615,6 +839,14 @@ select { background:#1e1e1e; color:var(--text); border:1px solid #3a3a3a; border
             configSelect.disabled = (service === 'standby' || sel.disabled);
           }
         }).catch(console.error);
+      });
+    });
+
+    toArray(container.querySelectorAll('button[data-power]')).forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var serial = btn.dataset.serial;
+        var action = btn.dataset.power;
+        sendPowerCommand(serial, action, btn);
       });
     });
 
@@ -727,6 +959,31 @@ select { background:#1e1e1e; color:var(--text); border:1px solid #3a3a3a; border
     });
   }
 
+  function sendPowerCommand(serial, action, button){
+    if(!serial || !action) return;
+    var confirmMsg = action === 'shutdown'
+      ? '¿Apagar la Raspberry ' + serial + '?'
+      : '¿Reiniciar la Raspberry ' + serial + '?';
+    if(!confirm(confirmMsg)) return;
+    if(button) button.disabled = true;
+    fetch('/api/devices/' + encodeURIComponent(serial) + '/power', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ action: action })
+    }).then(function(res){
+      if(!res.ok){
+        return res.json().catch(function(){ return { detail:'error' }; }).then(function(detail){
+          throw new Error(detail.detail || res.status);
+        });
+      }
+    }).catch(function(err){
+      alert('Error enviando comando: ' + err);
+    }).finally(function(){
+      if(button){ button.disabled = false; }
+      setTimeout(loadDevices, 1200);
+    });
+  }
+
   function showView(view){
     toArray(document.querySelectorAll('[data-view-btn]')).forEach(function(btn){
       btn.classList.toggle('active', btn.dataset.viewBtn === view);
@@ -792,10 +1049,9 @@ select { background:#1e1e1e; color:var(--text); border:1px solid #3a3a3a; border
   loadServiceConfigs();
   loadClients();
 })();
-</script>
-</body>
-</html>
 """
+
+HTML_PAGE = HTML_PAGE.replace("{{APP_SCRIPT}}", JS_APP)
 
 
 if __name__ == "__main__":

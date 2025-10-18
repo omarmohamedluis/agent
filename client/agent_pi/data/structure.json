@@ -3,7 +3,7 @@
     "version": "0.0.1"
   },
   "identity": {
-    "index": null,
+    "index": 1,
     "name": "",
     "serial": "4f30ea9e2b4bbfbc",
     "host": "omipitest"
@@ -37,7 +37,7 @@
       "enabled": false
     },
     {
-      "name": "OSC",
+      "name": "OSCnum",
       "enabled": false
     },
     {

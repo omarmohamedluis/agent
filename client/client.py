@@ -4,12 +4,13 @@ from __future__ import annotations
 import copy
 import json
 import socket
+import subprocess
 import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from AppHandler import (
     current_logical_service,
@@ -25,9 +26,10 @@ from jsonconfig import (
     get_enabled_service,
     read_config,
     set_active_service,
+    set_device_index,
 )
 from logger import get_agent_logger
-from ui import EstandardUse, LoadingUI, ErrorUI, ErrorUIBlink, UIOFF
+from ui import EstandardUse, LoadingUI, ErrorUI, ErrorUIBlink, UIOFF, SyncingUI, UIShutdownProceess
 
 SOFVERSION = "0.0.1"
 BCAST_PORT = 37020
@@ -68,6 +70,9 @@ SERVICE_STATUS: Dict[str, Any] = {
     "web_url": None,
     "timestamp": 0.0,
     "error": None,
+    "transition": False,
+    "progress": 0,
+    "stage": None,
 }
 SERVICE_ERROR: Optional[str] = None
 
@@ -225,6 +230,9 @@ def _update_service_status(*, expected: Optional[str] = None, runtime: Optional[
     }
 
     with SERVICE_LOCK:
+        state.setdefault("transition", SERVICE_STATUS.get("transition", False))
+        state.setdefault("progress", SERVICE_STATUS.get("progress", 0))
+        state.setdefault("stage", SERVICE_STATUS.get("stage"))
         SERVICE_STATUS.update(state)
         return copy.deepcopy(SERVICE_STATUS)
 
@@ -233,11 +241,34 @@ def _get_service_state() -> Dict[str, Any]:
     with SERVICE_LOCK:
         return copy.deepcopy(SERVICE_STATUS)
 
+def _set_service_transition(active: bool, *, stage: Optional[str] = None, progress: Optional[int] = None) -> Dict[str, Any]:
+    with SERVICE_LOCK:
+        SERVICE_STATUS["transition"] = bool(active)
+        if stage is not None:
+            SERVICE_STATUS["stage"] = stage
+        if progress is not None:
+            SERVICE_STATUS["progress"] = max(0, min(100, int(progress)))
+        SERVICE_STATUS["timestamp"] = time.time()
+        return copy.deepcopy(SERVICE_STATUS)
+
+
+def _run_power_command(command_variants: List[List[str]]) -> bool:
+    for cmd in command_variants:
+        try:
+            subprocess.Popen(cmd)
+            return True
+        except FileNotFoundError:
+            continue
+        except Exception as exc:
+            logger.error("Fallo ejecutando %s: %s", cmd, exc)
+    return False
+
 
 def _set_service_error(message: str) -> None:
     global SERVICE_ERROR
     SERVICE_ERROR = message
     logger.warning(message)
+    _set_service_transition(False, stage="error", progress=100)
     state = _get_service_state()
     service_label = (state.get("expected") or "").upper()
     ui_label = f"{service_label[:10]} ERR" if service_label else "ERROR"
@@ -309,7 +340,13 @@ def _refresh_loop() -> None:
             snap = UPDATEHB(STRUCTURE_PATH)
             _set_snapshot(snap)
             try:
-                EstandardUse(snap, server_online=_server_is_online(), json_path=STRUCTURE_PATH)
+                state = _get_service_state()
+                if state.get("transition"):
+                    stage = state.get("stage") or "Synking"
+                    progress = state.get("progress") if isinstance(state.get("progress"), int) else 0
+                    SyncingUI(progress or 0, stage)
+                else:
+                    EstandardUse(snap, server_online=_server_is_online(), json_path=STRUCTURE_PATH)
             except Exception:
                 pass
         except Exception as exc:
@@ -436,41 +473,157 @@ def _handle_service_command(payload: Dict[str, Any], s_reply: socket.socket, add
     service = payload.get("service")
     config_target = payload.get("config")
     reply_port = int(payload.get("reply_port", addr[1])) if payload.get("reply_port") else SERVER_REPLY_PORT
+    reply_ip = addr[0]
     serial = (_current_config().get("identity", {}) or {}).get("serial")
 
-    response: Dict[str, Any] = {
-        "type": "SERVICE_ACK",
+    def _snapshot_state() -> Dict[str, Any]:
+        return {
+            "services": _current_config().get("services"),
+            "service_state": _get_service_state(),
+        }
+
+    def _send_ack(*, ok: bool, transition: bool, stage: str, progress: Optional[int] = None, error: Optional[str] = None):
+        snapshot = _snapshot_state()
+        payload_ack: Dict[str, Any] = {
+            "type": "SERVICE_ACK",
+            "request_id": request_id,
+            "service": service,
+            "serial": serial,
+            "ok": ok,
+            "error": error,
+            "services": snapshot.get("services"),
+            "service_state": snapshot.get("service_state"),
+            "transition": transition,
+            "stage": stage,
+            "timestamp": time.time(),
+        }
+        if config_target:
+            payload_ack["config"] = config_target
+        if progress is not None:
+            payload_ack["progress"] = max(0, min(100, int(progress)))
+        try:
+            s_reply.sendto(json.dumps(payload_ack).encode("utf-8"), (reply_ip, reply_port))
+        except Exception as exc:
+            logger.error("Error enviando ACK al servidor: %s", exc)
+
+    def _run_transition():
+        try:
+            _apply_active_service(service, config_name=config_target)
+
+            _set_service_transition(True, stage="abriendo", progress=80)
+            SyncingUI(80, "Abriendo")
+            _send_ack(ok=True, transition=True, stage="abriendo", progress=80)
+
+            _set_service_transition(False, stage="completado", progress=100)
+            SyncingUI(100, "Completado")
+            _send_ack(ok=True, transition=False, stage="completado", progress=100)
+            logger.info("Servicio activo cambiado a '%s' por petición de %s", service, addr[0])
+        except Exception as exc:
+            message = str(exc)
+            _set_service_error(message)
+            _set_service_transition(False, stage="error", progress=100)
+            SyncingUI(100, "Error")
+            _send_ack(ok=False, transition=False, stage="error", progress=100, error=message)
+            logger.error("Error cambiando servicio a '%s': %s", service, exc)
+
+    _set_service_transition(True, stage="cerrando", progress=5)
+    SyncingUI(10, "Cerrando")
+    _send_ack(ok=True, transition=True, stage="cerrando", progress=5)
+
+    threading.Thread(target=_run_transition, name="omi-service-transition", daemon=True).start()
+
+
+def _handle_power_command(payload: Dict[str, Any], s_reply: socket.socket, addr) -> None:
+    request_id = payload.get("request_id")
+    action = (payload.get("action") or "").lower()
+    reply_port = int(payload.get("reply_port", addr[1])) if payload.get("reply_port") else SERVER_REPLY_PORT
+    reply_ip = addr[0]
+    serial = (_current_config().get("identity", {}) or {}).get("serial")
+
+    ack: Dict[str, Any] = {
+        "type": "POWER_ACK",
         "request_id": request_id,
-        "service": service,
         "serial": serial,
+        "action": action,
         "ok": False,
         "error": None,
-        "services": None,
-        "service_state": None,
+        "timestamp": time.time(),
     }
 
     try:
-        cfg = _apply_active_service(service, config_name=config_target)
-        response["ok"] = True
-        response["services"] = cfg.get("services")
-        response["service_state"] = _get_service_state()
-        logger.info("Servicio activo cambiado a '%s' por petición de %s", service, addr[0])
-    except Exception as exc:
-        message = str(exc)
-        _set_service_error(message)
-        response["error"] = message
-        response["services"] = _current_config().get("services")
-        response["service_state"] = _get_service_state()
-        logger.error("Error cambiando servicio a '%s': %s", service, exc)
+        if action not in {"shutdown", "reboot"}:
+            raise ValueError("acción de energía desconocida")
 
-    if config_target:
-        response["config"] = config_target
+        success = False
+        if action == "shutdown":
+            UIShutdownProceess(20, "Apagando")
+            success = _run_power_command([
+                ["sudo", "shutdown", "-h", "now"],
+                ["sudo", "/sbin/shutdown", "-h", "now"],
+                ["shutdown", "-h", "now"],
+            ])
+        else:
+            SyncingUI(20, "Reinicio")
+            success = _run_power_command([
+                ["sudo", "reboot"],
+                ["sudo", "/sbin/reboot"],
+                ["reboot"],
+            ])
+
+        if not success:
+            raise RuntimeError("no se pudo ejecutar el comando")
+
+        ack["ok"] = True
+    except Exception as exc:
+        ack["error"] = str(exc)
+        logger.error("Error procesando comando de energía '%s': %s", action, exc)
 
     try:
-        s_reply.sendto(json.dumps(response).encode("utf-8"), (addr[0], reply_port))
+        s_reply.sendto(json.dumps(ack).encode("utf-8"), (reply_ip, reply_port))
     except Exception as exc:
-        logger.error("Error enviando ACK al servidor: %s", exc)
+        logger.error("Error enviando POWER_ACK al servidor: %s", exc)
 
+    if ack["ok"]:
+        if action == "shutdown":
+            UIShutdownProceess(90, "Apagando")
+        else:
+            SyncingUI(90, "Reinicio")
+
+
+def _handle_index_command(payload: Dict[str, Any], s_reply: socket.socket, addr) -> None:
+    request_id = payload.get("request_id")
+    reply_port = int(payload.get("reply_port", addr[1])) if payload.get("reply_port") else SERVER_REPLY_PORT
+    reply_ip = addr[0]
+    serial = (_current_config().get("identity", {}) or {}).get("serial")
+    new_index = payload.get("index")
+
+    ack: Dict[str, Any] = {
+        "type": "INDEX_ACK",
+        "request_id": request_id,
+        "serial": serial,
+        "index": new_index,
+        "ok": False,
+        "error": None,
+        "timestamp": time.time(),
+    }
+
+    try:
+        if new_index is None:
+            raise ValueError("índice no proporcionado")
+        cfg = set_device_index(STRUCTURE_PATH, int(new_index))
+        _set_config(cfg)
+        _update_service_status()
+        ack["ok"] = True
+        ack["index"] = int(new_index)
+        LoadingUI(60, f"Index #{new_index}")
+    except Exception as exc:
+        ack["error"] = str(exc)
+        logger.error("No se pudo actualizar índice: %s", exc)
+
+    try:
+        s_reply.sendto(json.dumps(ack).encode("utf-8"), (reply_ip, reply_port))
+    except Exception as exc:
+        logger.error("Error enviando INDEX_ACK al servidor: %s", exc)
 
 def _build_status_payload(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     cfg = _current_config()
@@ -578,6 +731,14 @@ def listen_and_reply():
             elif msg_type == "SET_SERVICE":
                 logger.info("Solicitud de cambio de servicio desde %s → %s", addr[0], payload.get("service"))
                 _handle_service_command(payload, s_reply, addr)
+                _mark_server_seen()
+            elif msg_type == "POWER":
+                logger.info("Comando de energía '%s' desde %s", payload.get("action"), addr[0])
+                _handle_power_command(payload, s_reply, addr)
+                _mark_server_seen()
+            elif msg_type == "SET_INDEX":
+                logger.info("Actualización de índice → %s (desde %s)", payload.get("index"), addr[0])
+                _handle_index_command(payload, s_reply, addr)
                 _mark_server_seen()
 
             else:

@@ -226,6 +226,15 @@ def set_active_service(path: str | Path, name: str) -> Dict[str, Any]:
     return data
 
 
+def set_device_index(path: str | Path, index: int) -> Dict[str, Any]:
+    p = Path(path)
+    data = read_config(p)
+    identity = data.setdefault("identity", {})
+    identity["index"] = int(index)
+    _write_json(p, data)
+    return data
+
+
 def get_enabled_service(data: Dict[str, Any]) -> str | None:
     for entry in data.get("services", []):
         if isinstance(entry, dict) and entry.get("enabled"):

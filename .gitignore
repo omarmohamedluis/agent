@@ -12,6 +12,8 @@ __pycache__/
 /client/logs/
 /server/logs/
 /server/omi.db
+/agent_pi/data
+
 
 # Archivos del sistema
 .DS_Store
@@ -20,8 +22,13 @@ Thumbs.db
 # VS Code
 .vscode/
 
+#jsons autogenerados
+structure.json
+server.json
+
 # servicio midi
 OMIMIDI_state.json
 OMIMIDI_learn_request.json
 OMIMIDI_last_event.json
 OMIMIDI_webui.pid
+OMIMIDI_map.json

@@ -111,6 +111,9 @@ NAV_ITEMS = [
     ("add", "Añadir", "/add")
 ]
 
+LAYOUT_PATH = Path(__file__).resolve().parent / "web" / "layout.html"
+LAYOUT_TEMPLATE = LAYOUT_PATH.read_text(encoding="utf-8")
+
 def render_layout(body_html: str, *, title: str = "OMIMIDI Web UI", active: str = "home", extra_head: str = "", extra_js: str = "") -> HTMLResponse:
     host_label = get_identity_host()
     brand_text = f"OMIMIDI @ {host_label} Web UI"
@@ -123,131 +126,17 @@ def render_layout(body_html: str, *, title: str = "OMIMIDI Web UI", active: str 
         if key == active:
             cls += " active"
         nav_links.append(f'<a class="{cls}" href="{href}">{label}</a>')
-    html_doc = f"""<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>{page_title_html}</title>
-<style>
-:root {{
-  --bg:#111;
-  --card:#1b1b1b;
-  --text:#eaeaea;
-  --muted:#a7a7a7;
-  --accent:#2ea043;
-  --danger:#e53e3e;
-  --danger-dim:#8f2929;
-  --line:#2a2a2a;
-}}
-* {{ box-sizing: border-box; }}
-body {{
-  margin: 0;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
-  background: var(--bg);
-  color: var(--text);
-}}
-a {{ color: inherit; }}
-.topbar {{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  padding:16px 20px;
-  border-bottom:1px solid var(--line);
-  background:#141414;
-}}
-.brand {{ font-weight:600; letter-spacing:0.04em; }}
-.nav {{ display:flex; gap:8px; flex-wrap:wrap; }}
-.nav-link {{
-  padding:7px 14px;
-  border-radius:20px;
-  border:1px solid transparent;
-  text-decoration:none;
-  color:var(--muted);
-  background:transparent;
-}}
-.nav-link:hover {{ color:var(--text); }}
-.nav-link.active {{
-  color:#0d170d;
-  background:var(--accent);
-  border-color:var(--accent);
-  font-weight:600;
-}}
-.container {{ max-width:960px; margin:0 auto; padding:28px 20px 40px; }}
-.stack > * + * {{ margin-top:18px; }}
-.card {{
-  background: var(--card);
-  border:1px solid var(--line);
-  border-radius:12px;
-  padding:20px;
-}}
-.card-header {{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }}
-.card-header h2 {{ margin:0; font-size:22px; }}
-.section-title h2 {{ margin:0; font-size:22px; }}
-.section-title p {{ margin:6px 0 0 0; color:var(--muted); font-size:14px; }}
-.btn {{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  gap:6px;
-  padding:8px 14px;
-  border-radius:10px;
-  border:1px solid var(--line);
-  background:#222;
-  color:var(--text);
-  text-decoration:none;
-  cursor:pointer;
-  font-size:14px;
-}}
-.btn:hover {{ filter:brightness(1.12); }}
-.btn.primary {{ background:var(--accent); border-color:var(--accent); color:#0d170d; }}
-.btn.danger {{ background:var(--danger); border-color:#7a2020; }}
-.btn.ghost {{ background:transparent; }}
-.table-wrap {{ overflow-x:auto; }}
-table {{ width:100%; border-collapse:collapse; }}
-th, td {{ border-bottom:1px solid var(--line); padding:10px 8px; text-align:left; }}
-th {{ color:var(--muted); font-size:13px; text-transform:uppercase; letter-spacing:0.06em; }}
-small, .muted {{ color:var(--muted); }}
-input[type=text], select {{
-  width:100%;
-  padding:8px 10px;
-  border:1px solid var(--line);
-  border-radius:10px;
-  background:#121212;
-  color:var(--text);
-}}
-.form-grid {{ display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); }}
-.form-grid .full {{ grid-column:1 / -1; }}
-.option-grid {{ display:grid; gap:18px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }}
-.option-card {{
-  display:block;
-  background:var(--card);
-  border:1px solid var(--line);
-  border-radius:12px;
-  padding:18px;
-  text-decoration:none;
-  transition:transform 0.15s ease, border-color 0.15s ease;
-}}
-.option-card:hover {{ transform:translateY(-3px); border-color:var(--accent); }}
-.option-card h3 {{ margin:0 0 8px 0; font-size:20px; }}
-.option-card p {{ margin:0; color:var(--muted); line-height:1.4; }}
-.info-block {{ background:#131313; border:1px dashed var(--line); border-radius:10px; padding:14px; }}
-.actions {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:16px; }}
-.badge {{ display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:#ddd; }}
-</style>
-{extra_head}
-</head>
-<body>
-<header class="topbar">
-  <div class="brand">{brand_html}</div>
-  <nav class="nav">{''.join(nav_links)}</nav>
-</header>
-<main class="container stack">
-{body_html}
-</main>
-{extra_js}
-</body>
-</html>
-"""
+    html_doc = LAYOUT_TEMPLATE
+    replacements = {
+        "PAGE_TITLE": page_title_html,
+        "BRAND_HTML": brand_html,
+        "NAV_LINKS": "".join(nav_links),
+        "BODY_HTML": body_html,
+        "EXTRA_HEAD": extra_head,
+        "EXTRA_JS": extra_js,
+    }
+    for token, value in replacements.items():
+        html_doc = html_doc.replace(f"{{{{{token}}}}}", value)
     return HTMLResponse(html_doc)
 
 
@@ -275,7 +164,7 @@ def render_routes_rows(data: Dict[str, Any]) -> str:
                 f"<td>{midi_esc}</td>"
                 f"<td>{osc_esc}</td>"
                 f"<td>{vtype_esc}</td>"
-                f"<td><span data-osc='{osc_esc}'>–</span></td>"
+                f"<td><span data-route='{i}' data-osc='{osc_esc}'>–</span></td>"
                 "<td>"
                 "<form method='post' action='/delete_route' style='display:inline;'>"
                 f"<input type='hidden' name='idx' value='{i}'/>"
@@ -317,14 +206,37 @@ def index():
     }
     return String(v);
   }
-  function applyValue(path, value){
+  function applyValueByPath(path, value){
+    if (!path){ return; }
     const nodes = document.querySelectorAll('[data-osc="' + path + '"]');
     nodes.forEach(el => { el.textContent = formatValue(value); });
   }
+  function applyValueByRoute(routeIdx, value){
+    if (routeIdx === undefined || routeIdx === null){ return 0; }
+    const idxStr = String(routeIdx);
+    const nodes = document.querySelectorAll('[data-route="' + idxStr + '"]');
+    nodes.forEach(el => { el.textContent = formatValue(value); });
+    return nodes.length;
+  }
+  function applyStatePayload(payload){
+    if (!payload){ return; }
+    const routeIdx = payload.route_idx ?? payload.routeIndex ?? payload.idx;
+    const value = payload.value;
+    const path = payload.path;
+    const matched = applyValueByRoute(routeIdx, value);
+    if (!matched){
+      applyValueByPath(path, value);
+    }
+  }
   fetch('/state').then(r=>r.json()).then(st=>{
-    Object.entries(st).forEach(([path, obj])=>{
-      if (obj && 'value' in obj){
-        applyValue(path, obj.value);
+    Object.entries(st || {}).forEach(([key, obj])=>{
+      if (obj && typeof obj === 'object' && 'path' in obj){
+        const matched = applyValueByRoute(key, obj.value);
+        if (!matched){
+          applyValueByPath(obj.path, obj.value);
+        }
+      } else if (obj && typeof obj === 'object' && 'value' in obj){
+        applyValueByPath(key, obj.value);
       }
     });
   }).catch(()=>{});
@@ -334,8 +246,8 @@ def index():
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
-        if (msg && msg.path !== undefined){
-          applyValue(msg.path, msg.value);
+        if (msg && (msg.route_idx !== undefined || msg.path !== undefined)){
+          applyStatePayload(msg);
         }
       } catch(e){}
     };
@@ -368,18 +280,18 @@ def settings_page():
 <form id="settingsForm" method="post" action="/settings/save" class="stack">
   <section class="card stack">
     <div class="section-title">
-      <h2>Dispositivo MIDI</h2>
-      <p class="muted">Selecciona la entrada MIDI disponible.</p>
+      <h2>Preset name</h2>
+      <p class="muted">Nombre identificador para guardar y compartir esta configuración.</p>
     </div>
-    <select name="midi_input">{''.join(options)}</select>
+    <input type="text" name="config_name" value="{config_name}" maxlength="64">
   </section>
 
   <section class="card stack">
     <div class="section-title">
-      <h2>Preset</h2>
-      <p class="muted">Nombre identificador para guardar y compartir esta configuración.</p>
+      <h2>Dispositivo MIDI</h2>
+      <p class="muted">Selecciona la entrada MIDI disponible.</p>
     </div>
-    <input type="text" name="config_name" value="{config_name}" maxlength="64">
+    <select name="midi_input">{''.join(options)}</select>
   </section>
 
   <section class="card stack">
@@ -494,7 +406,7 @@ def add_route_manual_page():
     <h2>Añadir ruta manual</h2>
     <p class="muted">Configura la ruta MIDI → OSC rellenando los campos.</p>
   </div>
-  <form method="post" action="/add_route" class="stack">
+  <form method="post" action="/add_route" class="stack" id="manualForm">
     <div class="form-grid">
       <div>
         <label>Tipo</label>
@@ -504,26 +416,22 @@ def add_route_manual_page():
         <label>Nota o CC (0..127)</label>
         <input type="text" name="num">
       </div>
-      <div>
-        <label>Canal (solo CC, opcional)</label>
-        <input type="text" name="channel" placeholder="(opcional)">
-      </div>
       <div class="full">
         <label>OSC Path</label>
         <input type="text" name="osc" value="/D3/x">
       </div>
       <div>
         <label>Tipo de valor OSC</label>
-        <select name="vtype">
+        <select name="vtype" id="manualVType">
           <option value="float">float (0..1)</option>
           <option value="int">int (0..127)</option>
           <option value="bool">bool</option>
           <option value="const">const</option>
         </select>
       </div>
-      <div>
+      <div id="manualConstRow" style="display:none;">
         <label>Const (si vtype=const)</label>
-        <input type="text" name="const" placeholder="ej: 1.0">
+        <input type="text" name="const" id="manualConstInput" placeholder="ej: 1.0">
       </div>
     </div>
     <div class="actions">
@@ -533,7 +441,21 @@ def add_route_manual_page():
   </form>
 </section>
 """
-    return render_layout(body, active="add")
+    extra_js = """
+<script>
+(function(){
+  const vSel = document.getElementById('manualVType');
+  const constRow = document.getElementById('manualConstRow');
+  if (!vSel || !constRow){ return; }
+  const toggle = () => {
+    constRow.style.display = (vSel.value === 'const') ? 'block' : 'none';
+  };
+  vSel.addEventListener('change', toggle);
+  toggle();
+})();
+</script>
+"""
+    return render_layout(body, active="add", extra_js=extra_js)
 
 @app.get("/add/learn", response_class=HTMLResponse)
 def add_route_learn_page():
@@ -541,9 +463,9 @@ def add_route_learn_page():
 <section class="card stack">
   <div class="section-title">
     <h2>LEARN automático</h2>
-    <p class="muted">Activa LEARN y mueve un control para crear la ruta automáticamente.</p>
+    <p class="muted">Mueve un control MIDI, revisa el último mensaje detectado y pulsa aceptar para crear la ruta.</p>
   </div>
-  <form method="post" action="/arm_learn" id="learnForm" class="stack">
+  <form method="post" action="/commit_learn" id="learnForm" class="stack">
     <div class="form-grid">
       <div class="full">
         <label>OSC Path</label>
@@ -563,15 +485,23 @@ def add_route_learn_page():
         <input type="text" name="const" id="constInput" placeholder="ej: 1.0">
       </div>
     </div>
-    <div class="actions">
-      <button class="btn ghost" id="learnToggle" type="submit">LEARN DISABLED</button>
-      <a class="btn ghost" href="/cancel_learn" id="cancelLink" style="display:none;">Cancelar</a>
+    <div class="info-block" id="livePreview">
+      <div><strong>Ruta OSC:</strong> <code id="summaryOsc">/D3/learn</code></div>
+      <div><strong>Tipo de valor:</strong> <span id="summaryType">float (0..1)</span></div>
+      <div><strong>Tipo de mensaje:</strong> <span id="summaryKind">Esperando…</span></div>
+      <div><strong>Último mensaje:</strong> <span id="summaryCandidate">Esperando evento MIDI…</span></div>
+      <div class="muted" id="summaryDetails" style="margin-top:4px; display:none;"></div>
     </div>
-    <small>El próximo evento MIDI creará la ruta y te llevará de vuelta a Home.</small>
+    <div class="actions">
+      <button class="btn primary" id="learnAccept" type="button" disabled>Aceptar</button>
+      <button class="btn" type="button" id="learnCancel">Cancelar</button>
+    </div>
+    <div class="muted" id="learnMessage" style="display:none;"></div>
+    <small>En esta pantalla el aprendizaje se inicia automáticamente y se muestra siempre el último mensaje recibido.</small>
   </form>
   <div class="info-block" id="learnResult" style="display:none;">
-    <div class="muted">Último LEARN</div>
-    <code id="resultCode" style="display:block; margin-top:6px; white-space:pre-wrap;"></code>
+    <div class="muted">Última ruta creada</div>
+    <div id="resultSummary" style="margin-top:6px;"></div>
     <form method="post" action="/clear_learn_result" style="margin-top:12px;">
       <button class="btn" type="submit">Ocultar resultado</button>
     </form>
@@ -583,45 +513,261 @@ def add_route_learn_page():
 (function(){
   const vtypeSel = document.getElementById('vtypeInput');
   const constRow = document.getElementById('constRow');
-  if (vtypeSel){
-    const toggleConst = () => { constRow.style.display = (vtypeSel.value === 'const') ? 'block' : 'none'; };
-    vtypeSel.addEventListener('change', toggleConst);
-    toggleConst();
+  const form = document.getElementById('learnForm');
+  const oscInput = document.getElementById('oscInput');
+  const constInput = document.getElementById('constInput');
+  const summaryOsc = document.getElementById('summaryOsc');
+  const summaryType = document.getElementById('summaryType');
+  const summaryKind = document.getElementById('summaryKind');
+  const summaryCandidate = document.getElementById('summaryCandidate');
+  const summaryDetails = document.getElementById('summaryDetails');
+  const acceptBtn = document.getElementById('learnAccept');
+  const cancelBtn = document.getElementById('learnCancel');
+  const resultBox = document.getElementById('learnResult');
+  const resultSummary = document.getElementById('resultSummary');
+  const messageBox = document.getElementById('learnMessage');
+
+  if (!form) { return; }
+
+  const TYPE_LABELS = {
+    "float": "float (0..1)",
+    "int": "int (0..127)",
+    "bool": "bool",
+    "const": "const"
+  };
+  const DEFAULT_ACCEPT_LABEL = acceptBtn.textContent;
+  let isSaving = false;
+  let lastCandidateKey = null;
+
+  const showMessage = (text) => {
+    if (!messageBox){ return; }
+    if (text){
+      messageBox.textContent = text;
+      messageBox.style.display = 'block';
+    } else {
+      messageBox.textContent = '';
+      messageBox.style.display = 'none';
+    }
+  };
+
+  const setAcceptLoading = (loading) => {
+    if (loading){
+      acceptBtn.textContent = 'Guardando…';
+      acceptBtn.disabled = true;
+    } else {
+      acceptBtn.textContent = DEFAULT_ACCEPT_LABEL;
+    }
+  };
+
+  const toggleConst = () => {
+    if (!constRow) { return; }
+    const show = vtypeSel.value === 'const';
+    constRow.style.display = show ? 'block' : 'none';
+  };
+
+  const updateSummaryFromInputs = () => {
+    summaryOsc.textContent = oscInput.value || '/learn';
+    const typeLabel = TYPE_LABELS[vtypeSel.value] || vtypeSel.value;
+    summaryType.textContent = typeLabel;
+    if (vtypeSel.value === 'const' && constInput.value !== ''){
+      summaryType.textContent = `${typeLabel} = ${constInput.value}`;
+    }
+    showMessage('');
+  };
+
+  async function pushConfig(){
+    try {
+      const fd = new FormData(form);
+      if (vtypeSel.value !== 'const'){
+        fd.delete('const');
+      }
+      await fetch('/arm_learn', {method:'POST', body: fd});
+    } catch(e){}
   }
-  let prevArmed = null;
+
+  function formatCandidate(candidate){
+    if (!candidate){ return ''; }
+    if (candidate.type === 'note'){
+      const hasNote = typeof candidate.note === 'number';
+      const noteVal = hasNote ? candidate.note : '?';
+      const msgType = candidate.message_type === 'note_off' ? 'nota off' : 'nota';
+      return msgType + ' ' + noteVal;
+    }
+    const hasCc = typeof candidate.cc === 'number';
+    const ccVal = hasCc ? candidate.cc : '?';
+    const ch = candidate.channel;
+    const chPart = (typeof ch === 'number') ? ' canal ' + ch : '';
+    return 'cc ' + ccVal + chPart;
+  }
+
+  function formatCandidateDetails(candidate){
+    if (!candidate){ return ''; }
+    const bits = [];
+    if (candidate.type === 'note'){
+      if (typeof candidate.channel === 'number'){ bits.push('canal ' + candidate.channel); }
+      if (typeof candidate.velocity === 'number'){ bits.push('velocidad ' + candidate.velocity); }
+    } else if (candidate.type === 'cc'){
+      if (typeof candidate.channel === 'number'){ bits.push('canal ' + candidate.channel); }
+      if (typeof candidate.value === 'number'){ bits.push('valor ' + candidate.value); }
+    }
+    return bits.join(' · ');
+  }
+
+  function formatResult(result){
+    if (!result){ return ''; }
+    const route = result.route || {};
+    const osc = route.osc || '';
+    const vtype = route.vtype || '';
+    let midiPart = result.label || '';
+    if (!midiPart){
+      if (route.type === 'note'){
+        const noteVal = (typeof route.note === 'number') ? route.note : '?';
+        midiPart = 'nota ' + noteVal;
+      } else if (route.type === 'cc'){
+        const ccVal = (typeof route.cc === 'number') ? route.cc : '?';
+        midiPart = 'cc ' + ccVal;
+        if (typeof route.channel === 'number'){
+          midiPart += ' canal ' + route.channel;
+        }
+      } else {
+        midiPart = 'MIDI';
+      }
+    }
+    return midiPart + ' → ' + osc + ' (' + vtype + ')';
+  }
+
+  let initialised = false;
+
   async function refreshLearnUI(){
     try {
       const res = await fetch('/learn_state');
       const st = await res.json();
-      const toggle = document.getElementById('learnToggle');
-      const cancelLink = document.getElementById('cancelLink');
-      if (st.armed){
-        toggle.textContent = 'LEARN ENABLED';
-        toggle.classList.add('danger');
-        toggle.classList.remove('ghost');
-        cancelLink.style.display = 'inline-flex';
+      if (!initialised){
+        if (st.osc && !oscInput.value){
+          oscInput.value = st.osc;
+        }
+        if (st.vtype){
+          vtypeSel.value = st.vtype;
+        }
+        if (st.vtype === 'const' && typeof st.const !== 'undefined' && !constInput.value){
+          constInput.value = st.const;
+        }
+        toggleConst();
+        updateSummaryFromInputs();
+        initialised = true;
+      }
+      summaryOsc.textContent = st.osc || '/learn';
+      const typeLabel = TYPE_LABELS[st.vtype] || st.vtype;
+      summaryType.textContent = typeLabel;
+      if (st.vtype === 'const' && typeof st.const !== 'undefined'){
+        summaryType.textContent = `${typeLabel} = ${st.const}`;
+        if (!constInput.matches(':focus')){
+          constInput.value = st.const;
+        }
+      }
+
+      if (st.candidate){
+        summaryCandidate.textContent = formatCandidate(st.candidate);
+        summaryKind.textContent = (st.candidate.type === 'note') ? 'nota' : 'cc';
+        const details = formatCandidateDetails(st.candidate);
+        if (details){
+          summaryDetails.textContent = details;
+          summaryDetails.style.display = 'block';
+        } else {
+          summaryDetails.textContent = '';
+          summaryDetails.style.display = 'none';
+        }
+        const candidateKey = JSON.stringify([st.candidate.type, st.candidate.note, st.candidate.cc, st.candidate.channel, st.candidate.message_type]);
+        if (candidateKey !== lastCandidateKey){
+          showMessage('');
+        }
+        lastCandidateKey = candidateKey;
+        if (!isSaving){
+          acceptBtn.disabled = false;
+        }
       } else {
-        toggle.textContent = 'LEARN DISABLED';
-        toggle.classList.remove('danger');
-        toggle.classList.add('ghost');
-        cancelLink.style.display = 'none';
+        summaryCandidate.textContent = 'Esperando evento MIDI…';
+        summaryKind.textContent = 'Esperando…';
+        summaryDetails.textContent = '';
+        summaryDetails.style.display = 'none';
+        acceptBtn.disabled = true;
+        lastCandidateKey = null;
       }
-      const lr = document.getElementById('learnResult');
-      const rc = document.getElementById('resultCode');
-      if (st.result){
-        lr.style.display = 'block';
-        rc.textContent = JSON.stringify(st.result, null, 2);
+
+      if (st.result && st.result.route){
+        resultBox.style.display = 'block';
+        const summary = formatResult(st.result);
+        resultSummary.textContent = summary;
       } else {
-        lr.style.display = 'none';
+        resultBox.style.display = 'none';
+        resultSummary.textContent = '';
       }
-      if (prevArmed === true && st.armed === false && st.result){
-        window.location.href = '/';
-      }
-      prevArmed = st.armed;
     } catch(e){}
   }
+
+  async function commitCandidate(confirm=false){
+    if (isSaving || acceptBtn.disabled){ return; }
+    showMessage('');
+    isSaving = true;
+    setAcceptLoading(true);
+    try {
+      const fd = new FormData(form);
+      if (vtypeSel.value !== 'const'){
+        fd.delete('const');
+      }
+      if (confirm){
+        fd.append('confirm', '1');
+      }
+      const res = await fetch('/commit_learn', {method:'POST', body: fd});
+      let data = null;
+      try { data = await res.json(); } catch(_) { data = null; }
+      if (res.ok && data && data.ok){
+        window.location.href = data.redirect || '/';
+        return;
+      }
+      if (res.status === 409 && data && data.reason === 'duplicate'){
+        const proceed = window.confirm(`La ruta OSC "${data.osc}" ya existe. ¿Deseas continuar?`);
+        if (proceed){
+          isSaving = false;
+          setAcceptLoading(false);
+          acceptBtn.disabled = false;
+          return commitCandidate(true);
+        }
+        showMessage('Ruta no guardada. Ajusta la ruta OSC si no quieres sobrescribir.');
+      } else if (data && data.reason === 'no_candidate'){
+        showMessage('Todavía no hay mensaje MIDI capturado.');
+      } else {
+        showMessage('No se pudo guardar la ruta. Vuelve a intentarlo.');
+      }
+    } catch(e){
+      showMessage('Error de red al guardar la ruta.');
+    } finally {
+      if (isSaving){
+        isSaving = false;
+        setAcceptLoading(false);
+      }
+      refreshLearnUI();
+    }
+  }
+
+  form.addEventListener('submit', (ev) => ev.preventDefault());
+  acceptBtn.addEventListener('click', () => commitCandidate(false));
+
+  toggleConst();
+  updateSummaryFromInputs();
+  pushConfig();
   refreshLearnUI();
-  setInterval(refreshLearnUI, 600);
+  setInterval(refreshLearnUI, 250);
+
+  oscInput.addEventListener('input', updateSummaryFromInputs);
+  oscInput.addEventListener('change', () => pushConfig());
+  vtypeSel.addEventListener('change', () => { toggleConst(); updateSummaryFromInputs(); pushConfig(); });
+  constInput.addEventListener('input', updateSummaryFromInputs);
+  constInput.addEventListener('change', () => pushConfig());
+
+  cancelBtn.addEventListener('click', () => {
+    window.location.href = '/cancel_learn';
+  });
 })();
 </script>
 """
@@ -640,18 +786,32 @@ async def ws_endpoint(ws: WebSocket):
 
 @app.post("/push_state")
 async def push_state(request: Request):
-    """Recibe {path, value, ts} del core y lo reenvía por websockets; guarda en STATE_FILE también."""
+    """Recibe {route_idx?, path, value, ts, route?} del core y lo refleja en el estado + websockets."""
     try:
         payload = await request.json()
-        path = str(payload.get("path"))
+        path = str(payload.get("path") or "")
         value = payload.get("value")
         ts = payload.get("ts") or datetime.utcnow().isoformat() + "Z"
-        # Persistimos en STATE_FILE por si se conecta tarde la UI
+        route_idx = payload.get("route_idx")
+        route_meta = payload.get("route") or {}
+
         st = load_json(STATE_FILE, {})
-        st[path] = {"value": value, "ts": ts}
+        if route_idx is not None:
+            st[str(route_idx)] = {
+                "path": path,
+                "value": value,
+                "ts": ts,
+                "route": route_meta,
+            }
+        else:
+            st[path] = {"value": value, "ts": ts}
         save_json(STATE_FILE, st)
-        # Broadcast a los clientes
-        await ws_manager.broadcast_json({"path": path, "value": value, "ts": ts})
+
+        broadcast_payload = {"path": path, "value": value, "ts": ts}
+        if route_idx is not None:
+            broadcast_payload["route_idx"] = str(route_idx)
+            broadcast_payload["route"] = route_meta
+        await ws_manager.broadcast_json(broadcast_payload)
         return JSONResponse({"ok": True})
     except Exception as e:
         return JSONResponse({"ok": False, "err": str(e)}, status_code=400)
@@ -663,37 +823,123 @@ def state():
 # ---------- Learn ----------
 @app.get("/learn_state")
 def learn_state():
-    return JSONResponse(load_json(LEARN_REQ_FILE, {}))
+    raw = load_json(LEARN_REQ_FILE, {})
+    resp: Dict[str, Any] = {
+        "armed": bool(raw.get("armed")),
+        "osc": raw.get("osc", "/learn"),
+        "vtype": raw.get("vtype", "float"),
+        "candidate": raw.get("candidate"),
+        "result": raw.get("result"),
+    }
+    if resp["vtype"] == "const":
+        try:
+            resp["const"] = float(raw.get("const", 1.0))
+        except (TypeError, ValueError):
+            resp["const"] = 1.0
+    return JSONResponse(resp)
 
 @app.post("/clear_learn_result")
 def clear_learn_result():
     st = load_json(LEARN_REQ_FILE, {})
     st.pop("result", None)
     save_json(LEARN_REQ_FILE, st)
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/add/learn", status_code=303)
 
 
 @app.post("/arm_learn")
 def arm_learn(osc: str = Form(...), vtype: str = Form(...), const: str = Form("")):
+    existing = load_json(LEARN_REQ_FILE, {})
+    prev_armed = bool(existing.get("armed"))
     osc_path = osc.strip() or "/learn"
-    payload: Dict[str, Any] = {
-        "armed": True,
-        "osc": osc_path,
-        "vtype": vtype
-    }
+
+    existing["armed"] = True
+    existing["osc"] = osc_path
+    existing["vtype"] = vtype
     if vtype == "const":
         try:
-            payload["const"] = float(const)
-        except ValueError:
-            payload["const"] = 1.0
-    payload.pop("result", None)
-    save_json(LEARN_REQ_FILE, payload)
-    return RedirectResponse("/", status_code=303)
+            existing["const"] = float(const)
+        except (TypeError, ValueError):
+            existing["const"] = 1.0
+    else:
+        existing.pop("const", None)
+    existing.pop("result", None)
+    if not prev_armed:
+        existing.pop("candidate", None)
+
+    save_json(LEARN_REQ_FILE, existing)
+    return JSONResponse({"ok": True, "armed": True})
+
+
+@app.post("/commit_learn")
+def commit_learn(osc: str = Form(...), vtype: str = Form(...), const: str = Form(""), confirm: str = Form("")):
+    st = load_json(LEARN_REQ_FILE, {})
+    candidate = st.get("candidate")
+    if not candidate:
+        return JSONResponse({"ok": False, "reason": "no_candidate"}, status_code=400)
+
+    osc_path = osc.strip() or "/learn"
+    data = get_map()
+
+    duplicates = [r for r in data.get("routes", []) if str(r.get("osc", "")).strip() == osc_path]
+    confirmed = str(confirm or "").strip() == "1"
+    if duplicates and not confirmed:
+        return JSONResponse(
+            {"ok": False, "reason": "duplicate", "osc": osc_path, "count": len(duplicates)},
+            status_code=409
+        )
+
+    if candidate.get("type") == "note":
+        route: Dict[str, Any] = {
+            "type": "note",
+            "note": int(candidate.get("note", 0)),
+            "osc": osc_path,
+            "vtype": vtype,
+        }
+    else:
+        route = {
+            "type": "cc",
+            "cc": int(candidate.get("cc", 0)),
+            "osc": osc_path,
+            "vtype": vtype,
+        }
+        ch = candidate.get("channel")
+        if ch is not None:
+            try:
+                route["channel"] = int(ch)
+            except (TypeError, ValueError):
+                pass
+
+    if vtype == "const":
+        try:
+            route["const"] = float(const)
+            st["const"] = float(const)
+        except (TypeError, ValueError):
+            route["const"] = 1.0
+            st["const"] = 1.0
+    else:
+        st.pop("const", None)
+
+    data["routes"].append(route)
+    persist_map(data)
+
+    st["armed"] = False
+    st["osc"] = osc_path
+    st["vtype"] = vtype
+    st["result"] = {
+        "label": candidate.get("label"),
+        "route": route,
+    }
+    st.pop("candidate", None)
+    save_json(LEARN_REQ_FILE, st)
+
+    return JSONResponse({"ok": True, "redirect": "/"})
+
 
 @app.get("/cancel_learn")
 def cancel_learn():
     st = load_json(LEARN_REQ_FILE, {})
     st["armed"] = False
+    st.pop("candidate", None)
     st.pop("result", None)
     save_json(LEARN_REQ_FILE, st)
     return RedirectResponse("/", status_code=303)
