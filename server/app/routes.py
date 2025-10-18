@@ -174,7 +174,6 @@ async def api_delete_device(serial: str, request: Request):
     LOGGER.info("API DELETE /api/devices/%s", serial)
     db.delete_device(serial)
     registry = _registry(request)
-    manager = _manager(request)
     for dev in registry.list_devices():
         if not dev.get("online"):
             continue
@@ -185,12 +184,10 @@ async def api_delete_device(serial: str, request: Request):
         if desired_index is None:
             continue
         if dev.get("index") != desired_index:
-            try:
-                manager.request_index_update(dev.get("serial"), desired_index)
-            except Exception as exc:
-                LOGGER.error(
-                    "No se pudo actualizar índice de %s tras borrar dispositivo: %s",
-                    dev.get("serial"),
-                    exc,
-                )
+            LOGGER.info(
+                "Índice pendiente para %s (runtime=%s, deseado=%s); se sincronizará en el próximo heartbeat.",
+                dev.get("serial"),
+                dev.get("index"),
+                desired_index,
+            )
     return {"ok": True}

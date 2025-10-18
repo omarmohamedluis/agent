@@ -8,7 +8,7 @@ from pathlib import Path
 class Settings:
     """Static configuration for the control server."""
 
-    http_port: int = 6969
+    http_port: int = 6981
     broadcast_ip: str = "255.255.255.255"
     broadcast_port: int = 37020
     reply_port: int = 37021

@@ -9,11 +9,7 @@ __pycache__/
 # Logs y temporales
 *.log
 *.tmp
-/client/logs/
-/server/logs/
-/server/omi.db
 client/agent_pi/data/
-
 
 # Archivos del sistema
 .DS_Store
@@ -26,10 +22,6 @@ Thumbs.db
 
 
 # servicio midi
-OMIMIDI_state.json
-OMIMIDI_learn_request.json
-OMIMIDI_last_event.json
-OMIMIDI_webui.pid
-OMIMIDI_map.json
 
-REFACTOR_CHECKLIST.txt
+
+pensamientos.txt

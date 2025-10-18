@@ -178,10 +178,10 @@ def UIShutdownProceess(percent: int, label: str = "Apagando"):
 def SyncingUI(percent: int, stage: str = "Syncing"):
     """Pantalla de sincronización/transition con barra + etapa textual."""
     img = _base_canvas()
-    _draw_header_with_progress(img, percent, "SYNCING")
-    draw = ImageDraw.Draw(img)
-    stage_text = f"{max(0, min(100, percent))}% {stage}".strip()
-    draw.text((6, HEADER_H + 8), stage_text[:20], font=_FONT, fill=255)
+    percent = max(0, min(100, int(percent)))
+    stage = (stage or "Sync").upper()
+    label = f"{percent:02d}% {stage}".strip()
+    _draw_header_with_progress(img, percent, label[:18])
     _display(img)
 
 def EstandardUse(snapshot: dict, server_online: bool, json_path: Path = DEFAULT_JSON_PATH):

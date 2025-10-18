@@ -6,7 +6,9 @@ import uvicorn
 
 from server.app import create_app
 from server.app.settings import Settings
+from server.logger import get_server_logger
 
+get_server_logger()
 app = create_app()
 
 

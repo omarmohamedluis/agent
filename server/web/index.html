@@ -49,6 +49,27 @@
   .btn.danger-solid { background:var(--danger); border-color:var(--danger); color:#140404; }
   .btn.danger-solid:hover { background:#ff7676; }
   .index-label { display:inline-block; margin-right:8px; font-size:14px; color:var(--muted); }
+  .service-card-header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+  .service-card-header h3 { margin:0; font-size:18px; display:flex; align-items:center; gap:8px; }
+  .service-config-list { width:100%; border-collapse:collapse; }
+  .service-config-list th, .service-config-list td { padding:8px; border-bottom:1px solid #333; text-align:left; vertical-align:top; }
+  .service-config-list td.actions { width:140px; }
+  .pill { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; background:#242424; border:1px solid var(--line); font-size:12px; color:var(--muted); }
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.88); display:none; align-items:center; justify-content:center; z-index:1200; padding:16px; }
+  .modal-overlay.active { display:flex; }
+  .modal { background:#171717; border:1px solid #2e2e2e; border-radius:12px; width:100%; max-width:720px; max-height:90vh; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,0.45); }
+  .modal header { padding:16px 20px; border-bottom:1px solid #2c2c2c; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .modal header h3 { margin:0; font-size:18px; }
+  .modal-content { padding:20px; overflow:auto; display:flex; flex-direction:column; gap:16px; }
+  .modal footer { padding:16px 20px; border-top:1px solid #2c2c2c; display:flex; justify-content:flex-end; gap:12px; }
+  .form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
+  .form-grid label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
+  .form-grid input, .form-grid select, .form-grid textarea { width:100%; background:#1f1f1f; color:var(--text); border:1px solid #3a3a3a; border-radius:8px; padding:6px 10px; font-family:inherit; }
+  .routes-table { width:100%; border-collapse:collapse; }
+  .routes-table th, .routes-table td { border-bottom:1px solid #333; padding:8px; text-align:left; }
+  .routes-table td.actions { width:48px; text-align:right; }
+  .btn.icon { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; padding:0; border-radius:8px; }
+  .helper-text { font-size:12px; color:var(--muted); }
   </style>
 </head>
 <body>
@@ -65,6 +86,86 @@
       <h3 id="overlayTitle"></h3>
     </header>
     <iframe id="configFrame" src="about:blank"></iframe>
+  </div>
+  <div class="modal-overlay" id="configEditorOverlay">
+    <div class="modal">
+      <header>
+        <h3 id="configEditorTitle">Configurar servicio</h3>
+        <button class="btn" id="configEditorCloseBtn">Cerrar</button>
+      </header>
+      <form id="configEditorForm">
+        <div class="modal-content">
+          <div class="form-grid">
+            <div>
+              <label for="configService">Servicio</label>
+              <input type="text" id="configService" name="service" list="serviceSuggestions" placeholder="MIDI" required>
+              <datalist id="serviceSuggestions"></datalist>
+            </div>
+            <div>
+              <label for="configName">Nombre de configuración</label>
+              <input type="text" id="configName" name="name" placeholder="por ej. rig_teatro" required>
+              <div class="helper-text">Debe ser único por servicio.</div>
+            </div>
+            <div>
+              <label for="configSource">Origen</label>
+              <input type="text" id="configSource" name="source" value="server-ui" readonly>
+            </div>
+          </div>
+
+          <section id="midiConfigSection" class="stack">
+            <div class="form-grid">
+              <div>
+                <label for="midiInput">Entrada MIDI</label>
+                <input type="text" id="midiInput" name="midi_input" placeholder="(auto)">
+              </div>
+              <div>
+                <label for="midiOscPort">Puerto OSC</label>
+                <input type="number" id="midiOscPort" name="osc_port" min="1" max="65535" value="1024">
+              </div>
+              <div>
+                <label for="midiOscIps">IPs OSC (coma)</label>
+                <input type="text" id="midiOscIps" name="osc_ips" value="127.0.0.1">
+              </div>
+              <div>
+                <label for="midiUiPort">Puerto WebUI</label>
+                <input type="number" id="midiUiPort" name="ui_port" min="1" max="65535" value="9001">
+              </div>
+            </div>
+            <div class="card">
+              <div class="service-card-header">
+                <h3>Rutas MIDI → OSC</h3>
+                <button type="button" class="btn" id="addMidiRouteBtn">Añadir ruta</button>
+              </div>
+              <table class="routes-table" id="midiRoutesTable">
+                <thead>
+                  <tr>
+                    <th>Tipo</th>
+                    <th>Nota/CC</th>
+                    <th>Canal</th>
+                    <th>OSC Path</th>
+                    <th>Tipo valor</th>
+                    <th>Const</th>
+                    <th class="actions"></th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+              <div class="helper-text">Define cada ruta MIDI y la salida OSC asociada.</div>
+            </div>
+          </section>
+
+          <section id="genericConfigSection" class="stack" style="display:none;">
+            <label for="genericConfigData">Payload JSON</label>
+            <textarea id="genericConfigData" rows="10" placeholder='{"key": "value"}'></textarea>
+            <div class="helper-text">Introduce el JSON que se almacenará para este servicio.</div>
+          </section>
+        </div>
+        <footer>
+          <button type="button" class="btn" id="configEditorCancelBtn">Cancelar</button>
+          <button type="submit" class="btn warning" id="configEditorSaveBtn">Guardar configuración</button>
+        </footer>
+      </form>
+    </div>
   </div>
   <script src="/static/app.js"></script>
 </body>
