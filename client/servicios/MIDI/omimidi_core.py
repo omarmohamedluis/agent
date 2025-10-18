@@ -80,8 +80,8 @@ def cleanup_runtime_files():
             os.remove(path)
         except FileNotFoundError:
             pass
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("No se pudo eliminar archivo temporal %s: %s", path, exc)
 
 atexit.register(cleanup_runtime_files)
 
@@ -207,9 +207,9 @@ def _notify_webui_async(route_idx: int, path: str, value: Any, route_meta: Dict[
                 method="POST"
             )
             urllib.request.urlopen(req, timeout=0.2).read()
-        except Exception:
-            # Si no hay WebUI escuchando, seguimos sin bloquear
-            pass
+        except Exception as exc:
+            # Si no hay WebUI escuchando, seguimos sin bloquear pero lo registramos.
+            LOGGER.debug("No se pudo notificar estado a la WebUI (%s): %s", path, exc)
     threading.Thread(target=_post, daemon=True).start()
 
 # ---- Core ----
@@ -269,28 +269,28 @@ class OmiMidiCore:
             os.kill(pid, signal.SIGTERM)
             # breve espera
             time.sleep(0.5)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("No se pudo finalizar WebUI previa: %s", exc)
         try:
             os.remove(WEBUI_PID_FILE)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("No se pudo borrar PID file de WebUI: %s", exc)
 
     def _check_restart_flag(self):
         """Si hay flag de reinicio, mata WebUI y re-ejecuta el core."""
         if os.path.exists(RESTART_REQ_FILE):
             try:
                 os.remove(RESTART_REQ_FILE)
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.warning("No se pudo limpiar flag de reinicio: %s", exc)
             LOGGER.info("Reiniciando proceso…")
 
             # Cerrar recursos antes de re-ejecutar
             try:
                 if self.inport:
                     self.inport.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.debug("Error cerrando puerto MIDI antes de reiniciar: %s", exc)
 
             # Mata la WebUI existente
             self._kill_existing_webui()
@@ -435,8 +435,8 @@ class OmiMidiCore:
         try:
             if self.inport:
                 self.inport.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("Error cerrando puerto MIDI al detener: %s", exc)
 
     def run(self) -> None:
         LOGGER.info("🎹 OMIMIDI Core — MIDI→OSC")
@@ -458,8 +458,11 @@ class OmiMidiCore:
             self._stop.set()
         finally:
             self._stop.set()
-            if self.inport:
-                self.inport.close()
+            try:
+                if self.inport:
+                    self.inport.close()
+            except Exception as exc:
+                LOGGER.debug("Error cerrando puerto MIDI al finalizar: %s", exc)
             cleanup_runtime_files()
             LOGGER.info("Bye!")
 

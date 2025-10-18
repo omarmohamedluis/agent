@@ -1,5 +1,6 @@
 # AppHandler.py
 from __future__ import annotations
+import logging
 import os
 import sys
 import time
@@ -14,11 +15,7 @@ from jsonconfig import (
     discover_services,
     get_service_definition,
 )
-from logger import (
-    default_service_log_paths,
-    get_agent_logger,
-    resolve_log_path,
-)
+from logger import default_service_log_paths, get_agent_logger, get_service_logger, resolve_log_path
 
 BASE_SERVICES_DIR = (Path(__file__).resolve().parent / "servicios").resolve()
 ENTRYPOINT = "service.py"
@@ -86,7 +83,7 @@ def _resolve_definition(name: str) -> dict:
     return dict(definition)
 
 
-def _resolve_paths(definition: dict, name: str) -> tuple[list[str], Path, Dict[str, str], Dict[str, Path]]:
+def _resolve_paths(definition: dict, name: str) -> tuple[list[str], Path, Dict[str, str], Path]:
     service_dir = (BASE_SERVICES_DIR / name).resolve()
     cwd = definition.get("cwd")
     if isinstance(cwd, str) and cwd:
@@ -120,14 +117,18 @@ def _resolve_paths(definition: dict, name: str) -> tuple[list[str], Path, Dict[s
     logs_conf = definition.get("logs") if isinstance(definition.get("logs"), dict) else {}
     stdout_path = resolve_log_path(logs_conf.get("stdout")) if logs_conf else None
     stderr_path = resolve_log_path(logs_conf.get("stderr")) if logs_conf else None
-    if stdout_path is None or stderr_path is None:
+    if stdout_path and stderr_path and stdout_path != stderr_path:
+        _logger.warning(
+            "La configuración de logs de %s especifica stdout/stderr distintos; se usará %s como log combinado",
+            name,
+            stdout_path,
+        )
+    log_path = stdout_path or stderr_path
+    if log_path is None:
         defaults = default_service_log_paths(name)
-        stdout_path = stdout_path or defaults["stdout"]
-        stderr_path = stderr_path or defaults["stderr"]
+        log_path = defaults["stdout"]
 
-    log_paths = {"stdout": stdout_path, "stderr": stderr_path}
-
-    return command, cwd_path, env, log_paths
+    return command, cwd_path, env, log_path
 
 
 def _stop_stream_threads() -> None:
@@ -154,14 +155,10 @@ def _stop_stream_threads() -> None:
     _spool_stop = None
 
 
-def _pump_stream(stream: Optional[TextIO], path: Path, service_name: str, stream_label: str) -> None:
+def _pump_stream(stream: Optional[TextIO], service_name: str, stream_label: str, service_logger: logging.Logger) -> None:
     if stream is None:
         return
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    with path.open("a", encoding="utf-8") as handle:
         while True:
             if _spool_stop and _spool_stop.is_set():
                 break
@@ -169,38 +166,33 @@ def _pump_stream(stream: Optional[TextIO], path: Path, service_name: str, stream
             if not line:
                 break
             text = line.rstrip("\n")
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            prefix = ''
-            if service_name.upper() == "MIDI" and 'error' in text.lower():
-                prefix = 'MIDI ERROR ' if not text.lower().startswith('error') else ''
-            formatted = f"[{timestamp}] {prefix}{text}"
-            try:
-                handle.write(formatted + "\n")
-                handle.flush()
-            except Exception:
-                pass
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            formatted = f"[{stamp}] {stream_label.upper()} {text}"
+            service_logger.info(formatted)
             _logger.debug("%s %s: %s", service_name, stream_label, text)
-            if service_name.upper() == "MIDI" and 'error' in text.lower():
+            if service_name.upper() == "MIDI" and "error" in text.lower():
                 _logger.error("MIDI ERROR: %s", text)
-    try:
-        stream.close()
-    except Exception:
-        pass
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
 
 
-def _start_stream_threads(proc: subprocess.Popen[str], service_name: str, log_paths: Dict[str, Path]) -> None:
+def _start_stream_threads(proc: subprocess.Popen[str], service_name: str, log_path: Path) -> None:
     global _stdout_thread, _stderr_thread, _stdout_stream, _stderr_stream, _spool_stop
     _spool_stop = threading.Event()
     _stdout_stream = proc.stdout
     _stderr_stream = proc.stderr
+    service_logger = get_service_logger(service_name, path=log_path)
     _stdout_thread = threading.Thread(
         target=_pump_stream,
-        args=(_stdout_stream, log_paths["stdout"], service_name, "stdout"),
+        args=(_stdout_stream, service_name, "stdout", service_logger),
         daemon=True,
     )
     _stderr_thread = threading.Thread(
         target=_pump_stream,
-        args=(_stderr_stream, log_paths["stderr"], service_name, "stderr"),
+        args=(_stderr_stream, service_name, "stderr", service_logger),
         daemon=True,
     )
     _stdout_thread.start()
@@ -227,7 +219,7 @@ def start_service(name: str) -> bool:
     if definition.get("type") == "logical":
         return start_service(STANDBY_SERVICE)
 
-    command, cwd_path, env, log_paths = _resolve_paths(definition, name)
+    command, cwd_path, env, log_path = _resolve_paths(definition, name)
 
     if _is_running() and _name == name:
         _logger.info("Servicio '%s' ya en ejecución (pid=%s)", name, _proc.pid)
@@ -263,7 +255,7 @@ def start_service(name: str) -> bool:
         _last_env = env_map
         _last_cwd = cwd_path
         _last_returncode = None
-        _start_stream_threads(_proc, name, log_paths)
+        _start_stream_threads(_proc, name, log_path)
         _logger.info("Servicio '%s' iniciado (pid=%s)", name, _proc.pid)
         return True
     except Exception as e:

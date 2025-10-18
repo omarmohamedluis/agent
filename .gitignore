@@ -12,7 +12,7 @@ __pycache__/
 /client/logs/
 /server/logs/
 /server/omi.db
-/client/agent_pi/
+client/agent_pi/data/
 
 
 # Archivos del sistema
@@ -22,9 +22,7 @@ Thumbs.db
 # VS Code
 .vscode/
 
-#jsons autogenerados
-client/agent_pi/data/structure.json
-client/agent_pi/data/server.json
+# jsons autogenerados (contenidos dentro de data/)
 
 
 # servicio midi
@@ -33,3 +31,5 @@ OMIMIDI_learn_request.json
 OMIMIDI_last_event.json
 OMIMIDI_webui.pid
 OMIMIDI_map.json
+
+REFACTOR_CHECKLIST.txt

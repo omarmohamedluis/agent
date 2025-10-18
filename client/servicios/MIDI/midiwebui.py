@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import os, json, socket, ipaddress, time, asyncio, tempfile, html
+import os, json, socket, ipaddress, time, asyncio, tempfile, html, logging
 from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import FastAPI, Form, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pythonosc.udp_client import SimpleUDPClient
 from datetime import datetime
 import mido
 
 from omimidi_core import push_map_to_server
+
+LOGGER = logging.getLogger("omimidi.webui")
 
 BASE_DIR         = os.path.dirname(os.path.abspath(__file__))
 MAP_FILE         = os.path.join(BASE_DIR, "OMIMIDI_map.json")
@@ -22,6 +25,10 @@ RESTART_REQ_FILE = os.path.join(BASE_DIR, "OMIMIDI_restart.flag")
 mido.set_backend("mido.backends.rtmidi")
 
 app = FastAPI(title="OMIMIDI Web UI", version="0.6")
+
+STATIC_DIR = Path(__file__).resolve().parent / "web" / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 STRUCTURE_PATH = Path(__file__).resolve().parents[2] / "agent_pi" / "data" / "structure.json"
 
@@ -47,6 +54,8 @@ def save_json(path: str, data: Any) -> None:
             os.unlink(tmp_path)
         except FileNotFoundError:
             pass
+        except Exception as exc:
+            LOGGER.debug("No se pudo borrar archivo temporal %s: %s", tmp_path, exc)
 
 def get_map() -> Dict[str, Any]:
     return load_json(MAP_FILE, {
@@ -66,6 +75,22 @@ def persist_map(data: Dict[str, Any]) -> None:
     data["osc_ips"] = list(data.get("osc_ips", ["127.0.0.1"]))
     save_json(MAP_FILE, data)
     push_map_to_server(data, source="midiwebui")
+    LOGGER.info(
+        "Mapa MIDI guardado (config=%s, midi_input=%s, osc_port=%s, ui_port=%s, osc_ips=%s)",
+        config_name,
+        data.get("midi_input"),
+        data.get("osc_port"),
+        data.get("ui_port"),
+        ", ".join(data.get("osc_ips") or []),
+    )
+
+
+def read_learn_state() -> Dict[str, Any]:
+    return load_json(LEARN_REQ_FILE, {})
+
+
+def write_learn_state(data: Dict[str, Any]) -> None:
+    save_json(LEARN_REQ_FILE, data)
 
 # ---------- WS manager ----------
 class WSManager:
@@ -134,6 +159,7 @@ def render_layout(body_html: str, *, title: str = "OMIMIDI Web UI", active: str 
         "BODY_HTML": body_html,
         "EXTRA_HEAD": extra_head,
         "EXTRA_JS": extra_js,
+        "PAGE_ID": html.escape(active, quote=True),
     }
     for token, value in replacements.items():
         html_doc = html_doc.replace(f"{{{{{token}}}}}", value)
@@ -196,70 +222,7 @@ def index():
   </div>
 </section>
 """
-    extra_js = """
-<script>
-(function(){
-  function formatValue(v){
-    if (typeof v === 'number'){
-      if (Math.abs(v) >= 1000) return v.toFixed(0);
-      return Math.round(v * 1000) / 1000;
-    }
-    return String(v);
-  }
-  function applyValueByPath(path, value){
-    if (!path){ return; }
-    const nodes = document.querySelectorAll('[data-osc="' + path + '"]');
-    nodes.forEach(el => { el.textContent = formatValue(value); });
-  }
-  function applyValueByRoute(routeIdx, value){
-    if (routeIdx === undefined || routeIdx === null){ return 0; }
-    const idxStr = String(routeIdx);
-    const nodes = document.querySelectorAll('[data-route="' + idxStr + '"]');
-    nodes.forEach(el => { el.textContent = formatValue(value); });
-    return nodes.length;
-  }
-  function applyStatePayload(payload){
-    if (!payload){ return; }
-    const routeIdx = payload.route_idx ?? payload.routeIndex ?? payload.idx;
-    const value = payload.value;
-    const path = payload.path;
-    const matched = applyValueByRoute(routeIdx, value);
-    if (!matched){
-      applyValueByPath(path, value);
-    }
-  }
-  fetch('/state').then(r=>r.json()).then(st=>{
-    Object.entries(st || {}).forEach(([key, obj])=>{
-      if (obj && typeof obj === 'object' && 'path' in obj){
-        const matched = applyValueByRoute(key, obj.value);
-        if (!matched){
-          applyValueByPath(obj.path, obj.value);
-        }
-      } else if (obj && typeof obj === 'object' && 'value' in obj){
-        applyValueByPath(key, obj.value);
-      }
-    });
-  }).catch(()=>{});
-  function setupWS(){
-    const proto = (location.protocol === 'https:') ? 'wss' : 'ws';
-    const ws = new WebSocket(proto + '://' + location.host + '/ws');
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg && (msg.route_idx !== undefined || msg.path !== undefined)){
-          applyStatePayload(msg);
-        }
-      } catch(e){}
-    };
-    ws.onclose = () => {
-      setTimeout(setupWS, 1000);
-    };
-  }
-  setupWS();
-})();
-</script>
-"""
-    return render_layout(body, active="home", extra_js=extra_js)
+    return render_layout(body, active="home")
 
 
 @app.get("/settings", response_class=HTMLResponse)
@@ -335,43 +298,7 @@ def settings_page():
 <div class="small muted" id="pingStatus" style="display:none;"></div>
 """
 
-    extra_js = """
-<script>
-(function(){
-  const form = document.getElementById('settingsForm');
-  if (form){
-    form.addEventListener('submit', function(ev){
-      if (!confirm('Se reiniciará el servicio, ¿desea continuar?')){
-        ev.preventDefault();
-      }
-    });
-  }
-  const pingBtn = document.getElementById('pingBtn');
-  const pingStatus = document.getElementById('pingStatus');
-  if (pingBtn && pingStatus){
-    pingBtn.addEventListener('click', async function(){
-      const original = pingBtn.textContent;
-      pingBtn.disabled = true;
-      pingBtn.textContent = 'Enviando…';
-      try {
-        const res = await fetch('/ping_osc', {method:'POST'});
-        pingStatus.style.display = 'block';
-        pingStatus.textContent = res.ok ? 'Ping enviado a los targets OSC.' : 'Error enviando ping OSC.';
-      } catch (e){
-        pingStatus.style.display = 'block';
-        pingStatus.textContent = 'Error enviando ping OSC.';
-      } finally {
-        setTimeout(()=>{ pingStatus.style.display = 'none'; }, 3500);
-        pingBtn.disabled = false;
-        pingBtn.textContent = original;
-      }
-    });
-  }
-})();
-</script>
-"""
-
-    response = render_layout(body, active="settings", extra_js=extra_js)
+    response = render_layout(body, active="settings")
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -441,21 +368,7 @@ def add_route_manual_page():
   </form>
 </section>
 """
-    extra_js = """
-<script>
-(function(){
-  const vSel = document.getElementById('manualVType');
-  const constRow = document.getElementById('manualConstRow');
-  if (!vSel || !constRow){ return; }
-  const toggle = () => {
-    constRow.style.display = (vSel.value === 'const') ? 'block' : 'none';
-  };
-  vSel.addEventListener('change', toggle);
-  toggle();
-})();
-</script>
-"""
-    return render_layout(body, active="add", extra_js=extra_js)
+    return render_layout(body, active="add")
 
 @app.get("/add/learn", response_class=HTMLResponse)
 def add_route_learn_page():
@@ -508,269 +421,7 @@ def add_route_learn_page():
   </div>
 </section>
 """
-    extra_js = """
-<script>
-(function(){
-  const vtypeSel = document.getElementById('vtypeInput');
-  const constRow = document.getElementById('constRow');
-  const form = document.getElementById('learnForm');
-  const oscInput = document.getElementById('oscInput');
-  const constInput = document.getElementById('constInput');
-  const summaryOsc = document.getElementById('summaryOsc');
-  const summaryType = document.getElementById('summaryType');
-  const summaryKind = document.getElementById('summaryKind');
-  const summaryCandidate = document.getElementById('summaryCandidate');
-  const summaryDetails = document.getElementById('summaryDetails');
-  const acceptBtn = document.getElementById('learnAccept');
-  const cancelBtn = document.getElementById('learnCancel');
-  const resultBox = document.getElementById('learnResult');
-  const resultSummary = document.getElementById('resultSummary');
-  const messageBox = document.getElementById('learnMessage');
-
-  if (!form) { return; }
-
-  const TYPE_LABELS = {
-    "float": "float (0..1)",
-    "int": "int (0..127)",
-    "bool": "bool",
-    "const": "const"
-  };
-  const DEFAULT_ACCEPT_LABEL = acceptBtn.textContent;
-  let isSaving = false;
-  let lastCandidateKey = null;
-
-  const showMessage = (text) => {
-    if (!messageBox){ return; }
-    if (text){
-      messageBox.textContent = text;
-      messageBox.style.display = 'block';
-    } else {
-      messageBox.textContent = '';
-      messageBox.style.display = 'none';
-    }
-  };
-
-  const setAcceptLoading = (loading) => {
-    if (loading){
-      acceptBtn.textContent = 'Guardando…';
-      acceptBtn.disabled = true;
-    } else {
-      acceptBtn.textContent = DEFAULT_ACCEPT_LABEL;
-    }
-  };
-
-  const toggleConst = () => {
-    if (!constRow) { return; }
-    const show = vtypeSel.value === 'const';
-    constRow.style.display = show ? 'block' : 'none';
-  };
-
-  const updateSummaryFromInputs = () => {
-    summaryOsc.textContent = oscInput.value || '/learn';
-    const typeLabel = TYPE_LABELS[vtypeSel.value] || vtypeSel.value;
-    summaryType.textContent = typeLabel;
-    if (vtypeSel.value === 'const' && constInput.value !== ''){
-      summaryType.textContent = `${typeLabel} = ${constInput.value}`;
-    }
-    showMessage('');
-  };
-
-  async function pushConfig(){
-    try {
-      const fd = new FormData(form);
-      if (vtypeSel.value !== 'const'){
-        fd.delete('const');
-      }
-      await fetch('/arm_learn', {method:'POST', body: fd});
-    } catch(e){}
-  }
-
-  function formatCandidate(candidate){
-    if (!candidate){ return ''; }
-    if (candidate.type === 'note'){
-      const hasNote = typeof candidate.note === 'number';
-      const noteVal = hasNote ? candidate.note : '?';
-      const msgType = candidate.message_type === 'note_off' ? 'nota off' : 'nota';
-      return msgType + ' ' + noteVal;
-    }
-    const hasCc = typeof candidate.cc === 'number';
-    const ccVal = hasCc ? candidate.cc : '?';
-    const ch = candidate.channel;
-    const chPart = (typeof ch === 'number') ? ' canal ' + ch : '';
-    return 'cc ' + ccVal + chPart;
-  }
-
-  function formatCandidateDetails(candidate){
-    if (!candidate){ return ''; }
-    const bits = [];
-    if (candidate.type === 'note'){
-      if (typeof candidate.channel === 'number'){ bits.push('canal ' + candidate.channel); }
-      if (typeof candidate.velocity === 'number'){ bits.push('velocidad ' + candidate.velocity); }
-    } else if (candidate.type === 'cc'){
-      if (typeof candidate.channel === 'number'){ bits.push('canal ' + candidate.channel); }
-      if (typeof candidate.value === 'number'){ bits.push('valor ' + candidate.value); }
-    }
-    return bits.join(' · ');
-  }
-
-  function formatResult(result){
-    if (!result){ return ''; }
-    const route = result.route || {};
-    const osc = route.osc || '';
-    const vtype = route.vtype || '';
-    let midiPart = result.label || '';
-    if (!midiPart){
-      if (route.type === 'note'){
-        const noteVal = (typeof route.note === 'number') ? route.note : '?';
-        midiPart = 'nota ' + noteVal;
-      } else if (route.type === 'cc'){
-        const ccVal = (typeof route.cc === 'number') ? route.cc : '?';
-        midiPart = 'cc ' + ccVal;
-        if (typeof route.channel === 'number'){
-          midiPart += ' canal ' + route.channel;
-        }
-      } else {
-        midiPart = 'MIDI';
-      }
-    }
-    return midiPart + ' → ' + osc + ' (' + vtype + ')';
-  }
-
-  let initialised = false;
-
-  async function refreshLearnUI(){
-    try {
-      const res = await fetch('/learn_state');
-      const st = await res.json();
-      if (!initialised){
-        if (st.osc && !oscInput.value){
-          oscInput.value = st.osc;
-        }
-        if (st.vtype){
-          vtypeSel.value = st.vtype;
-        }
-        if (st.vtype === 'const' && typeof st.const !== 'undefined' && !constInput.value){
-          constInput.value = st.const;
-        }
-        toggleConst();
-        updateSummaryFromInputs();
-        initialised = true;
-      }
-      summaryOsc.textContent = st.osc || '/learn';
-      const typeLabel = TYPE_LABELS[st.vtype] || st.vtype;
-      summaryType.textContent = typeLabel;
-      if (st.vtype === 'const' && typeof st.const !== 'undefined'){
-        summaryType.textContent = `${typeLabel} = ${st.const}`;
-        if (!constInput.matches(':focus')){
-          constInput.value = st.const;
-        }
-      }
-
-      if (st.candidate){
-        summaryCandidate.textContent = formatCandidate(st.candidate);
-        summaryKind.textContent = (st.candidate.type === 'note') ? 'nota' : 'cc';
-        const details = formatCandidateDetails(st.candidate);
-        if (details){
-          summaryDetails.textContent = details;
-          summaryDetails.style.display = 'block';
-        } else {
-          summaryDetails.textContent = '';
-          summaryDetails.style.display = 'none';
-        }
-        const candidateKey = JSON.stringify([st.candidate.type, st.candidate.note, st.candidate.cc, st.candidate.channel, st.candidate.message_type]);
-        if (candidateKey !== lastCandidateKey){
-          showMessage('');
-        }
-        lastCandidateKey = candidateKey;
-        if (!isSaving){
-          acceptBtn.disabled = false;
-        }
-      } else {
-        summaryCandidate.textContent = 'Esperando evento MIDI…';
-        summaryKind.textContent = 'Esperando…';
-        summaryDetails.textContent = '';
-        summaryDetails.style.display = 'none';
-        acceptBtn.disabled = true;
-        lastCandidateKey = null;
-      }
-
-      if (st.result && st.result.route){
-        resultBox.style.display = 'block';
-        const summary = formatResult(st.result);
-        resultSummary.textContent = summary;
-      } else {
-        resultBox.style.display = 'none';
-        resultSummary.textContent = '';
-      }
-    } catch(e){}
-  }
-
-  async function commitCandidate(confirm=false){
-    if (isSaving || acceptBtn.disabled){ return; }
-    showMessage('');
-    isSaving = true;
-    setAcceptLoading(true);
-    try {
-      const fd = new FormData(form);
-      if (vtypeSel.value !== 'const'){
-        fd.delete('const');
-      }
-      if (confirm){
-        fd.append('confirm', '1');
-      }
-      const res = await fetch('/commit_learn', {method:'POST', body: fd});
-      let data = null;
-      try { data = await res.json(); } catch(_) { data = null; }
-      if (res.ok && data && data.ok){
-        window.location.href = data.redirect || '/';
-        return;
-      }
-      if (res.status === 409 && data && data.reason === 'duplicate'){
-        const proceed = window.confirm(`La ruta OSC "${data.osc}" ya existe. ¿Deseas continuar?`);
-        if (proceed){
-          isSaving = false;
-          setAcceptLoading(false);
-          acceptBtn.disabled = false;
-          return commitCandidate(true);
-        }
-        showMessage('Ruta no guardada. Ajusta la ruta OSC si no quieres sobrescribir.');
-      } else if (data && data.reason === 'no_candidate'){
-        showMessage('Todavía no hay mensaje MIDI capturado.');
-      } else {
-        showMessage('No se pudo guardar la ruta. Vuelve a intentarlo.');
-      }
-    } catch(e){
-      showMessage('Error de red al guardar la ruta.');
-    } finally {
-      if (isSaving){
-        isSaving = false;
-        setAcceptLoading(false);
-      }
-      refreshLearnUI();
-    }
-  }
-
-  form.addEventListener('submit', (ev) => ev.preventDefault());
-  acceptBtn.addEventListener('click', () => commitCandidate(false));
-
-  toggleConst();
-  updateSummaryFromInputs();
-  pushConfig();
-  refreshLearnUI();
-  setInterval(refreshLearnUI, 250);
-
-  oscInput.addEventListener('input', updateSummaryFromInputs);
-  oscInput.addEventListener('change', () => pushConfig());
-  vtypeSel.addEventListener('change', () => { toggleConst(); updateSummaryFromInputs(); pushConfig(); });
-  constInput.addEventListener('input', updateSummaryFromInputs);
-  constInput.addEventListener('change', () => pushConfig());
-
-  cancelBtn.addEventListener('click', () => {
-    window.location.href = '/cancel_learn';
-  });
-})();
-</script>
-"""
+    extra_js = '\n<script src="/static/learn.js"></script>\n'
     return render_layout(body, active="add", extra_js=extra_js)
 # ---------- WS / Push ----------
 @app.websocket("/ws")
@@ -814,6 +465,7 @@ async def push_state(request: Request):
         await ws_manager.broadcast_json(broadcast_payload)
         return JSONResponse({"ok": True})
     except Exception as e:
+        LOGGER.exception("Error procesando push_state: %s", e)
         return JSONResponse({"ok": False, "err": str(e)}, status_code=400)
 
 @app.get("/state")
@@ -823,7 +475,7 @@ def state():
 # ---------- Learn ----------
 @app.get("/learn_state")
 def learn_state():
-    raw = load_json(LEARN_REQ_FILE, {})
+    raw = read_learn_state()
     resp: Dict[str, Any] = {
         "armed": bool(raw.get("armed")),
         "osc": raw.get("osc", "/learn"),
@@ -840,15 +492,15 @@ def learn_state():
 
 @app.post("/clear_learn_result")
 def clear_learn_result():
-    st = load_json(LEARN_REQ_FILE, {})
+    st = read_learn_state()
     st.pop("result", None)
-    save_json(LEARN_REQ_FILE, st)
+    write_learn_state(st)
     return RedirectResponse("/add/learn", status_code=303)
 
 
 @app.post("/arm_learn")
 def arm_learn(osc: str = Form(...), vtype: str = Form(...), const: str = Form("")):
-    existing = load_json(LEARN_REQ_FILE, {})
+    existing = read_learn_state()
     prev_armed = bool(existing.get("armed"))
     osc_path = osc.strip() or "/learn"
 
@@ -866,13 +518,13 @@ def arm_learn(osc: str = Form(...), vtype: str = Form(...), const: str = Form(""
     if not prev_armed:
         existing.pop("candidate", None)
 
-    save_json(LEARN_REQ_FILE, existing)
+    write_learn_state(existing)
     return JSONResponse({"ok": True, "armed": True})
 
 
 @app.post("/commit_learn")
 def commit_learn(osc: str = Form(...), vtype: str = Form(...), const: str = Form(""), confirm: str = Form("")):
-    st = load_json(LEARN_REQ_FILE, {})
+    st = read_learn_state()
     candidate = st.get("candidate")
     if not candidate:
         return JSONResponse({"ok": False, "reason": "no_candidate"}, status_code=400)
@@ -930,18 +582,18 @@ def commit_learn(osc: str = Form(...), vtype: str = Form(...), const: str = Form
         "route": route,
     }
     st.pop("candidate", None)
-    save_json(LEARN_REQ_FILE, st)
+    write_learn_state(st)
 
     return JSONResponse({"ok": True, "redirect": "/"})
 
 
 @app.get("/cancel_learn")
 def cancel_learn():
-    st = load_json(LEARN_REQ_FILE, {})
+    st = read_learn_state()
     st["armed"] = False
     st.pop("candidate", None)
     st.pop("result", None)
-    save_json(LEARN_REQ_FILE, st)
+    write_learn_state(st)
     return RedirectResponse("/", status_code=303)
 
 
@@ -949,6 +601,7 @@ def cancel_learn():
 def request_restart_flag() -> None:
     with open(RESTART_REQ_FILE, "w") as f:
         f.write("restart")
+    LOGGER.info("Se solicitó reinicio del servicio OMIMIDI.")
 
 def restart_page(message: str = "Reiniciando servicio OMIMIDI…") -> HTMLResponse:
     template = """<!doctype html><html><head><meta charset='utf-8'>
@@ -957,13 +610,7 @@ def restart_page(message: str = "Reiniciando servicio OMIMIDI…") -> HTMLRespon
     <div>
       <h2>🔄 {{MESSAGE}}</h2>
       <p>La página intentará reconectar automáticamente.</p>
-      <script>
-      (function retry(){
-        fetch('/')
-          .then(()=>{ window.location.href='/'; })
-          .catch(()=>{ setTimeout(retry, 800); });
-      })();
-      </script>
+      <script src="/static/restart.js"></script>
     </div>
     </body></html>"""
     return HTMLResponse(template.replace("{{MESSAGE}}", message))
@@ -1004,6 +651,13 @@ def save_settings(midi_input: str = Form(""), osc_port: str = Form(""),
 
     persist_map(data)
     request_restart_flag()
+    LOGGER.info(
+        "Configuración actualizada; se reiniciará el servicio (midi_input=%s, osc_port=%s, ui_port=%s, ips=%s)",
+        data.get("midi_input"),
+        data.get("osc_port"),
+        data.get("ui_port"),
+        ", ".join(data.get("osc_ips") or []),
+    )
     return restart_page("Aplicando cambios y reiniciando…")
 
 @app.post("/ping_osc")
@@ -1017,8 +671,9 @@ def ping_osc():
             c = SimpleUDPClient(ip, port)
             c._sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             c.send_message("/omimidi/ping", ts)
-        except Exception:
-            pass
+            LOGGER.info("Ping OSC enviado a %s:%s", ip, port)
+        except Exception as exc:
+            LOGGER.warning("No se pudo enviar ping OSC a %s:%s → %s", ip, port, exc)
     return RedirectResponse("/settings", status_code=303)
 
 # ---------- Mapping CRUD ----------

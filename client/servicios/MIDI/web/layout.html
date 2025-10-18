@@ -111,7 +111,7 @@
   </style>
   {{EXTRA_HEAD}}
 </head>
-<body>
+<body data-page="{{PAGE_ID}}">
   <header class="topbar">
     <div class="brand">{{BRAND_HTML}}</div>
     <nav class="nav">{{NAV_LINKS}}</nav>
@@ -119,6 +119,6 @@
   <main class="container stack">
   {{BODY_HTML}}
   </main>
-  {{EXTRA_JS}}
+  <script src="/static/app.js"></script>{{EXTRA_JS}}
 </body>
 </html>

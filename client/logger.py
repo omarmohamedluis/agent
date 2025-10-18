@@ -72,6 +72,24 @@ def default_service_log_paths(service_id: str) -> Dict[str, Path]:
     _ensure_dirs()
     base = SERVICE_LOG_DIR / service_id.lower()
     return {
-        "stdout": base.with_suffix(".out"),
-        "stderr": base.with_suffix(".err"),
+        "stdout": base.with_suffix(".log"),
+        "stderr": base.with_suffix(".log"),
     }
+
+
+def get_service_logger(service_id: str, *, path: Optional[Path] = None) -> logging.Logger:
+    """Return a rotating logger to aggregate stdout/stderr of a service."""
+    _ensure_dirs()
+    logger_name = f"omi.agent.service.{service_id.lower()}"
+    logger = logging.getLogger(logger_name)
+    if logger.handlers:
+        return logger
+
+    if path is None:
+        path = SERVICE_LOG_DIR / f"{service_id.lower()}.log"
+    handler = _build_file_handler(path)
+
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    logger.propagate = False
+    return logger

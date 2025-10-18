@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OMI Control Server</title>
+  <title>{{PAGE_TITLE}}</title>
   <style>
   :root { --bg:#111; --card:#1c1c1c; --line:#2c2c2c; --text:#eee; --muted:#aaa; --accent:#2ea043; --danger:#f06262; }
   body { font-family: system-ui, sans-serif; margin:0; background:var(--bg); color:var(--text); }
@@ -53,12 +53,8 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">OMI Control Server</div>
-    <nav class="nav">
-      <button class="nav-link active" data-view-btn="devices">Home</button>
-      <button class="nav-link" data-view-btn="clients">Clientes</button>
-      <button class="nav-link" data-view-btn="services">Servicios</button>
-    </nav>
+    <div class="brand">{{BRAND_HTML}}</div>
+    <nav class="nav">{{NAV_LINKS}}</nav>
   </header>
   <main class="container stack view" id="devicesView"></main>
   <section class="container stack view hidden" id="clientsView"></section>
@@ -70,8 +66,6 @@
     </header>
     <iframe id="configFrame" src="about:blank"></iframe>
   </div>
-  <script>
-  {{APP_SCRIPT}}
-  </script>
+  <script src="/static/app.js"></script>
 </body>
 </html>

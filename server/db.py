@@ -37,6 +37,7 @@ def init_db() -> None:
                 host TEXT,
                 desired_service TEXT,
                 desired_config TEXT,
+                network_profile TEXT,
                 device_index INTEGER,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -47,9 +48,33 @@ def init_db() -> None:
             conn.execute("ALTER TABLE devices ADD COLUMN device_index INTEGER")
         except sqlite3.OperationalError:
             pass
+        _ensure_column(conn, "devices", "network_profile", "TEXT")
         conn.execute("UPDATE service_configs SET service_id = 'OSCnum' WHERE service_id = 'OSC'")
         conn.execute("UPDATE devices SET desired_service = 'OSCnum' WHERE desired_service = 'OSC'")
         conn.commit()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
+    cols = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    if any(col["name"] == column for col in cols):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
+
+def _serialize_json(payload: Optional[Dict[str, Any]]) -> Optional[str]:
+    if payload is None:
+        return None
+    return json.dumps(payload)
+
+
+def _deserialize_json(raw: Optional[str]) -> Optional[Dict[str, Any]]:
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    return data
 
 
 def _next_device_index(conn: sqlite3.Connection) -> int:
@@ -136,6 +161,7 @@ def upsert_device(
     desired_service: Optional[str] = None,
     desired_config: Optional[str] = None,
     device_index: Optional[int] = None,
+    network_profile: Optional[Dict[str, Any]] = None,
 ) -> None:
     if desired_service == "OSC":
         desired_service = "OSCnum"
@@ -154,21 +180,45 @@ def upsert_device(
                 SET host = COALESCE(?, host),
                     desired_service = COALESCE(?, desired_service),
                     desired_config = COALESCE(?, desired_config),
+                    network_profile = COALESCE(?, network_profile),
                     device_index = COALESCE(?, device_index),
                     updated_at = datetime('now')
                 WHERE serial = ?
                 """,
-                (host, desired_service, desired_config, device_index, serial),
+                (
+                    host,
+                    desired_service,
+                    desired_config,
+                    _serialize_json(network_profile),
+                    device_index,
+                    serial,
+                ),
             )
         else:
             if device_index is None:
                 device_index = _next_device_index(conn)
             conn.execute(
                 """
-                INSERT INTO devices(serial, host, desired_service, desired_config, device_index, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                INSERT INTO devices(
+                    serial,
+                    host,
+                    desired_service,
+                    desired_config,
+                    network_profile,
+                    device_index,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
                 """,
-                (serial, host, desired_service, desired_config, device_index),
+                (
+                    serial,
+                    host,
+                    desired_service,
+                    desired_config,
+                    _serialize_json(network_profile),
+                    device_index,
+                ),
             )
         conn.commit()
 
@@ -176,12 +226,26 @@ def upsert_device(
 def get_device(serial: str) -> Optional[Dict[str, Any]]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT serial, host, desired_service, desired_config, device_index, created_at, updated_at FROM devices WHERE serial = ?",
+            """
+            SELECT
+                serial,
+                host,
+                desired_service,
+                desired_config,
+                network_profile,
+                device_index,
+                created_at,
+                updated_at
+            FROM devices
+            WHERE serial = ?
+            """,
             (serial,),
         ).fetchone()
     if not row:
         return None
-    return dict(row)
+    payload = dict(row)
+    payload["network_profile"] = _deserialize_json(payload.get("network_profile"))
+    return payload
 
 
 def delete_device(serial: str) -> None:
@@ -194,9 +258,30 @@ def delete_device(serial: str) -> None:
 def list_devices() -> List[Dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT serial, host, desired_service, desired_config, device_index, created_at, updated_at FROM devices ORDER BY updated_at DESC"
+            """
+            SELECT
+                serial,
+                host,
+                desired_service,
+                desired_config,
+                network_profile,
+                device_index,
+                created_at,
+                updated_at
+            FROM devices
+            ORDER BY updated_at DESC
+            """
         ).fetchall()
-    return [dict(row) for row in rows]
+    result: List[Dict[str, Any]] = []
+    for row in rows:
+        payload = dict(row)
+        payload["network_profile"] = _deserialize_json(payload.get("network_profile"))
+        result.append(payload)
+    return result
+
+
+def save_device_network_profile(serial: str, profile: Optional[Dict[str, Any]]) -> None:
+    upsert_device(serial, network_profile=profile)
 
 
 def ensure_device_index(serial: str) -> int:
