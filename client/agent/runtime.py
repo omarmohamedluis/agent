@@ -627,17 +627,21 @@ class AgentRuntime:
             try:
                 self._apply_active_service(service, config_name=config_target)
 
-            final_state = self._set_service_transition(False, stage="completado", progress=100)
-            SyncingUI(100, f"{service} OK")
-            send_ack(ok=True, transition=False, stage="completado", progress=100)
-            self.logger.info("Servicio activo cambiado a '%s' por petición de %s", service, addr[0])
-        except Exception as exc:
-            message = str(exc)
-            self._set_service_error(message)
-            self._set_service_transition(False, stage="error", progress=100)
-            SyncingUI(100, "Error")
-            send_ack(ok=False, transition=False, stage="error", progress=100, error=message)
-            self.logger.error("Error cambiando servicio a '%s': %s", service, exc)
+                self._set_service_transition(True, stage="abriendo", progress=80)
+                SyncingUI(80, "Abriendo")
+                send_ack(ok=True, transition=True, stage="abriendo", progress=80)
+
+                self._set_service_transition(False, stage="completado", progress=100)
+                SyncingUI(100, f"{service} OK")
+                send_ack(ok=True, transition=False, stage="completado", progress=100)
+                self.logger.info("Servicio activo cambiado a '%s' por petición de %s", service, addr[0])
+            except Exception as exc:
+                message = str(exc)
+                self._set_service_error(message)
+                self._set_service_transition(False, stage="error", progress=100)
+                SyncingUI(100, "Error")
+                send_ack(ok=False, transition=False, stage="error", progress=100, error=message)
+                self.logger.error("Error cambiando servicio a '%s': %s", service, exc)
 
         self._set_service_transition(True, stage="cerrando", progress=5)
         SyncingUI(10, "Cerrando")
