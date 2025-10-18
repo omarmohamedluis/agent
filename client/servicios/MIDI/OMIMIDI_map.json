@@ -1,39 +1,25 @@
 {
   "midi_input": "APC40 mkII:APC40 mkII MIDI 1 24:0",
-  "osc_port": 7000,
+  "osc_port": 2048,
   "osc_ips": [
-    "192.168.0.52"
+    "127.0.0.1"
   ],
   "ui_port": 9001,
   "routes": [
     {
       "type": "cc",
       "cc": 7,
-      "osc": "/composition/layers/3/video/opacity",
+      "osc": "/D3/learn",
       "vtype": "float",
       "channel": 0
     },
     {
       "type": "cc",
       "cc": 7,
-      "osc": "/composition/layers/2/video/opacity",
+      "osc": "/D3/learn",
       "vtype": "float",
       "channel": 1
-    },
-    {
-      "type": "cc",
-      "cc": 7,
-      "osc": "/composition/layers/1/video/opacity",
-      "vtype": "float",
-      "channel": 2
-    },
-    {
-      "type": "cc",
-      "cc": 14,
-      "osc": "/composition/master",
-      "vtype": "float",
-      "channel": 0
     }
   ],
-  "config_name": "hola test 1"
+  "config_name": "test1"
 }

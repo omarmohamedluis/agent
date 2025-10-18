@@ -2,6 +2,7 @@
   var configCache = {};
   var currentDevices = [];
   var currentClients = [];
+  var NO_CONFIG_OPTION = '__no_config__';
   var configEditorState = {
     editing: false,
     service: null,
@@ -116,16 +117,97 @@
   }
 
   function renderConfigOptions(service, active){
+    if(!service || service === 'standby'){
+      return '';
+    }
     var configs = configCache[service] || [];
-    var html = '<option value="">(actual)</option>';
+    var normalizedActive = active || NO_CONFIG_OPTION;
+    var html = '<option value="' + NO_CONFIG_OPTION + '"' + (normalizedActive === NO_CONFIG_OPTION ? ' selected' : '') + '>No enviar configuración</option>';
+    var hasActive = normalizedActive === NO_CONFIG_OPTION;
     configs.forEach(function(cfg){
-      var selected = cfg.name === active ? 'selected' : '';
-      html += '<option value="' + escapeHtml(cfg.name) + '" ' + selected + '>' + escapeHtml(cfg.name) + '</option>';
+      var name = cfg && typeof cfg.name === 'string' ? cfg.name : '';
+      if(!name){
+        return;
+      }
+      var selected = name === normalizedActive;
+      if(selected){
+        hasActive = true;
+      }
+      html += '<option value="' + escapeHtml(name) + '"' + (selected ? ' selected' : '') + '>' + escapeHtml(name) + '</option>';
     });
+    if(!hasActive && normalizedActive !== NO_CONFIG_OPTION){
+      html += '<option value="' + escapeHtml(normalizedActive) + '" selected>(actual: ' + escapeHtml(normalizedActive) + ')</option>';
+    }
     return html;
   }
 
-  function renderDevice(dev){
+  function updateConfigSection(card, service, options){
+    if(!card) return Promise.resolve();
+    var configSelect = card.querySelector('select[data-config-for]');
+    var wrapper = card.querySelector('.config-wrapper');
+    if(!configSelect || !wrapper) return Promise.resolve();
+
+    var serviceSelect = card.querySelector('select[data-service-select]');
+    var serviceDisabled = serviceSelect ? serviceSelect.disabled : false;
+    var desiredConfig;
+    if(options && options.desiredConfig !== undefined && options.desiredConfig !== null){
+      desiredConfig = options.desiredConfig;
+    } else if(configSelect.dataset.selectedConfig){
+      desiredConfig = configSelect.dataset.selectedConfig;
+    } else if(configSelect.getAttribute('data-active-config')){
+      desiredConfig = configSelect.getAttribute('data-active-config');
+    } else {
+      desiredConfig = NO_CONFIG_OPTION;
+    }
+    if(desiredConfig === ''){
+      desiredConfig = NO_CONFIG_OPTION;
+    }
+    if(!desiredConfig){
+      desiredConfig = NO_CONFIG_OPTION;
+    }
+
+    var existingHint = wrapper.querySelector('.config-hint');
+
+    if(!service || service === 'standby'){
+      wrapper.classList.add('hidden');
+      if(existingHint){
+        existingHint.remove();
+      }
+      configSelect.innerHTML = '';
+      configSelect.disabled = true;
+      configSelect.value = NO_CONFIG_OPTION;
+      configSelect.dataset.currentService = 'standby';
+      configSelect.dataset.selectedConfig = NO_CONFIG_OPTION;
+      return Promise.resolve();
+    }
+
+    configSelect.dataset.currentService = service;
+    configSelect.dataset.selectedConfig = desiredConfig;
+
+    return ensureConfigs(service).then(function(){
+      var html = renderConfigOptions(service, desiredConfig);
+      configSelect.innerHTML = html;
+      configSelect.disabled = serviceDisabled;
+      if(configSelect.value !== desiredConfig){
+        configSelect.value = desiredConfig;
+      }
+      wrapper.classList.remove('hidden');
+      var hintNode = wrapper.querySelector('.config-hint');
+      var hasConfigs = (configCache[service] || []).length > 0;
+      if(hasConfigs){
+        if(hintNode){
+          hintNode.remove();
+        }
+      } else if(!hintNode){
+        wrapper.insertAdjacentHTML('beforeend', '<div class="small config-hint">No hay configuraciones guardadas en el servidor.</div>');
+      }
+    }).catch(function(err){
+      console.error(err);
+    });
+  }
+
+  function renderDevice(dev, overrides){
+    var serial = dev.serial || '';
     var online = !!dev.online;
     var state = dev.service_state || {};
     var heartbeat = dev.heartbeat || {};
@@ -133,10 +215,16 @@
     var available = dev.available_services || [];
     var activeEntry = services.find(function(s){ return s.enabled; });
     var active = state.expected || (activeEntry ? activeEntry.name : 'standby');
+    var selectedService = (overrides && overrides.service) ? overrides.service : active;
+    if(!selectedService){
+      selectedService = active || 'standby';
+    }
     var transition = !!state.transition;
     var progressValue = (typeof state.progress === 'number') ? Math.max(0, Math.min(100, Number(state.progress))) : null;
     var stageText = state.stage || (transition ? 'Sincronizando' : '');
-    if(stageText){ stageText = stageText.charAt(0).toUpperCase() + stageText.slice(1); }
+    if(stageText){
+      stageText = stageText.charAt(0).toUpperCase() + stageText.slice(1);
+    }
     var ledClass = 'status-led ' + (transition ? 'syncing' : (online ? 'online' : 'offline'));
     var statusLabel = transition ? 'Synking' : (online ? 'Online' : 'Offline');
     var cpu = (heartbeat.cpu != null) ? Number(heartbeat.cpu).toFixed(0) + '%' : '--';
@@ -144,39 +232,21 @@
     var serviceReturn = state.returncode != null ? state.returncode : '—';
     var serviceError = state.error || state.last_error || '';
     var serviceConfig = state.config_name || '—';
-    var webUrl = state.web_url || '';
     var desiredService = dev.desired_service || '—';
     var desiredConfig = dev.desired_config || '—';
     var ip = dev.ip || '-';
     var lastSeen = formatDate(dev.last_seen);
     var indexLabel = (dev.index !== undefined && dev.index !== null) ? ('#' + dev.index) : '#--';
     var nameHeader = '<span class="index-label">' + escapeHtml(indexLabel) + '</span>' + escapeHtml(dev.host || dev.serial || 'Agente');
-    var availableOptions = available.map(function(name){
-      return '<option value="' + escapeHtml(name) + '" ' + (name===active ? 'selected' : '') + '>' + escapeHtml(name) + '</option>';
+
+    if(selectedService && available.indexOf(selectedService) === -1){
+      available = available.concat([selectedService]);
+    }
+    var uniqueServices = Array.from(new Set(available));
+    var serviceOptions = uniqueServices.map(function(name){
+      return '<option value="' + escapeHtml(name) + '" ' + (name === selectedService ? 'selected' : '') + '>' + escapeHtml(name) + '</option>';
     }).join('');
-    var currentService = active || '';
-    var configSelectDisabled = (!online || transition || currentService === 'standby');
-    var configSelectHtml = '<select class="config-select" data-config-for="' + escapeHtml(dev.serial || '') + '" data-active-config="' + escapeHtml(state.config_name || '') + '" data-current-service="' + escapeHtml(currentService) + '" ' + (configSelectDisabled ? 'disabled' : '') + '>' + renderConfigOptions(currentService, state.config_name) + '</select>';
-    var configHelpers = currentService === 'standby'
-      ? '<div class="small config-hint">Selecciona un servicio para cargar configuraciones.</div>'
-      : '';
-    var configsHtml =
-      '<div class="config-wrapper" data-config-wrapper="' + escapeHtml(dev.serial || '') + '">' +
-        configSelectHtml +
-        configHelpers +
-        '<div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">' +
-          '<button class="btn" data-refresh-configs="' + escapeHtml(dev.serial || '') + '" data-service="' + escapeHtml(currentService) + '" ' + (currentService === 'standby' || !online || transition ? 'disabled' : '') + '>↻ Actualizar</button>' +
-          '<button class="btn" data-manage-configs="' + escapeHtml(currentService) + '" ' + (!online || currentService === 'standby' ? 'disabled' : '') + '>Gestionar configs</button>' +
-        '</div>' +
-      '</div>';
-    var inlineActions = '<div class="inline-actions">' +
-      '<button class="btn" data-open-editor="' + escapeHtml(currentService) + '" ' + (!online || currentService === 'standby' ? 'disabled' : '') + '>Configurar</button>' +
-      '<button class="btn" data-restart-service="' + escapeHtml(dev.serial || '') + '" data-service="' + escapeHtml(currentService) + '" data-config="' + escapeHtml(state.config_name || '') + '" ' + (!online || currentService === 'standby' ? 'disabled' : '') + '>Reiniciar servicio</button>' +
-    '</div>';
-    var powerButtons = '<div class="card-actions">' +
-      '<button class="btn warning" data-power="reboot" data-serial="' + escapeHtml(dev.serial || '') + '" ' + (!online || transition ? 'disabled' : '') + '>Reiniciar</button>' +
-      '<button class="btn danger-solid" data-power="shutdown" data-serial="' + escapeHtml(dev.serial || '') + '" ' + (!online || transition ? 'disabled' : '') + '>Apagar</button>' +
-    '</div>';
+
     var transitionHtml = '—';
     if(transition){
       var pct = (progressValue != null ? progressValue : 0);
@@ -186,35 +256,83 @@
       transitionHtml = escapeHtml(stageText);
     }
 
-    return (
-      '<div class="card" data-serial="' + escapeHtml(dev.serial || '') + '">' +
-      '<div class="card-headline"><h2><span class="' + ledClass + '"></span>' + nameHeader + (online ? '' : ' <span class="tag">Offline</span>') + '</h2>' + powerButtons + '</div>' +
-      '<div class="small">Serial: ' + escapeHtml(dev.serial || '?') + '</div>' +
-      '<div class="small">IP: ' + escapeHtml(ip) + '</div>' +
-      '<div class="small">Último contacto: ' + escapeHtml(lastSeen) + '</div>' +
-      '<table class="table">' +
-        '<tr><th>Estado</th><td class="' + (online ? 'status-ok' : 'status-bad') + '">' + escapeHtml(statusLabel) + '</td></tr>' +
-        '<tr><th>Transición</th><td>' + transitionHtml + '</td></tr>' +
-        '<tr><th>Servicio activo</th><td>' + escapeHtml(active) + '</td></tr>' +
-        '<tr><th>Config actual</th><td>' + escapeHtml(serviceConfig) + '</td></tr>' +
-        '<tr><th>Return code</th><td>' + escapeHtml(serviceReturn) + '</td></tr>' +
-        '<tr><th>Error servicio</th><td>' + (serviceError ? escapeHtml(serviceError) : '—') + '</td></tr>' +
-        '<tr><th>CPU</th><td>' + cpu + '</td></tr>' +
-        '<tr><th>Temperatura</th><td>' + temp + '</td></tr>' +
-        '<tr><th>Deseado</th><td>' + escapeHtml(desiredService) + ' / ' + escapeHtml(desiredConfig) + '</td></tr>' +
-        '<tr><th>Servicio</th><td>' +
-          '<select data-service-select data-serial="' + escapeHtml(dev.serial || '') + '" data-active-service="' + escapeHtml(active) + '" ' + (!online || transition ? 'disabled' : '') + '>' +
-            availableOptions +
+    var selectedConfig = (overrides && overrides.config !== undefined && overrides.config !== null)
+      ? overrides.config
+      : (state.config_name || NO_CONFIG_OPTION);
+    if(!selectedConfig){
+      selectedConfig = NO_CONFIG_OPTION;
+    }
+    var shouldShowConfig = selectedService && selectedService !== 'standby';
+    var configSelectDisabled = !shouldShowConfig || !online || transition;
+    var configOptionsHtml = shouldShowConfig ? renderConfigOptions(selectedService, selectedConfig) : '';
+    var configHintHtml = '';
+    var configsHtml =
+      '<div class="config-wrapper' + (shouldShowConfig ? '' : ' hidden') + '" data-config-wrapper="' + escapeHtml(serial) + '">' +
+        '<select class="config-select" data-config-for="' + escapeHtml(serial) + '" data-active-config="' + escapeHtml(state.config_name || '') + '" data-current-service="' + escapeHtml(selectedService) + '" data-selected-config="' + escapeHtml(selectedConfig) + '" ' +
+          (configSelectDisabled ? 'disabled' : '') + '>' +
+          configOptionsHtml +
+        '</select>' +
+        configHintHtml +
+      '</div>';
+
+    var rows = [];
+    rows.push(['Estado', '<td class="' + (online ? 'status-ok' : 'status-bad') + '">' + escapeHtml(statusLabel) + '</td>']);
+    rows.push(['Transición', '<td>' + transitionHtml + '</td>']);
+    rows.push(['Servicio activo', '<td>' + escapeHtml(active) + '</td>']);
+    rows.push(['Config actual', '<td>' + escapeHtml(serviceConfig) + '</td>']);
+    rows.push(['Return code', '<td>' + escapeHtml(serviceReturn) + '</td>']);
+    rows.push(['Error servicio', '<td>' + (serviceError ? escapeHtml(serviceError) : '—') + '</td>']);
+    rows.push(['CPU', '<td>' + cpu + '</td>']);
+    rows.push(['Temperatura', '<td>' + temp + '</td>']);
+    rows.push(['Deseado', '<td>' + escapeHtml(desiredService) + ' / ' + escapeHtml(desiredConfig) + '</td>']);
+
+    var serviceActions = [];
+    if(shouldShowConfig){
+      serviceActions.push('<button class="btn" data-open-editor="' + escapeHtml(selectedService) + '" data-service-context="' + escapeHtml(selectedService) + '" ' + (!online ? 'disabled' : '') + '>Configurar</button>');
+    }
+    if(state.web_url){
+      serviceActions.unshift('<button class="btn" data-service-ui="' + escapeHtml(state.web_url) + '" data-service-ui-serial="' + escapeHtml(serial) + '" ' + (!online ? 'disabled' : '') + '>Abrir UI</button>');
+    }
+    if(online && !transition && shouldShowConfig){
+      serviceActions.push('<button class="btn" data-restart-service="' + escapeHtml(serial) + '" data-service="' + escapeHtml(active) + '" data-config="' + escapeHtml(state.config_name || '') + '">Reiniciar servicio</button>');
+    }
+
+    var serviceCell =
+      '<td>' +
+        (serviceActions.length ? '<div class="card-actions service-actions">' + serviceActions.join('') + '</div>' : '') +
+        '<div class="service-selectors">' +
+          '<select data-service-select data-serial="' + escapeHtml(serial) + '" data-active-service="' + escapeHtml(active) + '" data-selected-service="' + escapeHtml(selectedService) + '" ' + (!online || transition ? 'disabled' : '') + '>' +
+            serviceOptions +
           '</select>' +
           configsHtml +
-          '<div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">' +
-            '<button class="btn" data-apply-service="' + escapeHtml(dev.serial || '') + '" ' + (!online || transition ? 'disabled' : '') + '>Aplicar</button>' +
-          '</div>' +
-        '</td></tr>' +
-      '</table>' +
-      inlineActions +
-    '</div>'
-    );
+        '</div>' +
+        '<div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">' +
+          '<button class="btn" data-apply-service="' + escapeHtml(serial) + '" ' + (!online || transition ? 'disabled' : '') + '>Aplicar</button>' +
+        '</div>' +
+      '</td>';
+    rows.push(['Servicio', serviceCell]);
+
+    var tableHtml = ['<table class="table">'];
+    rows.forEach(function(row){
+      tableHtml.push('<tr><th>' + escapeHtml(row[0]) + '</th>' + row[1] + '</tr>');
+    });
+    tableHtml.push('</table>');
+
+    var powerButtons = '<div class="card-actions">' +
+      '<button class="btn warning" data-power="reboot" data-serial="' + escapeHtml(serial) + '" ' + (!online || transition ? 'disabled' : '') + '>Reiniciar</button>' +
+      '<button class="btn danger-solid" data-power="shutdown" data-serial="' + escapeHtml(serial) + '" ' + (!online || transition ? 'disabled' : '') + '>Apagar</button>' +
+    '</div>';
+
+    var cardParts = [];
+    cardParts.push('<div class="card" data-serial="' + escapeHtml(serial) + '">');
+    cardParts.push('<div class="card-headline"><h2><span class="' + ledClass + '"></span>' + nameHeader + (online ? '' : ' <span class="tag">Offline</span>') + '</h2>' + powerButtons + '</div>');
+    cardParts.push('<div class="small">Serial: ' + escapeHtml(dev.serial || '?') + '</div>');
+    cardParts.push('<div class="small">IP: ' + escapeHtml(ip) + '</div>');
+    cardParts.push('<div class="small">Último contacto: ' + escapeHtml(lastSeen) + '</div>');
+    cardParts = cardParts.concat(tableHtml);
+    cardParts.push('</div>');
+
+    return cardParts.join('');
   }
 
   function renderDevices(devices){
@@ -226,75 +344,35 @@
       if(!serial) return;
       var serviceSel = card.querySelector('select[data-service-select]');
       var configSel = card.querySelector('select[data-config-for]');
-      var refreshBtn = card.querySelector('button[data-refresh-configs]');
-      var manageBtn = card.querySelector('button[data-manage-configs]');
       selectionSnapshot[serial] = {
         service: serviceSel ? serviceSel.value : null,
-        config: configSel ? configSel.value : null,
-        refreshEnabled: refreshBtn ? !refreshBtn.disabled : null,
-        manageEnabled: manageBtn ? !manageBtn.disabled : null
+        config: configSel ? configSel.value : null
       };
     });
     if(!devices.length){
       container.innerHTML = '<div class="card">No se detectaron agentes.</div>';
       return;
     }
-    container.innerHTML = devices.map(renderDevice).join('');
+    container.innerHTML = devices.map(function(dev){
+      var overrides = selectionSnapshot[dev.serial] || {};
+      return renderDevice(dev, overrides);
+    }).join('');
 
-    toArray(container.querySelectorAll('select[data-service-select]')).forEach(function(sel){
-      var serial = sel.dataset.serial;
-      var active = sel.getAttribute('data-active-service');
-      var snapshot = selectionSnapshot[serial];
-      if(snapshot && snapshot.service !== null && snapshot.service !== undefined && snapshot.service !== active && !sel.disabled){
-        sel.value = snapshot.service;
-      }
-    });
-
-    toArray(container.querySelectorAll('select[data-config-for]')).forEach(function(sel){
-      var serial = sel.dataset.configFor;
-      var activeConfig = sel.getAttribute('data-active-config') || '';
-      var snapshot = selectionSnapshot[serial];
-      if(snapshot && snapshot.config !== null && snapshot.config !== undefined && snapshot.config !== activeConfig && !sel.disabled){
-        sel.value = snapshot.config;
-      }
+    toArray(container.querySelectorAll('.card[data-serial]')).forEach(function(card){
+      var serial = card.dataset.serial;
+      if(!serial) return;
+      var snapshot = selectionSnapshot[serial] || {};
+      var serviceSel = card.querySelector('select[data-service-select]');
+      var serviceValue = serviceSel ? serviceSel.value : null;
+      updateConfigSection(card, serviceValue, { desiredConfig: snapshot.config });
     });
 
     toArray(container.querySelectorAll('select[data-service-select]')).forEach(function(sel){
       sel.addEventListener('change', function(){
         var service = sel.value;
-        ensureConfigs(service).then(function(){
-          var card = sel.closest('.card');
-          var configSelect = card ? card.querySelector('select[data-config-for]') : null;
-          var refreshBtn = card ? card.querySelector('button[data-refresh-configs]') : null;
-          var manageBtn = card ? card.querySelector('button[data-manage-configs]') : null;
-          var wrapper = card ? card.querySelector('.config-wrapper') : null;
-          var hint = wrapper ? wrapper.querySelector('.config-hint') : null;
-          if(configSelect){
-            configSelect.innerHTML = renderConfigOptions(service, null);
-            configSelect.disabled = (service === 'standby' || sel.disabled);
-            configSelect.dataset.currentService = service;
-            if(!configSelect.disabled){
-              configSelect.value = configSelect.getAttribute('data-active-config') || '';
-            }
-          }
-          if(refreshBtn){
-            refreshBtn.dataset.service = service;
-            refreshBtn.disabled = (service === 'standby' || sel.disabled);
-          }
-          if(manageBtn){
-            manageBtn.dataset.manageConfigs = service;
-            manageBtn.disabled = !service || service === 'standby';
-          }
-          if(wrapper){
-            if(service === 'standby'){
-              if(!hint){
-                wrapper.insertAdjacentHTML('beforeend', '<div class="small config-hint">Selecciona un servicio para cargar configuraciones.</div>');
-              }
-            } else if(hint){
-              hint.remove();
-            }
-          }
-        }).catch(console.error);
+        sel.dataset.selectedService = service;
+        var card = sel.closest('.card');
+        updateConfigSection(card, service);
       });
     });
 
@@ -316,6 +394,12 @@
         var service = serviceSel ? serviceSel.value : '';
         var config = configSel ? configSel.value : '';
         sendServiceChange(serial, service, config);
+      });
+    });
+
+    toArray(container.querySelectorAll('select[data-config-for]')).forEach(function(sel){
+      sel.addEventListener('change', function(){
+        sel.dataset.selectedConfig = sel.value || NO_CONFIG_OPTION;
       });
     });
 
@@ -342,6 +426,20 @@
         if(!confirm('¿Reiniciar el servicio ' + service + ' en ' + serial + '?')) return;
         sendServiceChange(serial, service, config);
       });
+    });
+
+    toArray(container.querySelectorAll('button[data-service-ui]')).forEach(function(btn){
+      btn.addEventListener('click', function(){
+        if(btn.disabled){
+          return;
+        }
+        var url = btn.dataset.serviceUi;
+        if(!url){
+          return;
+        }
+        window.open(url, '_blank', 'noopener');
+      });
+    });
   }
 
   function renderServicesView(){
@@ -776,6 +874,9 @@
       return;
     }
     var body = { service: service };
+    if(config === NO_CONFIG_OPTION){
+      config = '';
+    }
     if(config) body.config = config;
     fetch('/api/devices/' + encodeURIComponent(serial) + '/service', {
       method:'POST',
@@ -1015,34 +1116,3 @@
   loadServiceConfigs(true);
   loadClients();
 })();
-    toArray(container.querySelectorAll('button[data-refresh-configs]')).forEach(function(btn){
-      btn.addEventListener('click', function(){
-        var service = btn.dataset.service;
-        if(!service || service === 'standby') return;
-        btn.disabled = true;
-        ensureConfigs(service, true).then(function(){
-          renderDevices(currentDevices);
-          if(document.querySelector('[data-view-btn="services"].active')){
-            renderServicesView();
-          }
-        }).finally(function(){
-          btn.disabled = false;
-        }).catch(console.error);
-      });
-    });
-
-    toArray(container.querySelectorAll('button[data-manage-configs]')).forEach(function(btn){
-      btn.addEventListener('click', function(){
-        var service = btn.dataset.manageConfigs;
-        if(!service) return;
-        showView('services');
-        setTimeout(function(){
-          var targetCard = document.querySelector('.service-card[data-service="' + CSS.escape(service) + '"]');
-          if(targetCard){
-            targetCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            targetCard.classList.add('flash');
-            setTimeout(function(){ targetCard.classList.remove('flash'); }, 1200);
-          }
-        }, 150);
-      });
-    });
