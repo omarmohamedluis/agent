@@ -8,10 +8,10 @@ from datetime import datetime, timezone
 import urllib.request
 from pathlib import Path
 
+import logging
+
 import mido
 from pythonosc.udp_client import SimpleUDPClient
-
-from logger import get_component_logger
 
 # ==== Archivos ====
 BASE_DIR         = os.path.dirname(os.path.abspath(__file__))
@@ -24,7 +24,15 @@ WEBUI_PID_FILE   = os.path.join(BASE_DIR, "OMIMIDI_webui.pid")            # PID 
 SERVER_INFO_PATH = Path(__file__).resolve().parents[3] / 'client' / 'agent_pi' / 'data' / 'server.json'
 
 
-LOGGER = get_component_logger("midi", "midi.log")
+LOG_PATH = Path(__file__).resolve().parents[2] / 'logs' / 'services' / 'midi.log'
+LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+LOGGER = logging.getLogger("omimidi.core")
+if not LOGGER.handlers:
+    handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    LOGGER.addHandler(handler)
+    LOGGER.setLevel(logging.INFO)
+    LOGGER.propagate = False
 
 
 CLEANUP_FILES = [
@@ -305,7 +313,7 @@ class OmiMidiCore:
                     new_map = MidiMap.from_file(MAP_FILE)
                     # Reabrir MIDI si cambió el dispositivo
                     if new_map.midi_input_name != self.map.midi_input_name:
-                            LOGGER.info("Cambió dispositivo MIDI: '%s' → '%s'", self.map.midi_input_name, new_map.midi_input_name)
+                        LOGGER.info("Cambió dispositivo MIDI: '%s' → '%s'", self.map.midi_input_name, new_map.midi_input_name)
                         self.map = new_map
                         try:
                             if self.inport:
