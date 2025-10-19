@@ -11,3 +11,11 @@ para modificar la red, necesito ejecutar la palicacion con privilegios "sudo"
 añadir a la lista de dependencias
 source .venv/bin/activate
 pip install debugpy
+
+
+client.src.local_net_manager cunado asigno ip fija pierdo internet y tal esta raro, estudiar con calma en el futuro para buscar una solucion buena :)
+
+
+El verdadero riesgo está en lo que ocurre alrededor: si StartStandardUI() o el hilo de heartbeat lanzan una excepción sin capturar, la ejecución se detendría. Conviene envolver la lógica del heartbeat con try/except y registrar los errores para que no se caiga todo por un fallo puntual.
+
+

@@ -1,4 +1,5 @@
 # jgestion del jsons
+# REVISAR
 
 import ipaddress
 import json
@@ -205,4 +206,21 @@ def InitJson() -> dict[str, Any]:
 
 
 def UpdateNet():
-    log_event("info", module_name, "actualizadno info de interfaces")
+    log_event("info", module_name, "actualizando información de interfaces nada más")
+
+    project_root = Path(__file__).resolve().parents[2]
+    data_path = project_root / "client" / "data" / "structure.json"
+
+    if not data_path.exists():
+        log_event("error", module_name, f"No se encontró structure.json en {data_path}")
+        raise FileNotFoundError(f"No se encontró structure.json en {data_path}")
+
+    datos = cargar_json(data_path)
+    network_section = datos.setdefault("network", {})
+    interfaces = _get_network_interfaces()
+    network_section["interfaces"] = interfaces
+
+    guardar_json(data_path, datos)
+    log_print("info", module_name, "Interfaces de red actualizadas en structure.json")
+
+    return interfaces

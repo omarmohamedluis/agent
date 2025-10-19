@@ -1,19 +1,34 @@
 # REVISAR
-
+# falta meter el normal.
 # ui/ui.py
 
-from __future__ import annotations
-from pathlib import Path
 import json
 import time
+from pathlib import Path
+from typing import Any, Dict
+import sys
+
+from heartbeat import (
+    get_heartbeat_snapshot,
+    register_heartbeat_listener,
+    start_heartbeat,
+    unregister_heartbeat_listener,
+)
 from PIL import Image, ImageDraw, ImageFont
+from NetComHandler import check_server_status
+from logger import log_print,log_event
 
+BASE_DIR = Path(__file__).resolve().parents[1]  # llega a client/
+ASSETS_PATH  = BASE_DIR / "utilitys"
 
-DEFAULT_JSON_PATH = Path(__file__).resolve().parent / "agent_pi" / "data" / "structure.json"
-ASSETS_PATH = Path(__file__).resolve().parent / "utilitys"
+DEFAULT_JSON_PATH = BASE_DIR / "data" / "structure.json"
+
 
 OLED_W, OLED_H = 128, 64
 HEADER_H = 16
+
+_standard_ui_json_path = DEFAULT_JSON_PATH
+_standard_listener_registered = False
 
 # -------- Hardware --------
 
@@ -22,6 +37,8 @@ from luma.oled.device import ssd1306
 
 serial = i2c(port=1, address=0x3C)
 _device = ssd1306(serial, width=OLED_W, height=OLED_H)
+
+module_name = f"{Path(__file__).parent.name}.{Path(__file__).stem}"
 
 # -------- Carga estricta de fuentes e icono --------
 
@@ -117,13 +134,6 @@ def _read_json_simple(path: Path):
     except Exception:
         return {}
 
-def _get_enabled_service(services_list):
-    if isinstance(services_list, list):
-        for s in services_list:
-            if s.get("enabled"):
-                return s.get("name") or ""
-    return ""
-
 def _is_wifi_iface(name: str) -> bool:
     if not name:
         return False
@@ -144,23 +154,35 @@ def _display(img: Image.Image):
     _device.display(img)
 
 
+def _get_current_app_name() -> str:
+    return "HELLO"
+
+
+def _get_connection_status() -> bool:
+    return check_server_status()
+
+def _standard_ui_listener(snapshot: Dict[str, Any]) -> None:
+    EstandardUse(snapshot, json_path=_standard_ui_json_path)
+
 
 
 # -------- API pública --------
-def LoadingUI(percent: int, label: str = "Cargando"):
+def LoadingUI(percent: int, label: str = ""):
+    StopStandardUI()
     """Pantalla de carga: barra en header que invierte el texto; icono abajo."""
     img = _base_canvas()
     _draw_header_with_progress(img, percent, label)
     _display(img)
 
-def ErrorUI(label: str = "ERROR"):
+def MessageUI(label: str = ""):
+    StopStandardUI()
     """Header blanco + texto ERROR (o label), icono abajo."""
     img = _base_canvas()
     _draw_header_error(img, label)
     _display(img)
 
 
-def ErrorUIBlink(label: str = "ERROR", times: int = 3, interval: float = 0.25) -> None:
+def ErrorUI(label: str = "ERROR", times: int = 3, interval: float = 0.25) -> None:
     """Muestra ErrorUI con parpadeo simple."""
     times = max(1, int(times))
     delay = max(0.05, float(interval))
@@ -171,22 +193,8 @@ def ErrorUIBlink(label: str = "ERROR", times: int = 3, interval: float = 0.25) -
         time.sleep(delay)
     ErrorUI(label)
 
-def UIShutdownProceess(percent: int, label: str = "Apagando"):
-    """Igual que LOADING, separado por semántica (con icono)."""
-    img = _base_canvas()
-    _draw_header_with_progress(img, percent, label)
-    _display(img)
 
-def SyncingUI(percent: int, stage: str = "Syncing"):
-    """Pantalla de sincronización/transition con barra + etapa textual."""
-    img = _base_canvas()
-    percent = max(0, min(100, int(percent)))
-    stage = (stage or "Sync").upper()
-    label = f"{percent:02d}% {stage}".strip()
-    _draw_header_with_progress(img, percent, label[:18])
-    _display(img)
-
-def EstandardUse(snapshot: dict, server_online: bool, json_path: Path = DEFAULT_JSON_PATH):
+def EstandardUse(snapshot: Dict[str, Any], json_path: Path = DEFAULT_JSON_PATH) -> None:
     """Header blanco/negro y footer con CPU/TEMP y NET (WIFI/ETH ip/cidr)."""
     img = _new_frame()
 
@@ -194,10 +202,14 @@ def EstandardUse(snapshot: dict, server_online: bool, json_path: Path = DEFAULT_
     data = _read_json_simple(json_path)
     index = data.get("identity", {}).get("index", None)
     index_label = f"#{index if index is not None else '--'}"
-    services = data.get("services", [])
-    service_active = _get_enabled_service(services)
-    service_label = (service_active or "").upper()
-    _draw_header_text_left_center_right_inverted(img, index_label, service_label, right_wifi_ok=server_online)
+    app_label = (_get_current_app_name() or "").strip().upper() or "--"
+    server_online = _get_connection_status()
+    _draw_header_text_left_center_right_inverted(
+        img,
+        index_label,
+        app_label,
+        right_wifi_ok=server_online,
+    )
 
     # Footer
     draw = ImageDraw.Draw(img)
@@ -240,6 +252,39 @@ def EstandardUse(snapshot: dict, server_online: bool, json_path: Path = DEFAULT_
     _display(img)
 
 def UIOFF():
+    StopStandardUI()
     """Apaga visualmente la OLED (pantalla completamente negra)."""
     img = Image.new("L", (OLED_W, OLED_H), 0)
     _display(img)
+    log_event("info", module_name, "Pantalla OLED apagada")
+
+
+def StartStandardUI(json_path: Path = DEFAULT_JSON_PATH, ensure_heartbeat: bool = True) -> None:
+    """Registra la UI estándar para recibir actualizaciones del heartbeat."""
+    global _standard_ui_json_path, _standard_listener_registered
+
+    _standard_ui_json_path = Path(json_path)
+
+    if ensure_heartbeat:
+        start_heartbeat(path=_standard_ui_json_path, start_active=True)
+
+    if not _standard_listener_registered:
+        register_heartbeat_listener(_standard_ui_listener)
+        _standard_listener_registered = True
+
+    snapshot = get_heartbeat_snapshot()
+    EstandardUse(snapshot, json_path=_standard_ui_json_path)
+
+
+def StopStandardUI() -> None:
+    """Elimina la suscripción de la UI estándar y apaga la pantalla."""
+    global _standard_listener_registered
+
+    if _standard_listener_registered:
+        unregister_heartbeat_listener(_standard_ui_listener)
+        _standard_listener_registered = False
+        log_print("info", module_name, "Quitada suscripción de la UI al heartbeat")
+
+
+
+log_event("info", module_name, "OLED inicializada y lista")

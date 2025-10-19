@@ -1,4 +1,6 @@
 # configuracion de red local
+# REVISAR 
+# NO TERMINA DE FUNCIONAR AL 100% PERO ES MAS POR EL OS QUE POR EL SCRIPT, EVENTUALLMENTE TENDRÉ QUE PROBARLO BIEN Y BUSCAR WORKARROUNDS PARA QUE EL UX SEA MÁS FLUIDO
 
 import ipaddress
 import json
@@ -44,6 +46,25 @@ def _nmcli(args: list[str]) -> str:
             f"Fallo al ejecutar nmcli {' '.join(args)}: {exc.stderr.strip() if exc.stderr else exc}",
         )
         raise
+
+
+def restart_network_manager() -> None:
+    """Reinicia NetworkManager a través de systemctl."""
+    try:
+        subprocess.run(
+            ["systemctl", "restart", "NetworkManager"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        log_event("info", module_name, "NetworkManager reiniciado")
+    except FileNotFoundError:
+        log_event("warning", module_name, "systemctl no está disponible para reiniciar NetworkManager")
+    except subprocess.CalledProcessError as exc:  # noqa: BLE001
+        error_output = exc.stderr.strip() if exc.stderr else str(exc)
+        log_event("error", module_name, f"Fallo al reiniciar NetworkManager: {error_output}")
+    except Exception as exc:  # noqa: BLE001
+        log_event("error", module_name, f"Error inesperado al reiniciar NetworkManager: {exc}")
 
 
 def _list_connections() -> list[dict[str, str]]:
@@ -125,6 +146,7 @@ def _get_connection_settings(connection_name: str) -> dict[str, str]:
         "ipv4.gateway",
         "ipv4.dns",
         "ipv4.ignore-auto-dns",
+        "ipv4.never-default",
     ]
     try:
         output = _nmcli(["-g", ",".join(keys), "connection", "show", connection_name])
@@ -154,8 +176,8 @@ def _config_matches(connection_name: str, iface: str, config: dict[str, Any]) ->
     ip = config.get("ip")
     netmask = config.get("netmask")
     gateway = config.get("gateway")
-    dns_primary = config.get("dns_primary")
-    dns_secondary = config.get("dns_secondary")
+    dns_primary = config.get("dns_primary") or "1.1.1.1"
+    dns_secondary = config.get("dns_secondary") or "1.0.0.1"
 
     if not ip or not netmask or not gateway:
         log_event(
@@ -177,6 +199,8 @@ def _config_matches(connection_name: str, iface: str, config: dict[str, Any]) ->
     current_address = settings.get("ipv4.addresses", "")
     current_gateway = settings.get("ipv4.gateway", "")
     current_dns = settings.get("ipv4.dns", "")
+    current_ignore_auto = settings.get("ipv4.ignore-auto-dns", "")
+    current_never_default = settings.get("ipv4.never-default", "")
 
     if current_address != expected_address:
         return False
@@ -188,6 +212,11 @@ def _config_matches(connection_name: str, iface: str, config: dict[str, Any]) ->
         expected_dns_list = [value.strip() for value in expected_dns.split(",") if value.strip()]
         if current_dns_list != expected_dns_list:
             return False
+
+    if current_ignore_auto not in {"yes", "true", "1"}:
+        return False
+    if current_never_default not in {"yes", "true", "1"}:
+        return False
 
     return True
 
@@ -223,6 +252,8 @@ def _apply_interface_config(
             _nmcli(["connection", "mod", connection_name, "ipv4.gateway", ""])
             _nmcli(["connection", "mod", connection_name, "ipv4.dns", ""])
             _nmcli(["connection", "mod", connection_name, "ipv4.ignore-auto-dns", "no"])
+            _nmcli(["connection", "mod", connection_name, "ipv4.routes", ""])
+            _nmcli(["connection", "mod", connection_name, "ipv4.never-default", "no"])
             _nmcli(["connection", "up", connection_name, "ifname", iface])
         except subprocess.CalledProcessError:
             log_event("error", module_name, f"No se pudo aplicar DHCP en {iface}")
@@ -233,6 +264,8 @@ def _apply_interface_config(
         ip = config.get("ip")
         netmask = config.get("netmask")
         gateway = config.get("gateway")
+        dns_primary = config.get("dns_primary") or "1.1.1.1"
+        dns_secondary = config.get("dns_secondary") or "1.0.0.1"
         if not ip or not netmask or not gateway:
             log_event(
                 "error",
@@ -243,8 +276,6 @@ def _apply_interface_config(
 
         prefix = _netmask_to_prefix(netmask)
         address = f"{ip}/{prefix}"
-        dns_primary = config.get("dns_primary")
-        dns_secondary = config.get("dns_secondary")
         dns_values = [dns for dns in (dns_primary, dns_secondary) if dns]
         dns_string = ",".join(dns_values) if dns_values else ""
 
@@ -255,9 +286,15 @@ def _apply_interface_config(
         )
 
         try:
+            # Cambia temporalmente a auto para poder limpiar direcciones previas
+            _nmcli(["connection", "mod", connection_name, "ipv4.method", "auto"])
+
             # Limpia direcciones y rutas anteriores para evitar residuos
             _nmcli(["connection", "mod", connection_name, "ipv4.addresses", ""])
             _nmcli(["connection", "mod", connection_name, "ipv4.routes", ""])
+            _nmcli(["connection", "mod", connection_name, "ipv4.gateway", ""])
+            _nmcli(["connection", "mod", connection_name, "ipv4.dns", ""])
+            _nmcli(["connection", "mod", connection_name, "ipv4.ignore-auto-dns", "no"])
 
             # Aplica la nueva dirección/gateway antes de fijar el modo manual
             _nmcli(["connection", "mod", connection_name, "ipv4.addresses", address])
@@ -270,6 +307,7 @@ def _apply_interface_config(
                 _nmcli(["connection", "mod", connection_name, "ipv4.dns", ""])
                 _nmcli(["connection", "mod", connection_name, "ipv4.ignore-auto-dns", "no"])
 
+            _nmcli(["connection", "mod", connection_name, "ipv4.never-default", "yes"])
             _nmcli(["connection", "mod", connection_name, "ipv4.method", "manual"])
             _nmcli(["connection", "up", connection_name, "ifname", iface])
         except subprocess.CalledProcessError:
@@ -307,12 +345,21 @@ def net_default() -> dict[str, Any]:
             )
             return "ok"
 
+        if config.get("dhcp"):
+            return _apply_interface_config(iface, connection_name, config)
+
+        # Asegura DNS predeterminados cuando se trabaja en manual
+        config.setdefault("dns_primary", "1.1.1.1")
+        config.setdefault("dns_secondary", "1.0.0.1")
+
         return _apply_interface_config(iface, connection_name, config)
 
     statuses = []
     statuses.append(process_interface("eth0", ethernet_cfg, {"802-3-ethernet", "ethernet"}, "ethernet"))
     statuses.append(process_interface("wlan0", wifi_cfg, {"802-11-wireless", "wifi"}, "wireless"))
     statuses = [status for status in statuses if status]
+
+    # restart_network_manager()
 
     log_event("info", module_name, f"Configuración principal aplicada: {result}")
     if "error" in statuses:

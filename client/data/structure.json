@@ -11,10 +11,10 @@
   "network": {
     "desired": {
       "eth0": {
-        "dhcp": false,
-        "ip": "192.168.0.66",
+        "dhcp": true,
+        "ip": "30.0.0.50",
         "netmask": "255.255.255.0",
-        "gateway": "192.168.0.1",
+        "gateway": "30.0.0.1",
         "priority": "-999"
       },
       "wlan0": {
@@ -26,6 +26,13 @@
       }
     },
     "interfaces": [
+      {
+        "name": "eth0",
+        "ip": "30.0.0.50",
+        "netmask": "255.255.255.0",
+        "cidr": "30.0.0.50/24",
+        "vlan": null
+      },
       {
         "name": "wlan0",
         "ip": "192.168.0.48",
