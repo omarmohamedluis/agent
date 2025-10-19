@@ -1,0 +1,11 @@
+{
+   "config_name": "test1",
+   "midi_input": "APC40 mkII:APC40 mkII MIDI 1 24:0",
+   "osc_port": 7000,
+   "osc_ips": ["127.0.0.1","192.168.0.10"],
+   "ui_port": 9001,
+   "routes": [
+      {"type": "cc", "cc": 7, "osc": "/D3/learn", "vtype": "float", "channel": 0},
+      {"type": "cc", "cc": 7, "osc": "/D3/learn", "vtype": "float", "channel": 1}
+    ]
+}

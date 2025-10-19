@@ -1,0 +1,28 @@
+{
+  "cliente_payload": {
+    "serial": "<string>  // Número de serie único del equipo",
+    "host": "<string>    // Nombre DNS o alias del agente",
+    "index": "<int>      // Posición lógica dentro del rack/instalación",
+    "version": "<string> // Versión de software del agente",
+    "heartbeat": {
+      "timestamp": "<iso8601>",
+      "cpu": "<float>    // % de uso",
+      "temp": "<float>   // °C",
+      "ifaces": [
+        {
+          "iface": "<string>",
+          "ip": "<string>",
+          "netmask": "<string>",
+          "prefix": "<int>",
+          "cidr": "<string>"
+        }
+      ]
+    },
+    "service_state": {
+      "actual": "<string>       // Servicio realmente corriendo",
+      "configuration":"<string> // normbre del archivo de configuración",
+      "web_port": "             // puerto de la web del seervicio"
+    }
+
+    }
+}

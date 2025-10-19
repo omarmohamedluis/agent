@@ -1,3 +1,5 @@
+# REVISAR
+
 # ui/ui.py
 
 from __future__ import annotations
@@ -135,14 +137,14 @@ def _is_eth_iface(name: str) -> bool:
     return n.startswith("eth") or n.startswith("en")
 
 def _display(img: Image.Image):
-    # if not _HW_OK or _device is None:
-    #     print("[OLED:NOOP] frame renderizado")
-    #     return
     if img.size != (_device.width, _device.height):
         img = img.resize((_device.width, _device.height), Image.NEAREST)
     if img.mode != _device.mode:
         img = img.convert(_device.mode)
     _device.display(img)
+
+
+
 
 # -------- API pública --------
 def LoadingUI(percent: int, label: str = "Cargando"):

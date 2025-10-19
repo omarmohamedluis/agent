@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import os, json, time, threading, socket, ipaddress, sys, signal, tempfile, atexit
-import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone

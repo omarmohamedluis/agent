@@ -1,0 +1,87 @@
+{
+  "descubrimiento": {
+    "proceso": "El servidor emite UDP DISCOVER cada ~3 s y escucha respuestas en el puerto 37021.",
+    "componentes": [
+      "server/app/broadcast.py#L72",
+      "client/agent/runtime.py#L139"
+    ],
+    "flujo": [
+      "Servidor → broadcast DISCOVER con ip/puertos.",
+      "Agente → responde AGENT_STATUS con snapshot y servicios.",
+      "Servidor → actualiza DeviceRegistry y sincroniza índices."
+    ]
+  },
+  "comandos_udp": {
+    "proceso": "El servidor envía órdenes SET_SERVICE, POWER o SET_INDEX y espera ACK.",
+    "componentes": [
+      "server/app/routes.py#L75",
+      "server/app/broadcast.py#L224",
+      "client/agent/runtime.py#L591"
+    ],
+    "mensajes": [
+      {
+        "tipo": "SET_SERVICE",
+        "ack": "SERVICE_ACK con etapas (cerrando, abriendo, completado) y progreso."
+      },
+      {
+        "tipo": "POWER",
+        "ack": "POWER_ACK con ok/error."
+      },
+      {
+        "tipo": "SET_INDEX",
+        "ack": "INDEX_ACK con índice aplicado."
+      }
+    ]
+  },
+  "apis_rest": {
+    "base": "/api",
+    "endpoints": [
+      {"metodo": "GET", "ruta": "/devices", "descripcion": "Dispositivos combinando runtime + base de datos."},
+      {"metodo": "GET", "ruta": "/clients", "descripcion": "Lista registros persistidos en SQLite."},
+      {"metodo": "PUT", "ruta": "/devices/{serial}", "descripcion": "Actualiza servicio/config deseados y perfil de red; guarda en DB."},
+      {"metodo": "DELETE", "ruta": "/devices/{serial}", "descripcion": "Elimina registro y registra desincronizaciones."},
+      {"metodo": "POST", "ruta": "/devices/{serial}/service", "descripcion": "Lanza comando SET_SERVICE al agente."},
+      {"metodo": "POST", "ruta": "/devices/{serial}/power", "descripcion": "Lanza comando POWER al agente."},
+      {"metodo": "POST", "ruta": "/devices/{serial}/network/ack", "descripcion": "Stub para confirmar aplicación de perfil de red."},
+      {"metodo": "GET", "ruta": "/configs/{service_id}", "descripcion": "Lista presets guardados."},
+      {"metodo": "GET", "ruta": "/configs/{service_id}/{name}", "descripcion": "Obtiene preset específico."},
+      {"metodo": "POST", "ruta": "/configs/{service_id}", "descripcion": "Guarda preset (crea/actualiza)."},
+      {"metodo": "DELETE", "ruta": "/configs/{service_id}/{name}", "descripcion": "Elimina preset."}
+    ],
+    "persistencia": "SQLite en server/db.py; tablas service_configs y devices."
+  },
+  "consumo_cliente": {
+    "detalles": [
+      "El agente detecta la API en DISCOVER, guarda server.json y sube preset MIDI local (POST /api/configs/MIDI).",
+      "Al cambiar servicio con preset, descarga configuración vía GET /api/configs/{service}/{name}.",
+      "Servicio omimidi_core sincroniza cambios a POST /api/configs/MIDI."
+    ],
+    "componentes": [
+      "client/agent/runtime.py#L247",
+      "client/agent/runtime.py#L306",
+      "client/servicios/MIDI/omimidi_core.py#L53"
+    ]
+  },
+  "persistencia_estado": {
+    "descripcion": "DeviceRegistry mantiene snapshot en memoria con TTL de 6 s y hace mirror en SQLite para desired_state.",
+    "componentes": [
+      "server/app/registry.py#L18",
+      "server/app/devices.py#L6",
+      "server/db.py#L91"
+    ],
+    "informacion": [
+      "Campos deseados vs. runtime se combinan en GET /api/devices para la UI.",
+      "NetworkManager guarda perfiles deseados hasta que exista orquestación real."
+    ]
+  },
+  "siguientes_pasos": [
+    {
+      "id": 1,
+      "descripcion": "Ejecutar uvicorn + agente de prueba para verificar que los SERVICE_ACK/POWER_ACK impactan en /api/devices."
+    },
+    {
+      "id": 2,
+      "descripcion": "Completar la lógica del agente para llamar a POST /api/devices/{serial}/network/ack al aplicar perfiles de red."
+    }
+  ]
+}

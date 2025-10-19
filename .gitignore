@@ -9,7 +9,6 @@ __pycache__/
 # Logs y temporales
 *.log
 *.tmp
-client/agent_pi/data/
 
 # Archivos del sistema
 .DS_Store
@@ -19,9 +18,6 @@ Thumbs.db
 .vscode/
 
 # jsons autogenerados (contenidos dentro de data/)
-
+*_TEMP.json
 
 # servicio midi
-
-
-pensamientos.txt

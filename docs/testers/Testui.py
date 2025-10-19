@@ -1,4 +1,6 @@
 # test_ui_cycle.py
+
+
 import time
 from pathlib import Path
 
@@ -6,7 +8,7 @@ from pathlib import Path
 from ui import (
     LoadingUI,
     ErrorUI,
-    UIShutdownProceess,
+    UISLOADINGProceess,
     EstandardUse,
     UIOFF,
 )
@@ -22,10 +24,10 @@ def maybe_start_heartbeat():
     try:
         # intentar crear/validar el JSON si está disponible
         try:
-            from jsonconfig import ensure_config
+            from client.src.jsonconfig import ensure_config
         except Exception:
             try:
-                from jsonconfig import ensure_config  # por si está en agent_pi/data/
+                from client.src.jsonconfig import ensure_config  # por si está en agent_pi/data/
             except Exception:
                 ensure_config = None
         if ensure_config:
