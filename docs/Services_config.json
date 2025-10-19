@@ -1,0 +1,66 @@
+{
+        "standby":{
+        "info":{
+            "id": "standby",
+            "display_name": "STANDBY",
+            "service_type": "null",
+            "description": "no hace nada"
+        },
+        "web": {
+            "USE": false,
+            "ui_port": null
+        },
+
+        "network":{
+            "vlan": null
+        }
+    },
+
+
+    "OmiMidi":{
+        "info":{
+            "id": "MIDI",
+            "display_name": "OMI MIDI",
+            "service_type": "process",
+            "description": "Traduce eventos MIDI a OSC"
+        },
+        "web": {
+            "USE": true,
+            "ui_port": 9001
+        },
+
+        "network":{
+            "vlan": 100,
+            "dhcp": true,
+             "ip": "192.168.0.66",
+            "netmask": "255.255.255.0",
+            "gateway": "192.168.0.1"
+        },
+    
+        "execution": {
+            "cwd": "servicios/MIDI",
+            "entry": ["${PYTHON}", "service.py"],
+            "restart_policy": "always",
+            "graceful_timeout_s": 20
+        },
+
+        "logs": {
+            "stdout": "logs/services/midi.log",
+            "stderr": "logs/services/midierr.log",
+            "max_size_mb": 10
+        },
+        "config": {
+            "requires_preset": true,
+            "default_config_name": "host,timestamp",
+            "sync_endpoint": "/api/configs/MIDI"
+        },
+        "capabilities": {
+            "supports_index_override": true,
+            "network_ports": [
+                {"protocol": "udp", "port": 1024, "description": "OSC output"},
+                {"protocol": "tcp", "port": 9001, "description": "WebUI"}
+            ]
+        }
+    }
+
+}

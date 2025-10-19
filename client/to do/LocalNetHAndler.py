@@ -1,2 +1,0 @@
-#configuracion de red local
-

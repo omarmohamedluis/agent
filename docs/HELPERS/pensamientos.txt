@@ -1,0 +1,13 @@
+el log, no deberia pesar mas de 200mb, si eso pasa que valla borrando las ultimas lineas?
+
+añadir un color más al log, para el inicio y finalizado del sistema 
+
+cunado instale en una raspberry nueva, debo comprobar que network managet "systemctl is-active NetworkManager" este activo, sino doy error, antes de instalar deoendencias ni nada
+
+para modificar la red, necesito ejecutar la palicacion con privilegios "sudo"
+
+
+
+añadir a la lista de dependencias
+source .venv/bin/activate
+pip install debugpy

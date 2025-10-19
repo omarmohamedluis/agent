@@ -1,37 +1,28 @@
 {
   "version": {
-    "version": "O.O.1"
+    "version": ""
   },
+
   "identity": {
     "index": null,
-    "name": "omipitest",
-    "serial": "4f30ea9e2b4bbfbc",
-    "host": "omipitest"
+    "name": "",
+    "serial": "",
+    "host": ""
   },
   "network": {
-    "desired": {
-      "eth0": {
-        "dhcp": false,
-        "ip": "192.168.0.66",
-        "netmask": "255.255.255.0",
-        "gateway": "192.168.0.1",
-        "priority": "-999"
-      },
-      "wlan0": {
+    "desired":{
+      "eth0":{
         "dhcp": true,
         "ip": "192.168.0.66",
         "netmask": "255.255.255.0",
-        "gateway": "192.168.0.1",
-        "priority": "0"
+        "gateway": "192.168.0.1"
+
       }
+
     },
+
     "interfaces": [
       {
-        "name": "wlan0",
-        "ip": "192.168.0.48",
-        "netmask": "255.255.255.0",
-        "cidr": "192.168.0.48/24",
-        "vlan": null
       }
     ]
   },
