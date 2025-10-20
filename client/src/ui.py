@@ -10,8 +10,8 @@ import sys
 
 from heartbeat import (
     get_heartbeat_snapshot,
-    register_heartbeat_listener,
     start_heartbeat,
+    register_heartbeat_listener,
     unregister_heartbeat_listener,
 )
 from PIL import Image, ImageDraw, ImageFont

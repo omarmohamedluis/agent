@@ -28,27 +28,39 @@
   "services": [
     {
       "name": "standby",
-      "enabled": true
+      "enabled": true,
+      "configuration": null,
+      "web_port": null
     },
     {
       "name": "MIDI",
-      "enabled": false
+      "enabled": false,
+      "configuration": null,
+      "web_port": null
     },
     {
       "name": "satellite",
-      "enabled": false
+      "enabled": false,
+      "configuration": null,
+      "web_port": null
     },
     {
       "name": "companion",
-      "enabled": false
+      "enabled": false,
+      "configuration": null,
+      "web_port": null
     },
     {
       "name": "OSCnum",
-      "enabled": false
+      "enabled": false,
+      "configuration": null,
+      "web_port": null
     },
     {
       "name": "scauting",
-      "enabled": false
+      "enabled": false,
+      "configuration": "ninguna",
+      "web_port": null
     }
   ]
 }

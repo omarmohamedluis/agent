@@ -1,0 +1,11 @@
+{
+  "cliente_payload": {
+    "serial": "<string>  // Número de serie único del equipo",
+    "host": "<string>    // Nombre DNS o alias del agente",
+    "index": "<int>      // Posición lógica dentro del rack/instalación"
+    },
+    "service_request": {
+      "servite_to_run": "<string>       // Servicio realmente corriendo",
+      "configuration":"<string>         //nombre de la configuracion"
+    }
+}

@@ -1,4 +1,5 @@
 {
+   "target_service" : "MIDI",
    "config_name": "test1",
    "midi_input": "APC40 mkII:APC40 mkII MIDI 1 24:0",
    "osc_port": 7000,

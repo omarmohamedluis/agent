@@ -15,7 +15,7 @@ from JsonConfig import InitJson, UpdateNet      # type: ignore
 from local_net_handler import net_default       # type: ignore
 from ui import LoadingUI, StartStandardUI, StopStandardUI,UIOFF  # type: ignore
 from heartbeat import start_heartbeat, stop_heartbeat, get_heartbeat_snapshot  # type: ignore
-from NetComHandler import handshake             # type: ignore
+from NetComHandler import handshake            # type: ignore
 
 
 module_name = f"{Path(__file__).parent.name}.{Path(__file__).stem}"
@@ -52,7 +52,6 @@ def inicializar():
     for progress in range(50, 60):
         LoadingUI(progress, "WAIT")
         time.sleep(0.5)
-    print(get_heartbeat_snapshot())
 
 
     LoadingUI(70,"HANDSHAKE")
@@ -68,7 +67,7 @@ def inicializar():
     LoadingUI(100,"done")
 
 def main() -> None:
-    log_print("info", module_name, "Activando interfaz estándar")
+    log_print("info", module_name, "Activando LCD UI estándar")
     try:
         StartStandardUI()
         while True:

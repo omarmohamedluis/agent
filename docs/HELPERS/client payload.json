@@ -5,18 +5,8 @@
     "index": "<int>      // Posición lógica dentro del rack/instalación",
     "version": "<string> // Versión de software del agente",
     "heartbeat": {
-      "timestamp": "<iso8601>",
       "cpu": "<float>    // % de uso",
-      "temp": "<float>   // °C",
-      "ifaces": [
-        {
-          "iface": "<string>",
-          "ip": "<string>",
-          "netmask": "<string>",
-          "prefix": "<int>",
-          "cidr": "<string>"
-        }
-      ]
+      "temp": "<float>   // °C"
     },
     "service_state": {
       "actual": "<string>       // Servicio realmente corriendo",
