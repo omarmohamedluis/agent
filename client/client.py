@@ -49,11 +49,6 @@ def inicializar():
     log_print("info", module_name, "sistema iniciado, starting heartbeat")
     LoadingUI(40,"heartbeat")
     start_heartbeat()
-    for progress in range(50, 60):
-        LoadingUI(progress, "WAIT")
-        time.sleep(0.5)
-
-
     LoadingUI(70,"HANDSHAKE")
     if handshake():
         log_print("info", module_name, "El servidor ha respondido al handshake, iniciando servicio")

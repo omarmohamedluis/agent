@@ -54,14 +54,12 @@ def log_event(level: str, caller: str, message: str) -> Path:
 
 def log_print(level: str, caller: str, message: str) -> Path:
     level_norm = (level or "").upper() or "INFO"
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
 
     log_event(level_norm, caller, message)
 
     level_color = LEVEL_COLORS.get(level_norm, DEFAULT_COLOR)
     tag_colored = f"{level_color}[{level_norm}]{RESET_COLOR}"
-    timestamp_colored = f"{TIMESTAMP_COLOR}{timestamp}{RESET_COLOR}"
     caller_colored = f"{CALLER_COLOR}{caller}{RESET_COLOR}"
     message_colored = _highlight_error_words(message)
 
-    print(f"{timestamp_colored} {tag_colored} {caller_colored}: {message_colored}")
+    print(f"{tag_colored} {caller_colored}: {message_colored}")

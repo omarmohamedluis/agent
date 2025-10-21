@@ -16,7 +16,7 @@ from heartbeat import (
 )
 from PIL import Image, ImageDraw, ImageFont
 from NetComHandler import check_server_status
-from logger import log_print,log_event
+from logger import log_event, log_print
 
 BASE_DIR = Path(__file__).resolve().parents[1]  # llega a client/
 ASSETS_PATH  = BASE_DIR / "utilitys"
@@ -263,10 +263,11 @@ def StartStandardUI(json_path: Path = DEFAULT_JSON_PATH, ensure_heartbeat: bool 
     """Registra la UI estándar para recibir actualizaciones del heartbeat."""
     global _standard_ui_json_path, _standard_listener_registered
 
+    log_print("info", module_name, "Iniciando UI estándar")
     _standard_ui_json_path = Path(json_path)
 
-    if ensure_heartbeat:
-        start_heartbeat(path=_standard_ui_json_path, start_active=True)
+    # if ensure_heartbeat:
+    #     start_heartbeat(path=_standard_ui_json_path, start_active=True)
 
     if not _standard_listener_registered:
         register_heartbeat_listener(_standard_ui_listener)
@@ -287,4 +288,4 @@ def StopStandardUI() -> None:
 
 
 
-log_event("info", module_name, "OLED inicializada y lista")
+log_print("info", module_name, "OLED inicializada y lista")

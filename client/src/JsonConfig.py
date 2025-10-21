@@ -14,8 +14,6 @@ from logger import log_event, log_print
 
 module_name = f"{Path(__file__).parent.name}.{Path(__file__).stem}"
 
-log_event("info", module_name, "iniciando lectura y edicion del json")
-
 # helpers
 
 def cargar_json(ruta: Path | str) -> dict[str, Any]:
@@ -175,7 +173,7 @@ def _fill_json(datos: dict[str, Any], data_path: Path, project_root: Path) -> di
 # llamadas desde fuera
 
 def InitJson() -> dict[str, Any]:
-    log_event("info", module_name, "iniciando lectura y edicion del json")
+    log_print("info", module_name, "Inicializando estructura JSON del cliente")
 
     project_root = Path(__file__).resolve().parents[2]
     data_path = project_root / "client" / "data" / "structure.json"

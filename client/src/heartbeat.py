@@ -9,6 +9,8 @@ from typing import Any, Callable, Dict, List, Optional
 import netifaces
 import psutil
 
+from logger import log_event, log_print
+
 STRUCTURE_PATH = Path(__file__).resolve().parent / "agent_pi" / "data" / "structure.json"
 
 # ---------------- Vars de estado expuestas ----------------
@@ -187,6 +189,10 @@ def _compute_snapshot(path: Path) -> Dict[str, Any]:
 
     cpu = _get_cpu_usage()
     temp = _get_temp_c()
+    if cpu is not None and cpu > 50.0:
+        log_event("warning", __name__, f"CPU elevada: {cpu:.1f}%")
+    if temp is not None and temp > 60.0:
+        log_event("warning", __name__, f"Temperatura elevada: {temp:.1f}°C")
     ip_info = _get_ip_info()
 
     prev_ifaces = _normalize_json_interfaces(data.get("network", {}).get("interfaces")) if data else []
@@ -214,8 +220,11 @@ def _heartbeat_loop() -> None:
         is_active = _active_event.is_set()
 
         if is_active:
-            snapshot = _compute_snapshot(_structure_path)
-            _set_metrics(snapshot)
+            try:
+                snapshot = _compute_snapshot(_structure_path)
+                _set_metrics(snapshot)
+            except Exception as exc:
+                log_event("error", __name__, f"Error capturando métricas del heartbeat: {exc}")
         else:
             if last_active_state is not False:
                 _set_metrics(_empty_snapshot())
@@ -235,6 +244,7 @@ def start_heartbeat(
     start_active: bool = True,
 ) -> None:
     """Arranca (o reinicia) el hilo si no está vivo y actualiza la configuración."""
+    log_print("info", __name__, f"Iniciando heartbeat: path={path}, intervalo={float(interval):.2f}s, activo={start_active}")
     global _heartbeat_thread, _poll_interval, _structure_path, _stop_event, _active_event
 
     _structure_path = path
@@ -265,16 +275,19 @@ def start_heartbeat(
 
 def pause_heartbeat() -> None:
     """Mantiene vivo el hilo pero detiene las lecturas."""
+    log_event("info", __name__, "Heartbeat en pausa")
     _active_event.clear()
 
 
 def resume_heartbeat() -> None:
     """Vuelve a activar el muestreo en el hilo existente."""
+    log_event("info", __name__, "Heartbeat reanudado")
     _active_event.set()
 
 
 def stop_heartbeat() -> None:
     """Detiene el hilo por completo y limpia las métricas."""
+    log_print("info", __name__, "Heartbeat detenido")
     global _heartbeat_thread
 
     if not _heartbeat_thread:

@@ -241,7 +241,7 @@ def _apply_interface_config(
     Utiliza NetworkManager (nmcli) para alternar entre DHCP y estático.
     """
     if not config:
-        log_event("info", module_name, f"Sin configuración para {iface}, se omite.")
+        log_event("warning", module_name, f"Sin configuración deseada para {iface}; se omite")
         return "warning"
 
     if config.get("dhcp"):
@@ -318,6 +318,7 @@ def _apply_interface_config(
 
 def net_default() -> dict[str, Any]:
     """Configura la red principal de la Pi según lo declarado en network.desired."""
+    log_print("info", module_name, "Iniciando configuración de red deseada")
     structure = _read_structure()
     desired = _ensure_desired_block(structure)
 

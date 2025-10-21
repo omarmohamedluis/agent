@@ -1,8 +1,9 @@
 {
-  "midi_input": "APC40 mkII:APC40 mkII MIDI 1 24:0",
-  "osc_port": 2048,
+  "midi_input": "Midi Through:Midi Through Port-0 14:0",
+  "osc_port": 7000,
   "osc_ips": [
-    "127.0.0.1"
+    "127.0.0.1",
+    "192.168.0.10"
   ],
   "ui_port": 9001,
   "routes": [
