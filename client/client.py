@@ -15,7 +15,7 @@ from JsonConfig import InitJson, UpdateNet      # type: ignore
 from local_net_handler import net_default       # type: ignore
 from ui import LoadingUI, StartStandardUI, StopStandardUI,UIOFF  # type: ignore
 from heartbeat import start_heartbeat, stop_heartbeat, get_heartbeat_snapshot  # type: ignore
-from NetComHandler import handshake            # type: ignore
+from NetComHandler import handshake, close_comm_channel  # type: ignore
 
 
 module_name = f"{Path(__file__).parent.name}.{Path(__file__).stem}"
@@ -24,6 +24,7 @@ module_name = f"{Path(__file__).parent.name}.{Path(__file__).stem}"
 
 def _turn_off_sytem() -> None:
     log_print("info", module_name, "Apagando interfaces locales")
+    close_comm_channel()
     StopStandardUI()
     stop_heartbeat()
     log_print("info", module_name, "Interfaz y heartbeat detenidos")
