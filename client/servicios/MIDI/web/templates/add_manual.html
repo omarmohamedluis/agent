@@ -1,0 +1,42 @@
+<section class="card stack">
+  <div class="section-title">
+    <h2>Añadir ruta manual</h2>
+    <p class="muted">Configura la ruta MIDI → OSC rellenando los campos.</p>
+  </div>
+  <form method="post" action="/add_route" class="stack" id="manualForm">
+    <div class="form-grid">
+      <div>
+        <label>Tipo</label>
+        <select name="rtype">
+          <option value="note">note</option>
+          <option value="cc">cc</option>
+        </select>
+      </div>
+      <div>
+        <label>Nota o CC (0..127)</label>
+        <input type="text" name="num">
+      </div>
+      <div class="full">
+        <label>OSC Path</label>
+        <input type="text" name="osc" value="/D3/x">
+      </div>
+      <div>
+        <label>Tipo de valor OSC</label>
+        <select name="vtype" id="manualVType">
+          <option value="float">float (0..1)</option>
+          <option value="int">int (0..127)</option>
+          <option value="bool">bool</option>
+          <option value="const">const</option>
+        </select>
+      </div>
+      <div id="manualConstRow" style="display:none;">
+        <label>Const (si vtype=const)</label>
+        <input type="text" name="const" id="manualConstInput" placeholder="ej: 1.0">
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn primary" type="submit">Añadir ruta</button>
+      <a class="btn" href="/">Cancelar</a>
+    </div>
+  </form>
+</section>

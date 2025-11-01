@@ -10,7 +10,6 @@ import sys
 
 from heartbeat import (
     get_heartbeat_snapshot,
-    start_heartbeat,
     register_heartbeat_listener,
     unregister_heartbeat_listener,
 )

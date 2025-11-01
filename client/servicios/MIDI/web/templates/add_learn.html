@@ -1,0 +1,47 @@
+<section class="card stack">
+  <div class="section-title">
+    <h2>LEARN automático</h2>
+    <p class="muted">Mueve un control MIDI, revisa el último mensaje detectado y pulsa aceptar para crear la ruta.</p>
+  </div>
+  <form method="post" action="/commit_learn" id="learnForm" class="stack">
+    <div class="form-grid">
+      <div class="full">
+        <label>OSC Path</label>
+        <input type="text" name="osc" value="/D3/learn" id="oscInput">
+      </div>
+      <div>
+        <label>Tipo de valor OSC</label>
+        <select name="vtype" id="vtypeInput">
+          <option value="float">float (0..1)</option>
+          <option value="int">int (0..127)</option>
+          <option value="bool">bool</option>
+          <option value="const">const</option>
+        </select>
+      </div>
+      <div id="constRow" style="display:none;">
+        <label>Const (si vtype=const)</label>
+        <input type="text" name="const" id="constInput" placeholder="ej: 1.0">
+      </div>
+    </div>
+    <div class="info-block" id="livePreview">
+      <div><strong>Ruta OSC:</strong> <code id="summaryOsc">/D3/learn</code></div>
+      <div><strong>Tipo de valor:</strong> <span id="summaryType">float (0..1)</span></div>
+      <div><strong>Tipo de mensaje:</strong> <span id="summaryKind">Esperando…</span></div>
+      <div><strong>Último mensaje:</strong> <span id="summaryCandidate">Esperando evento MIDI…</span></div>
+      <div class="muted" id="summaryDetails" style="margin-top:4px; display:none;"></div>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="learnAccept" type="button" disabled>Aceptar</button>
+      <button class="btn" type="button" id="learnCancel">Cancelar</button>
+    </div>
+    <div class="muted" id="learnMessage" style="display:none;"></div>
+    <small>En esta pantalla el aprendizaje se inicia automáticamente y se muestra siempre el último mensaje recibido.</small>
+  </form>
+  <div class="info-block" id="learnResult" style="display:none;">
+    <div class="muted">Última ruta creada</div>
+    <div id="resultSummary" style="margin-top:6px;"></div>
+    <form method="post" action="/clear_learn_result" style="margin-top:12px;">
+      <button class="btn" type="submit">Ocultar resultado</button>
+    </form>
+  </div>
+</section>

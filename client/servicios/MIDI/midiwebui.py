@@ -7,6 +7,7 @@ from typing import Any, Dict
 from fastapi import FastAPI, Form, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pythonosc.udp_client import SimpleUDPClient
 from datetime import datetime
 import mido
@@ -26,9 +27,13 @@ mido.set_backend("mido.backends.rtmidi")
 
 app = FastAPI(title="OMIMIDI Web UI", version="0.6")
 
+# Static files
 STATIC_DIR = Path(__file__).resolve().parent / "web" / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# Templates
+templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "web" / "templates"))
 
 STRUCTURE_PATH = Path(__file__).resolve().parents[2] / "agent_pi" / "data" / "structure.json"
 
@@ -130,40 +135,22 @@ def get_identity_host() -> str:
     return "unknown-host"
 
 
-NAV_ITEMS = [
-    ("home", "Home", "/"),
-    ("settings", "Ajustes", "/settings"),
-    ("add", "Añadir", "/add")
-]
-
-LAYOUT_PATH = Path(__file__).resolve().parent / "web" / "layout.html"
-LAYOUT_TEMPLATE = LAYOUT_PATH.read_text(encoding="utf-8")
-
-def render_layout(body_html: str, *, title: str = "OMIMIDI Web UI", active: str = "home", extra_head: str = "", extra_js: str = "") -> HTMLResponse:
+def get_template_context(active: str = "home", extra_data: dict = None) -> dict:
+    """Genera el contexto base para las plantillas."""
     host_label = get_identity_host()
-    brand_text = f"OMIMIDI @ {host_label} Web UI"
-    brand_html = html.escape(brand_text, quote=True)
-    page_title = title if title != "OMIMIDI Web UI" else brand_text
-    page_title_html = html.escape(page_title, quote=True)
-    nav_links = []
-    for key, label, href in NAV_ITEMS:
-        cls = "nav-link"
-        if key == active:
-            cls += " active"
-        nav_links.append(f'<a class="{cls}" href="{href}">{label}</a>')
-    html_doc = LAYOUT_TEMPLATE
-    replacements = {
-        "PAGE_TITLE": page_title_html,
-        "BRAND_HTML": brand_html,
-        "NAV_LINKS": "".join(nav_links),
-        "BODY_HTML": body_html,
-        "EXTRA_HEAD": extra_head,
-        "EXTRA_JS": extra_js,
-        "PAGE_ID": html.escape(active, quote=True),
+    context = {
+        "request": None,  # Se reemplazará en cada ruta
+        "active": active,
+        "host": host_label,
+        "title": f"OMIMIDI @ {host_label} Web UI",
+        "nav_items": [
+            ("home", "Home", "/"),
+            ("config", "Configuración", "/config")
+        ]
     }
-    for token, value in replacements.items():
-        html_doc = html_doc.replace(f"{{{{{token}}}}}", value)
-    return HTMLResponse(html_doc)
+    if extra_data:
+        context.update(extra_data)
+    return context
 
 
 def render_routes_rows(data: Dict[str, Any]) -> str:
@@ -205,224 +192,303 @@ def render_routes_rows(data: Dict[str, Any]) -> str:
     return "".join(rows)
 
 @app.get("/", response_class=HTMLResponse)
-def index():
+async def index(request: Request):
     data = get_map()
+    context = get_template_context(active="home")
+    context["request"] = request
+    # Prepare BODY_HTML by loading the index fragment and injecting rendered rows
+    tmpl_path = Path(__file__).resolve().parent / "web" / "templates" / "index.html"
+    try:
+        raw = tmpl_path.read_text(encoding='utf-8')
+    except Exception:
+        raw = ''
     rows_html = render_routes_rows(data)
-    body = f"""
-<section class="card">
-  <div class="card-header">
-    <h2>Rutas MIDI → OSC</h2>
-    <a class="btn primary" href="/add">+ Añadir ruta</a>
-  </div>
-  <div class="table-wrap">
-    <table class="routes-table">
-      <tr><th>#</th><th>MIDI</th><th>OSC Path</th><th>Valor</th><th>Último</th><th></th></tr>
-      {rows_html}
-    </table>
-  </div>
-</section>
-"""
-    return render_layout(body, active="home")
+    body = raw.replace('{{ROUTES_HTML}}', rows_html)
+
+    # Build brand and nav HTML
+    brand = f"<strong>OMIMIDI</strong> — {get_identity_host()}"
+    nav_links = ' '.join([f"<a class=\"nav-link{' active' if item[0]==context.get('active') else ''}\" href=\"{item[2]}\">{item[1]}</a>" for item in context.get('nav_items', [])])
+
+    context.update({
+        'BODY_HTML': body,
+        'PAGE_TITLE': context.get('title'),
+        'PAGE_ID': context.get('active'),
+        'BRAND_HTML': brand,
+        'NAV_LINKS': nav_links,
+        'EXTRA_HEAD': '',
+        'EXTRA_JS': ''
+    })
+    return templates.TemplateResponse('layout.html', context)
 
 
-@app.get("/settings", response_class=HTMLResponse)
-def settings_page():
+@app.get("/config", response_class=HTMLResponse)
+async def config_page(request: Request):
     data = get_map()
-    inputs = mido.get_input_names()
-    current = data.get("midi_input", "")
-    options = ["<option value=''>(sin seleccionar)</option>"]
-    for name in inputs:
-        sel = " selected" if name == current else ""
-        options.append(f"<option{sel}>{html.escape(name, quote=True)}</option>")
-    osc_port = html.escape(str(data.get("osc_port", 1024)), quote=True)
-    osc_ips = html.escape(",".join(data.get("osc_ips", ["127.0.0.1"])), quote=True)
-    ui_port = html.escape(str(data.get("ui_port", 9001)), quote=True)
-    config_name = html.escape(str(data.get("config_name", "default")), quote=True)
+    context = get_template_context(active="config")
+    context.update({
+        "request": request,
+        "midi_inputs": mido.get_input_names(),
+        "current_midi": data.get("midi_input", ""),
+        "config_name": data.get("config_name", "default"),
+        "osc_port": data.get("osc_port", 1024),
+        "osc_ips": ",".join(data.get("osc_ips", ["127.0.0.1"])),
+        "ui_port": data.get("ui_port", 9001),
+        "vlan": data.get("vlan", 100),
+        "routes": data.get("routes", [])
+    })
+    
+    # Build local variables for template formatting
+    config_name = context.get('config_name', '')
+    vlan = context.get('vlan', '')
+    osc_port = context.get('osc_port', 1024)
+    ui_port = context.get('ui_port', 9001)
+    osc_ips = context.get('osc_ips', '')
+    midi_inputs = context.get('midi_inputs', [])
+    current_midi = context.get('current_midi', '')
+    options = []
+    for m in midi_inputs:
+        sel = ' selected' if m == current_midi else ''
+        options.append(f"<option value=\"{html.escape(m)}\"{sel}>{html.escape(m)}</option>")
+    options = ''.join(options)
 
     body = f"""
-<form id="settingsForm" method="post" action="/settings/save" class="stack">
+<form id="configForm" method="post" action="/config/save" class="stack">
   <section class="card stack">
     <div class="section-title">
-      <h2>Preset name</h2>
-      <p class="muted">Nombre identificador para guardar y compartir esta configuración.</p>
+      <h2>Configuración General</h2>
     </div>
-    <input type="text" name="config_name" value="{config_name}" maxlength="64">
-  </section>
-
-  <section class="card stack">
-    <div class="section-title">
-      <h2>Dispositivo MIDI</h2>
-      <p class="muted">Selecciona la entrada MIDI disponible.</p>
-    </div>
-    <select name="midi_input">{''.join(options)}</select>
-  </section>
-
-  <section class="card stack">
-    <div class="section-title">
-      <h2>Targets OSC</h2>
-      <p class="muted">Define el puerto y las IPs destino (separadas por coma).</p>
-    </div>
-    <div class="form-grid">
-      <div>
-        <label>Puerto</label>
-        <input type="text" name="osc_port" value="{osc_port}">
+    
+    <div class="config-grid">
+      <div class="form-group">
+        <label>Nombre del Preset</label>
+        <input type="text" name="config_name" value="{config_name}" maxlength="64">
       </div>
-      <div class="full">
-        <label>IPs</label>
-        <input type="text" name="osc_ips" value="{osc_ips}">
+
+      <div class="form-group">
+        <label>VLAN</label>
+        <input type="number" name="vlan" value="{vlan}" min="1" max="4094">
       </div>
+
+                <div class="form-group full">
+                    <label>Dispositivo MIDI</label>
+                    <select name="midi_input">{options}</select>
+            </div>
+
+                <div class="form-group">
+                <label>Puerto OSC</label>
+                <input type="number" name="osc_port" value="{osc_port}" min="1" max="65535">
+            </div>
+
+            <div class="form-group">
+                <label>Puerto WebUI</label>
+                <input type="number" name="ui_port" value="{ui_port}" min="1" max="65535">
+            </div>
+
+            <div class="form-group full">
+                <label>IPs OSC</label>
+                <input type="text" name="osc_ips" value="{osc_ips}" placeholder="127.0.0.1, 192.168.1.100">
+            </div>
     </div>
-    <small class="muted">Ejemplo: 192.168.0.52, 127.0.0.1</small>
   </section>
 
   <section class="card stack">
     <div class="section-title">
-      <h2>Web UI</h2>
-      <p class="muted">Al guardar se reiniciará el servicio.</p>
+      <h2>Mapeo MIDI <button type="button" class="btn primary" id="addBtn">+ Añadir Mapeo</button></h2>
     </div>
-    <div class="form-grid">
-      <div>
-        <label>Puerto WebUI</label>
-        <input type="text" name="ui_port" value="{ui_port}">
+
+    <!-- Formulario de Mapeo (oculto por defecto) -->
+    <div id="mappingForm" class="mapping-form" style="display:none;">
+      <div class="form-grid">
+        <div>
+          <label>Tipo</label>
+          <select name="map_type">
+            <option value="note">Note</option>
+            <option value="cc">CC</option>
+          </select>
+        </div>
+        <div>
+          <label>Nota/CC</label>
+          <input type="number" name="map_num" min="0" max="127">
+        </div>
+        <div>
+          <label>Canal</label>
+          <input type="number" name="map_channel" min="0" max="15">
+        </div>
+        <div class="full">
+          <label>Ruta OSC</label>
+          <input type="text" name="map_osc" placeholder="/ruta/osc">
+        </div>
+        <div>
+          <label>Tipo de valor</label>
+          <select name="map_vtype">
+            <option value="float">Float (0-1)</option>
+            <option value="int">Int (0-127)</option>
+            <option value="bool">Bool</option>
+            <option value="const">Const</option>
+          </select>
+        </div>
+        <div id="constValueField" style="display:none;">
+          <label>Valor constante</label>
+          <input type="text" name="map_const" placeholder="1.0">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn" id="learnBtn">LEARN</button>
+        <button type="button" class="btn" onclick="cancelMapping()">Cancelar</button>
       </div>
     </div>
-    <small>Actual: <code>http://&lt;host&gt;:{ui_port}</code></small>
+
+    <!-- Lista de Mapeos -->
+    <div class="table-wrap">
+      <table class="routes-table">
+        <tr>
+          <th>#</th>
+          <th>MIDI</th>
+          <th>OSC Path</th>
+          <th>Valor</th>
+          <th>Último</th>
+          <th></th>
+        </tr>
+        {render_routes_rows(data)}
+      </table>
+    </div>
   </section>
 
-  <div class="actions">
-    <button class="btn primary" type="submit">Guardar cambios</button>
-    <button class="btn" type="button" id="pingBtn">Ping OSC</button>
-    <a class="btn" href="/">Cancelar</a>
+  <div class="global-actions">
+    <button type="submit" class="btn primary">Guardar Todos los Cambios</button>
+    <button type="button" class="btn" id="pingBtn">Ping OSC</button>
+    <button type="button" class="btn danger" id="reiniciarBtn">Reiniciar Servicio</button>
   </div>
 </form>
-<div class="small muted" id="pingStatus" style="display:none;"></div>
-"""
 
-    response = render_layout(body, active="settings")
-    response.headers["Cache-Control"] = "no-store"
-    return response
+<style>
+.config-grid {{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 15px;
+}}
+.full {{
+  grid-column: 1 / -1;
+}}
+.form-group {{
+  margin-bottom: 10px;
+}}
+.form-group label {{
+  display: block;
+  margin-bottom: 5px;
+  font-weight: 500;
+}}
+.section-title {{
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}}
+.mapping-form {{
+  background: #f5f5f5;
+  padding: 15px;
+  border-radius: 5px;
+  margin-bottom: 20px;
+}}
+.global-actions {{
+  margin-top: 20px;
+  padding: 15px;
+  border-top: 1px solid #eee;
+  text-align: center;
+}}
+.form-actions {{
+  margin-top: 15px;
+  display: flex;
+  gap: 10px;
+}}
+.danger {{
+  background: #dc3545;
+  color: white;
+}}
+</style>
+"""
+    # Inject the built body into the shared layout so styles/scripts are applied
+    brand = f"<strong>OMIMIDI</strong> — {get_identity_host()}"
+    nav_links = ' '.join([f"<a class=\"nav-link{' active' if item[0]==context.get('active') else ''}\" href=\"{item[2]}\">{item[1]}</a>" for item in context.get('nav_items', [])])
+    context.update({
+        'BODY_HTML': body,
+        'PAGE_TITLE': context.get('title'),
+        'PAGE_ID': context.get('active'),
+        'BRAND_HTML': brand,
+        'NAV_LINKS': nav_links,
+        'EXTRA_HEAD': '',
+        'EXTRA_JS': ''
+    })
+    resp = templates.TemplateResponse('layout.html', context)
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
 
 
 @app.get("/add", response_class=HTMLResponse)
-def add_route_landing():
-    body = """
-<section class="card stack">
-  <div class="section-title">
-    <h2>Añadir ruta</h2>
-    <p class="muted">Elige cómo quieres crear la ruta MIDI → OSC.</p>
-  </div>
-  <div class="option-grid">
-    <a class="option-card" href="/add/manual">
-      <h3>Manual</h3>
-      <p>Introduce nota/CC, canal y ruta OSC a mano.</p>
-    </a>
-    <a class="option-card" href="/add/learn">
-      <h3>LEARN automático</h3>
-      <p>Activa LEARN y toca tu controlador para mapearlo al instante.</p>
-    </a>
-  </div>
-</section>
-"""
-    return render_layout(body, active="add")
+async def add_route_landing(request: Request):
+    context = get_template_context(active="add")
+    context["request"] = request
+    tmpl_path = Path(__file__).resolve().parent / "web" / "templates" / "add.html"
+    try:
+        raw = tmpl_path.read_text(encoding='utf-8')
+    except Exception:
+        raw = ''
+    brand = f"<strong>OMIMIDI</strong> — {get_identity_host()}"
+    nav_links = ' '.join([f"<a class=\"nav-link{' active' if item[0]==context.get('active') else ''}\" href=\"{item[2]}\">{item[1]}</a>" for item in context.get('nav_items', [])])
+    context.update({
+        'BODY_HTML': raw,
+        'PAGE_TITLE': context.get('title'),
+        'PAGE_ID': context.get('active'),
+        'BRAND_HTML': brand,
+        'NAV_LINKS': nav_links,
+        'EXTRA_HEAD': '',
+        'EXTRA_JS': ''
+    })
+    return templates.TemplateResponse('layout.html', context)
 
 @app.get("/add/manual", response_class=HTMLResponse)
-def add_route_manual_page():
-    body = """
-<section class="card stack">
-  <div class="section-title">
-    <h2>Añadir ruta manual</h2>
-    <p class="muted">Configura la ruta MIDI → OSC rellenando los campos.</p>
-  </div>
-  <form method="post" action="/add_route" class="stack" id="manualForm">
-    <div class="form-grid">
-      <div>
-        <label>Tipo</label>
-        <select name="rtype"><option value="note">note</option><option value="cc">cc</option></select>
-      </div>
-      <div>
-        <label>Nota o CC (0..127)</label>
-        <input type="text" name="num">
-      </div>
-      <div class="full">
-        <label>OSC Path</label>
-        <input type="text" name="osc" value="/D3/x">
-      </div>
-      <div>
-        <label>Tipo de valor OSC</label>
-        <select name="vtype" id="manualVType">
-          <option value="float">float (0..1)</option>
-          <option value="int">int (0..127)</option>
-          <option value="bool">bool</option>
-          <option value="const">const</option>
-        </select>
-      </div>
-      <div id="manualConstRow" style="display:none;">
-        <label>Const (si vtype=const)</label>
-        <input type="text" name="const" id="manualConstInput" placeholder="ej: 1.0">
-      </div>
-    </div>
-    <div class="actions">
-      <button class="btn primary" type="submit">Añadir ruta</button>
-      <a class="btn" href="/">Cancelar</a>
-    </div>
-  </form>
-</section>
-"""
-    return render_layout(body, active="add")
+async def add_route_manual_page(request: Request):
+    context = get_template_context(active="add")
+    context["request"] = request
+    tmpl_path = Path(__file__).resolve().parent / "web" / "templates" / "add_manual.html"
+    try:
+        raw = tmpl_path.read_text(encoding='utf-8')
+    except Exception:
+        raw = ''
+    brand = f"<strong>OMIMIDI</strong> — {get_identity_host()}"
+    nav_links = ' '.join([f"<a class=\"nav-link{' active' if item[0]==context.get('active') else ''}\" href=\"{item[2]}\">{item[1]}</a>" for item in context.get('nav_items', [])])
+    context.update({
+        'BODY_HTML': raw,
+        'PAGE_TITLE': context.get('title'),
+        'PAGE_ID': context.get('active'),
+        'BRAND_HTML': brand,
+        'NAV_LINKS': nav_links,
+        'EXTRA_HEAD': '',
+        'EXTRA_JS': ''
+    })
+    return templates.TemplateResponse('layout.html', context)
 
 @app.get("/add/learn", response_class=HTMLResponse)
-def add_route_learn_page():
-    body = """
-<section class="card stack">
-  <div class="section-title">
-    <h2>LEARN automático</h2>
-    <p class="muted">Mueve un control MIDI, revisa el último mensaje detectado y pulsa aceptar para crear la ruta.</p>
-  </div>
-  <form method="post" action="/commit_learn" id="learnForm" class="stack">
-    <div class="form-grid">
-      <div class="full">
-        <label>OSC Path</label>
-        <input type="text" name="osc" value="/D3/learn" id="oscInput">
-      </div>
-      <div>
-        <label>Tipo de valor OSC</label>
-        <select name="vtype" id="vtypeInput">
-          <option value="float">float (0..1)</option>
-          <option value="int">int (0..127)</option>
-          <option value="bool">bool</option>
-          <option value="const">const</option>
-        </select>
-      </div>
-      <div id="constRow" style="display:none;">
-        <label>Const (si vtype=const)</label>
-        <input type="text" name="const" id="constInput" placeholder="ej: 1.0">
-      </div>
-    </div>
-    <div class="info-block" id="livePreview">
-      <div><strong>Ruta OSC:</strong> <code id="summaryOsc">/D3/learn</code></div>
-      <div><strong>Tipo de valor:</strong> <span id="summaryType">float (0..1)</span></div>
-      <div><strong>Tipo de mensaje:</strong> <span id="summaryKind">Esperando…</span></div>
-      <div><strong>Último mensaje:</strong> <span id="summaryCandidate">Esperando evento MIDI…</span></div>
-      <div class="muted" id="summaryDetails" style="margin-top:4px; display:none;"></div>
-    </div>
-    <div class="actions">
-      <button class="btn primary" id="learnAccept" type="button" disabled>Aceptar</button>
-      <button class="btn" type="button" id="learnCancel">Cancelar</button>
-    </div>
-    <div class="muted" id="learnMessage" style="display:none;"></div>
-    <small>En esta pantalla el aprendizaje se inicia automáticamente y se muestra siempre el último mensaje recibido.</small>
-  </form>
-  <div class="info-block" id="learnResult" style="display:none;">
-    <div class="muted">Última ruta creada</div>
-    <div id="resultSummary" style="margin-top:6px;"></div>
-    <form method="post" action="/clear_learn_result" style="margin-top:12px;">
-      <button class="btn" type="submit">Ocultar resultado</button>
-    </form>
-  </div>
-</section>
-"""
-    extra_js = '\n<script src="/static/learn.js"></script>\n'
-    return render_layout(body, active="add", extra_js=extra_js)
+async def add_route_learn_page(request: Request):
+    context = get_template_context(active="add")
+    context["request"] = request
+    tmpl_path = Path(__file__).resolve().parent / "web" / "templates" / "add_learn.html"
+    try:
+        raw = tmpl_path.read_text(encoding='utf-8')
+    except Exception:
+        raw = ''
+    brand = f"<strong>OMIMIDI</strong> — {get_identity_host()}"
+    nav_links = ' '.join([f"<a class=\"nav-link{' active' if item[0]==context.get('active') else ''}\" href=\"{item[2]}\">{item[1]}</a>" for item in context.get('nav_items', [])])
+    context.update({
+        'BODY_HTML': raw,
+        'PAGE_TITLE': context.get('title'),
+        'PAGE_ID': context.get('active'),
+        'BRAND_HTML': brand,
+        'NAV_LINKS': nav_links,
+        'EXTRA_HEAD': '',
+        'EXTRA_JS': ''
+    })
+    return templates.TemplateResponse('layout.html', context)
 # ---------- WS / Push ----------
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
@@ -603,62 +669,121 @@ def request_restart_flag() -> None:
         f.write("restart")
     LOGGER.info("Se solicitó reinicio del servicio OMIMIDI.")
 
-def restart_page(message: str = "Reiniciando servicio OMIMIDI…") -> HTMLResponse:
-    template = """<!doctype html><html><head><meta charset='utf-8'>
-    <title>Reiniciando…</title></head>
-    <body style="font-family:system-ui; background:#111; color:#eee; display:flex; align-items:center; justify-content:center; height:100vh;">
-    <div>
-      <h2>🔄 {{MESSAGE}}</h2>
-      <p>La página intentará reconectar automáticamente.</p>
-      <script src="/static/restart.js"></script>
-    </div>
-    </body></html>"""
-    return HTMLResponse(template.replace("{{MESSAGE}}", message))
+def restart_page(message: str = "Reiniciando servicio OMIMIDI…", request: Request = None) -> HTMLResponse:
+    context = {
+        "request": request,
+        "message": message
+    }
+    return templates.TemplateResponse("restart.html", context)
 
-@app.post("/settings/save")
-def save_settings(midi_input: str = Form(""), osc_port: str = Form(""),
-                 osc_ips: str = Form(""), ui_port: str = Form(""), config_name: str = Form("")):
+@app.post("/config/save")
+def save_config(
+    midi_input: str = Form(""), 
+    osc_port: str = Form(""),
+    osc_ips: str = Form(""), 
+    ui_port: str = Form(""), 
+    config_name: str = Form(""),
+    vlan: str = Form(""),
+    map_type: str = Form(""),
+    map_num: str = Form(""),
+    map_channel: str = Form(""),
+    map_osc: str = Form(""),
+    map_vtype: str = Form(""),
+    map_const: str = Form("")
+):
+    """Guarda la configuración general y opcionalmente añade un nuevo mapeo."""
     data = get_map()
+    
+    # Guardar configuración general
     data["midi_input"] = midi_input.strip()
+    data["config_name"] = config_name.strip() or data.get("config_name", "default")
 
+    # Validar y guardar VLAN
     try:
-        port = int(osc_port)
-        if not (1 <= port <= 65535):
-            raise ValueError
-        data["osc_port"] = port
+        vlan_num = int(vlan)
+        if 1 <= vlan_num <= 4094:
+            data["vlan"] = vlan_num
+    except ValueError:
+        data["vlan"] = 100
+
+    # Validar y guardar puerto OSC
+    try:
+        osc_port_num = int(osc_port)
+        if 1 <= osc_port_num <= 65535:
+            data["osc_port"] = osc_port_num
     except ValueError:
         data["osc_port"] = 1024
 
-    ips_in = [ip.strip() for ip in osc_ips.split(",") if ip.strip()]
-    valid_ips = []
-    for ip in ips_in:
-        try:
-            ipaddress.ip_address(ip)
-            valid_ips.append(ip)
-        except Exception:
-            pass
-    data["osc_ips"] = valid_ips or ["127.0.0.1"]
-
+    # Validar y guardar puerto UI
     try:
-        uport = int(ui_port)
-        if not (1 <= uport <= 65535):
-            raise ValueError
-        data["ui_port"] = uport
+        ui_port_num = int(ui_port)
+        if 1 <= ui_port_num <= 65535:
+            data["ui_port"] = ui_port_num
     except ValueError:
         data["ui_port"] = 9001
 
-    data["config_name"] = config_name.strip() or data.get("config_name", "default")
+    # Validar y guardar IPs OSC
+    valid_ips = []
+    for ip in [ip.strip() for ip in osc_ips.split(",") if ip.strip()]:
+        try:
+            ipaddress.ip_address(ip)
+            valid_ips.append(ip)
+        except ValueError:
+            LOGGER.warning(f"IP inválida ignorada: {ip}")
+            continue
+    data["osc_ips"] = valid_ips or ["127.0.0.1"]
 
+    # Procesar nuevo mapeo si se proporcionaron los datos necesarios
+    if all([map_type, map_num, map_osc]):
+        try:
+            map_num_int = int(map_num)
+            if not (0 <= map_num_int <= 127):
+                raise ValueError("Número MIDI fuera de rango (0-127)")
+
+            new_route = {
+                "type": map_type,
+                "osc": map_osc.strip(),
+                "vtype": map_vtype or "float"
+            }
+
+            if map_type == "note":
+                new_route["note"] = map_num_int
+            else:
+                new_route["cc"] = map_num_int
+
+            # Procesar canal MIDI si se especificó
+            if map_channel.strip():
+                channel = int(map_channel)
+                if 0 <= channel <= 15:
+                    new_route["channel"] = channel
+
+            # Procesar valor constante si el tipo es 'const'
+            if map_vtype == "const" and map_const.strip():
+                try:
+                    new_route["const"] = float(map_const)
+                except ValueError:
+                    new_route["const"] = 1.0
+                    LOGGER.warning(f"Valor constante inválido: {map_const}, usando 1.0")
+
+            data["routes"].append(new_route)
+            LOGGER.info("Nuevo mapeo añadido: %s", new_route)
+
+        except ValueError as e:
+            LOGGER.error("Error añadiendo mapeo: %s", e)
+
+    # Guardar todos los cambios
     persist_map(data)
+    
+    # Solicitar reinicio si cambió el puerto UI
+    if ui_port_num != get_map().get("ui_port", 9001):
+        request_restart_flag()
+        return restart_page("Reiniciando servicio con nueva configuración...")
+
+    return RedirectResponse("/config", status_code=303)
+
+    LOGGER.info("Solicitando reinicio del servicio...")
     request_restart_flag()
-    LOGGER.info(
-        "Configuración actualizada; se reiniciará el servicio (midi_input=%s, osc_port=%s, ui_port=%s, ips=%s)",
-        data.get("midi_input"),
-        data.get("osc_port"),
-        data.get("ui_port"),
-        ", ".join(data.get("osc_ips") or []),
-    )
-    return restart_page("Aplicando cambios y reiniciando…")
+    return restart_page("Aplicando cambios y reiniciando...")
 
 @app.post("/ping_osc")
 def ping_osc():
@@ -674,7 +799,7 @@ def ping_osc():
             LOGGER.info("Ping OSC enviado a %s:%s", ip, port)
         except Exception as exc:
             LOGGER.warning("No se pudo enviar ping OSC a %s:%s → %s", ip, port, exc)
-    return RedirectResponse("/settings", status_code=303)
+    return RedirectResponse("/config", status_code=303)
 
 # ---------- Mapping CRUD ----------
 @app.post("/add_route")

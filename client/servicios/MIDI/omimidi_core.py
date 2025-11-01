@@ -99,19 +99,55 @@ def load_json(path: str, default: Any) -> Any:
         return default
 
 def save_json(path: str, data: Any) -> None:
+    """Guarda datos JSON de forma segura usando un archivo temporal."""
     directory = os.path.dirname(path)
     if directory:
         os.makedirs(directory, exist_ok=True)
+        
+    backup_path = None
+    # Crear backup si existe
+    if os.path.exists(path):
+        backup_path = path + ".bak"
+        try:
+            os.replace(path, backup_path)
+        except Exception as e:
+            LOGGER.warning("No se pudo crear backup de %s: %s", path, e)
+            backup_path = None
+    
+    # Guardar nuevo contenido usando archivo temporal
     fd, tmp_path = tempfile.mkstemp(dir=directory or None, prefix=os.path.basename(path) + '.', suffix='.tmp')
+    success = False
     try:
         with os.fdopen(fd, 'w') as f:
             json.dump(data, f, indent=2)
         os.replace(tmp_path, path)
+        success = True
+    except Exception as e:
+        LOGGER.error("Error guardando %s: %s", path, e)
+        # Intentar restaurar backup
+        if backup_path and os.path.exists(backup_path):
+            try:
+                os.replace(backup_path, path)
+                LOGGER.info("Backup restaurado para %s", path)
+            except Exception as e2:
+                LOGGER.error("No se pudo restaurar backup de %s: %s", path, e2)
+        raise
     finally:
+        # Limpiar archivos temporales
         try:
             os.unlink(tmp_path)
         except FileNotFoundError:
             pass
+        except Exception as e:
+            LOGGER.warning("No se pudo eliminar temporal %s: %s", tmp_path, e)
+            
+        if backup_path and success:
+            try:
+                os.unlink(backup_path)
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                LOGGER.warning("No se pudo eliminar backup %s: %s", backup_path, e)
 
 # ---- OSC ----
 class BroadcastUDPClient(SimpleUDPClient):
@@ -142,6 +178,8 @@ class MidiMap:
         return mm
 
     def persist(self) -> None:
+        from omimidi_utils import validate_midi_config
+        
         payload = {
             "midi_input": self.midi_input_name,
             "osc_port": self.osc_port,
@@ -150,6 +188,46 @@ class MidiMap:
             "routes": self.routes,
             "config_name": self.config_name,
         }
+        
+        # Validar configuración antes de guardar
+        errors = validate_midi_config(payload)
+        if errors:
+            error_msg = "\n".join(errors)
+            LOGGER.error("Errores en la configuración:\n%s", error_msg)
+            LOGGER.debug("Payload inválido al persistir map: %s", payload)
+
+            # Intento de reparación automática para duplicados de rutas OSC:
+            dup_errors = [e for e in errors if "path OSC duplicado" in e]
+            if dup_errors and len(dup_errors) == len(errors):
+                # Solo hay errores por duplicados: intentamos deduplicar agregando sufijos
+                LOGGER.info("Intentando reparación automática de rutas OSC duplicadas...")
+                seen = set()
+                for idx, r in enumerate(payload.get("routes", [])):
+                    osc = r.get("osc", "")
+                    if not osc:
+                        continue
+                    if osc in seen:
+                        # Añadir sufijo numérico para hacerlo único
+                        new_osc = f"{osc}/{idx}"
+                        LOGGER.info("Renombrando ruta OSC duplicada '%s' → '%s'", osc, new_osc)
+                        r["osc"] = new_osc
+                    seen.add(r.get("osc", ""))
+
+                # Revalidar
+                errors2 = validate_midi_config(payload)
+                if not errors2:
+                    LOGGER.info("Reparación automática exitosa — persistiendo mapa corregido")
+                    save_json(MAP_FILE, payload)
+                    push_map_to_server(payload)
+                    return
+                else:
+                    error_msg2 = "\n".join(errors2)
+                    LOGGER.error("Reparación automática falló: %s", error_msg2)
+                    raise ValueError(f"Configuración inválida tras intento de reparación:\n{error_msg2}")
+
+            # Propagar detalles de validación para facilitar depuración
+            raise ValueError(f"Configuración inválida:\n{error_msg}")
+            
         save_json(MAP_FILE, payload)
         push_map_to_server(payload)
 
@@ -418,16 +496,36 @@ class OmiMidiCore:
 
     def send_osc(self, route_idx: int, route: Dict[str, Any], value: Any) -> None:
         path = str(route.get("osc", ""))
+        if not path.startswith("/"):
+            LOGGER.error("Ruta OSC inválida: %s", path)
+            return
+            
         # Actualiza estado visible por WebUI
         self._update_state(route_idx, path, value, route_meta=route)
+        
         # Notifica a la WebUI (empuje para websockets) usando puerto configurado
         _notify_webui_async(route_idx, path, value, route_meta=route, ui_port=self.map.ui_port)
-        # Envía a todos los targets
+        
+        # Envía a todos los targets con timeout
+        failed_clients = []
         for c in self.clients:
             try:
+                # Agregar timeout para evitar bloqueos
+                c._sock.settimeout(0.1)
                 c.send_message(path, value)
+            except socket.timeout:
+                LOGGER.warning("Timeout enviando OSC a %s:%s", c._address, c._port)
+                failed_clients.append(c)
             except Exception as e:
                 LOGGER.warning("Error enviando OSC a %s:%s → %s", c._address, c._port, e)
+                failed_clients.append(c)
+                
+        # Remover clientes que fallaron
+        if failed_clients:
+            for c in failed_clients:
+                if c in self.clients:
+                    self.clients.remove(c)
+            LOGGER.info("Se removieron %d clientes OSC con fallas", len(failed_clients))
 
     def stop(self) -> None:
         self._stop.set()
@@ -480,22 +578,52 @@ def start_webui(host: str = "0.0.0.0", port: int = 9001):
     return p
 
 def main() -> None:
+    LOGGER.info("Iniciando OmiMidiCore...")
+    
+    # Verificar disponibilidad de dispositivos MIDI
+    inputs = mido.get_input_names()
+    LOGGER.info("Dispositivos MIDI disponibles: %s", inputs)
+    
+    # Crear instancia del core
+    LOGGER.info("Creando instancia del core...")
     core = OmiMidiCore()
-
+    web_proc = None
+    
+    def cleanup():
+        """Limpieza al salir"""
+        if web_proc and web_proc.is_alive():
+            LOGGER.info("Deteniendo WebUI...")
+            web_proc.terminate()
+            web_proc.join(timeout=2.0)
+        cleanup_runtime_files()
+        LOGGER.info("Servicio finalizado.")
+        
+    # Configurar manejo de señales
     def handle_stop(signum, frame):
-        core.stop()
+        LOGGER.info("\nRecibida señal de parada (%s)", signum)
+        cleanup()
+        sys.exit(0)
 
     signal.signal(signal.SIGTERM, handle_stop)
     signal.signal(signal.SIGINT, handle_stop)
 
-    web_proc = start_webui(port=core.map.ui_port)
     try:
+        # Iniciar WebUI
+        LOGGER.info("Iniciando WebUI en puerto %s...", core.map.ui_port)
+        web_proc = start_webui(port=core.map.ui_port)
+        
+        LOGGER.info("Iniciando bucle principal...")
         core.run()
+    except KeyboardInterrupt:
+        LOGGER.info("\n¡Hasta luego! Servicio MIDI detenido por el usuario.")
+        cleanup()
+        sys.exit(0)
+    except Exception as e:
+        LOGGER.error("Error en el bucle principal: %s", e, exc_info=True)
+        cleanup()
+        sys.exit(1)
     finally:
-        if web_proc.is_alive():
-            web_proc.terminate()
-            web_proc.join(timeout=2.0)
-        cleanup_runtime_files()
+        cleanup()
 
 
 if __name__ == "__main__":
