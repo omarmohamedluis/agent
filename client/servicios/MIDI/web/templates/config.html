@@ -3,7 +3,7 @@
     <div class="section-title">
       <h2>Configuración General</h2>
     </div>
-    
+
     <div class="config-grid">
       <div class="form-group">
         <label>Nombre del Preset</label>
@@ -37,70 +37,11 @@
     </div>
   </section>
 
-  <section class="card stack">
-    <div class="section-title">
-      <h2>Mapeo MIDI <button type="button" class="btn primary" id="addBtn">+ Añadir Mapeo</button></h2>
-    </div>
-
-    <div id="mappingForm" class="mapping-form" style="display:none;">
-      <div class="form-grid">
-        <div>
-          <label>Tipo</label>
-          <select name="map_type">
-            <option value="note">Note</option>
-            <option value="cc">CC</option>
-          </select>
-        </div>
-        <div>
-          <label>Nota/CC</label>
-          <input type="number" name="map_num" min="0" max="127">
-        </div>
-        <div>
-          <label>Canal</label>
-          <input type="number" name="map_channel" min="0" max="15">
-        </div>
-        <div class="full">
-          <label>Ruta OSC</label>
-          <input type="text" name="map_osc" placeholder="/ruta/osc">
-        </div>
-        <div>
-          <label>Tipo de valor</label>
-          <select name="map_vtype">
-            <option value="float">Float (0-1)</option>
-            <option value="int">Int (0-127)</option>
-            <option value="bool">Bool</option>
-            <option value="const">Const</option>
-          </select>
-        </div>
-        <div id="constValueField" style="display:none;">
-          <label>Valor constante</label>
-          <input type="text" name="map_const" placeholder="1.0">
-        </div>
-      </div>
-      <div class="form-actions">
-        <button type="button" class="btn" id="learnBtn">LEARN</button>
-        <button type="button" class="btn" onclick="cancelMapping()">Cancelar</button>
-      </div>
-    </div>
-
-    <div class="table-wrap">
-      <table class="routes-table">
-        <tr>
-          <th>#</th>
-          <th>MIDI</th>
-          <th>OSC Path</th>
-          <th>Valor</th>
-          <th>Último</th>
-          <th></th>
-        </tr>
-        {{ROUTES_HTML}}
-      </table>
-    </div>
   </section>
 
   <div class="global-actions">
-    <button type="submit" class="btn primary">Guardar Todos los Cambios</button>
-    <button type="button" class="btn" id="pingBtn">Ping OSC</button>
+    <button type="submit" class="btn primary">Guardar Configuración</button>
+    <button type="button" class="btn" id="pingBtn">Ping OSC (IGMP)</button>
     <button type="button" class="btn danger" id="reiniciarBtn">Reiniciar Servicio</button>
   </div>
 </form>

@@ -8,19 +8,24 @@ import traceback
 import logging
 from pathlib import Path
 
-# Configurar logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    stream=sys.stdout
-)
+import os
 
-LOGGER = logging.getLogger("omimidi.service")
+# Configurar logging usando el nuevo módulo centralizado
+sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
+from omimidi_logger import get_logger, set_log_level
+
+# Determinar nivel de log inicial
+DEBUG_MODE = "-debug" in sys.argv or "--debug" in sys.argv
+LOG_LEVEL = logging.DEBUG if DEBUG_MODE else logging.INFO
+
+LOGGER = get_logger("omimidi.service", level=LOG_LEVEL)
 
 THIS_DIR = Path(__file__).resolve().parent
-CORE_PATH = THIS_DIR / "omimidi_core.py"
+CORE_PATH = THIS_DIR / "src" / "omimidi_core.py"
 
 if __name__ == "__main__":
+    if DEBUG_MODE:
+        LOGGER.info("Modo DEBUG activado")
     LOGGER.info("Iniciando servicio MIDI...")
     LOGGER.info(f"Directorio actual: {THIS_DIR}")
     LOGGER.info(f"Cargando core desde: {CORE_PATH}")

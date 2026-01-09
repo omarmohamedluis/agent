@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OMI Agent Settings</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body>
+    <header>
+        <div class="brand">
+            <img src="/assets/omarpi.png" alt="OMI Logo">
+            <span>OMI Agent Settings</span>
+        </div>
+        <nav>
+            <a href="/" class="btn btn-nav">
+                <i class="fas fa-arrow-left"></i> Back
+            </a>
+        </nav>
+    </header>
+
+    <main>
+        <div class="settings-container">
+            <section class="section">
+                <h2><i class="fas fa-network-wired"></i> Network Configuration</h2>
+                <form id="network-form">
+                    <div class="form-group">
+                        <label>Mode</label>
+                        <select id="net-mode" name="mode">
+                            <option value="dhcp">DHCP</option>
+                            <option value="static">Static IP</option>
+                        </select>
+                    </div>
+                    <div id="static-config" style="display:none;">
+                        <div class="form-group">
+                            <label>IP Address</label>
+                            <input type="text" name="ip" placeholder="192.168.1.100">
+                        </div>
+                        <div class="form-group">
+                            <label>Subnet Mask</label>
+                            <input type="text" name="mask" placeholder="255.255.255.0">
+                        </div>
+                        <div class="form-group">
+                            <label>Gateway</label>
+                            <input type="text" name="gateway" placeholder="192.168.1.1">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>VLAN ID (Optional)</label>
+                        <input type="text" name="vlan" placeholder="e.g., 10">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Save & Apply</button>
+                </form>
+            </section>
+
+            <section class="section">
+                <h2><i class="fas fa-power-off"></i> System Control</h2>
+                <div class="actions">
+                    <button onclick="systemAction('reboot')" class="btn btn-danger" style="width: auto;">
+                        <i class="fas fa-sync"></i> Reboot System
+                    </button>
+                    <button onclick="systemAction('shutdown')" class="btn btn-danger" style="width: auto;">
+                        <i class="fas fa-power-off"></i> Shutdown System
+                    </button>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script>
+        document.getElementById('net-mode').addEventListener('change', function (e) {
+            document.getElementById('static-config').style.display =
+                e.target.value === 'static' ? 'block' : 'none';
+        });
+
+        document.getElementById('network-form').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const data = Object.fromEntries(formData.entries());
+
+            try {
+                const res = await fetch('/api/network/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (res.ok) alert('Network settings applied!');
+                else alert('Failed to apply settings');
+            } catch (err) {
+                console.error(err);
+                alert('Error saving settings');
+            }
+        });
+
+        async function systemAction(action) {
+            if (!confirm(`Are you sure you want to ${action}?`)) return;
+            try {
+                await fetch(`/api/system/${action}`, { method: 'POST' });
+                alert(`System ${action} initiated...`);
+            } catch (err) {
+                console.error(err);
+            }
+        }
+    </script>
+</body>
+
+</html>

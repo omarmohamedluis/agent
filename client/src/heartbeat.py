@@ -11,7 +11,7 @@ import psutil
 
 from logger import log_event, log_print
 
-STRUCTURE_PATH = Path(__file__).resolve().parent / "agent_pi" / "data" / "structure.json"
+STRUCTURE_PATH = Path(__file__).resolve().parents[1] / "data" / "structure.json"
 
 # ---------------- Vars de estado expuestas ----------------
 CpuUsage: Optional[float] = None  # %
@@ -34,8 +34,11 @@ _heartbeat_thread: Optional[threading.Thread] = None
 
 # ---------------- Utils JSON ----------------
 def _read_json(path: Path) -> Dict[str, Any]:
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def _write_json(path: Path, data: Dict[str, Any]) -> None:
@@ -180,12 +183,7 @@ def _notify_listeners(snapshot: Dict[str, Any]) -> None:
 
 # ---------------- Cálculo principal ----------------
 def _compute_snapshot(path: Path) -> Dict[str, Any]:
-    data: Dict[str, Any] = {}
-    try:
-        if path.exists():
-            data = _read_json(path)
-    except Exception:
-        data = {}
+    data: Dict[str, Any] = _read_json(path)
 
     cpu = _get_cpu_usage()
     temp = _get_temp_c()
@@ -199,7 +197,7 @@ def _compute_snapshot(path: Path) -> Dict[str, Any]:
     prev_ips = [entry.get("ip") for entry in prev_ifaces if entry.get("ip")]
     now_ips = [entry.get("ip") for entry in ip_info if entry.get("ip")]
 
-    if data and sorted(prev_ips) != sorted(now_ips):
+    if sorted(prev_ips) != sorted(now_ips):
         data.setdefault("network", {})["interfaces"] = _enrich_ip_info(ip_info)
         try:
             _write_json(path, data)
@@ -289,6 +287,15 @@ def stop_heartbeat() -> None:
     """Detiene el hilo por completo y limpia las métricas."""
     log_print("info", __name__, "Heartbeat detenido")
     global _heartbeat_thread
+
+    # Clear network interfaces in structure.json
+    try:
+        data = _read_json(_structure_path)
+        if "network" in data:
+            data["network"]["interfaces"] = []
+            _write_json(_structure_path, data)
+    except Exception as e:
+        log_event("error", __name__, f"Failed to clear network info on stop: {e}")
 
     if not _heartbeat_thread:
         _set_metrics(_empty_snapshot())

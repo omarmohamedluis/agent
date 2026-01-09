@@ -1,1 +1,0 @@
-# app handler, aqui iniciare, cerrare, y comprobaré aplicaciones.

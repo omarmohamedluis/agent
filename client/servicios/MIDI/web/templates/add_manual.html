@@ -1,42 +1,84 @@
-<section class="card stack">
-  <div class="section-title">
-    <h2>Añadir ruta manual</h2>
-    <p class="muted">Configura la ruta MIDI → OSC rellenando los campos.</p>
+<section class="card">
+  <div class="card-header">
+    <h2 id="formTitle">Añadir mapeo manual</h2>
   </div>
-  <form method="post" action="/add_route" class="stack" id="manualForm">
-    <div class="form-grid">
-      <div>
-        <label>Tipo</label>
-        <select name="rtype">
-          <option value="note">note</option>
-          <option value="cc">cc</option>
-        </select>
+  <div class="card-body">
+    <form method="post" action="/add_route" class="stack" id="manualForm">
+      <div class="form-grid">
+        <div class="full">
+          <label>Ruta OSC</label>
+          <input type="text" name="osc" id="oscInput" placeholder="/ejemplo/ruta">
+        </div>
+
+        <!-- Fila 2: MIDI Config -->
+        <div class="full"
+          style="display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 16px; align-items: flex-end;">
+          <div>
+            <label>Tipo de mensaje</label>
+            <select name="rtype" id="rtypeInput">
+              <option value="note">Note (Nota)</option>
+              <option value="cc">CC (Control Change)</option>
+            </select>
+          </div>
+          <div>
+            <label>Número (Note/CC)</label>
+            <input type="number" name="num" id="numInput" min="0" max="127" placeholder="0-127">
+          </div>
+          <div>
+            <label>Canal (opcional)</label>
+            <input type="number" name="channel" id="channelInput" min="0" max="15" placeholder="Cualquiera">
+          </div>
+          <button type="button" class="btn ghost" id="btnLearnToggle"
+            style="margin-bottom: 4px; padding: 8px 16px; height: 38px;" title="Capturar desde MIDI">
+            <span class="icon">✨</span> Learn
+          </button>
+        </div>
+
+        <!-- Área de Aprendizaje (aparece debajo de la fila MIDI) -->
+        <div class="full" id="learnPreviewArea"
+          style="display: none; background: rgba(var(--accent-rgb), 0.05); border: 1px dashed var(--accent); border-radius: 8px; padding: 16px; margin-top: 4px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <span style="font-size: 12px; font-weight: 600; color: var(--accent); letter-spacing: 0.05em;">MODO
+              APRENDIZAJE ACTIVO</span>
+            <button type="button" id="btnLearnClose" class="btn ghost"
+              style="padding: 4px; min-width: auto;">&times;</button>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div>
+              <div class="muted" style="font-size: 11px; margin-bottom: 2px;">TIPO DETECTADO</div>
+              <span id="summaryKind" style="font-weight: 600; color: var(--text);">Esperando…</span>
+            </div>
+            <div>
+              <div class="muted" style="font-size: 11px; margin-bottom: 2px;">ÚLTIMO EVENTO</div>
+              <span id="summaryCandidate" style="font-weight: 600; color: var(--accent);">Mueve un control MIDI</span>
+            </div>
+          </div>
+          <div style="margin-top: 16px; text-align: right;">
+            <button type="button" class="btn primary" id="btnApplyLearn" disabled
+              style="font-size: 12px; padding: 6px 12px;">Aplicar valores</button>
+          </div>
+        </div>
+
+        <!-- Fila 3: OSC Value Config -->
+        <div style="grid-column: 1 / span 2;">
+          <label>Tipo de valor OSC</label>
+          <select name="vtype" id="vtypeInput">
+            <option value="float">Float (0.0 - 1.0)</option>
+            <option value="int">Int (0 - 127)</option>
+            <option value="bool">Bool (True/False)</option>
+            <option value="const">Constante</option>
+          </select>
+        </div>
+        <div id="constRow" style="display:none; grid-column: 1 / span 2;">
+          <label>Valor constante</label>
+          <input type="text" name="const" id="constInput" placeholder="1.0">
+        </div>
       </div>
-      <div>
-        <label>Nota o CC (0..127)</label>
-        <input type="text" name="num">
+
+      <div class="actions" style="margin-top: 32px; border-top: 1px solid var(--line); padding-top: 24px;">
+        <button class="btn primary" type="submit">Guardar Mapeo</button>
+        <a class="btn" href="/">Cancelar</a>
       </div>
-      <div class="full">
-        <label>OSC Path</label>
-        <input type="text" name="osc" value="/D3/x">
-      </div>
-      <div>
-        <label>Tipo de valor OSC</label>
-        <select name="vtype" id="manualVType">
-          <option value="float">float (0..1)</option>
-          <option value="int">int (0..127)</option>
-          <option value="bool">bool</option>
-          <option value="const">const</option>
-        </select>
-      </div>
-      <div id="manualConstRow" style="display:none;">
-        <label>Const (si vtype=const)</label>
-        <input type="text" name="const" id="manualConstInput" placeholder="ej: 1.0">
-      </div>
-    </div>
-    <div class="actions">
-      <button class="btn primary" type="submit">Añadir ruta</button>
-      <a class="btn" href="/">Cancelar</a>
-    </div>
-  </form>
+    </form>
+  </div>
 </section>

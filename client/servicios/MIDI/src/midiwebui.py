@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import os, json, socket, ipaddress, time, asyncio, tempfile, html, logging
+import os, sys, json, socket, ipaddress, time, asyncio, tempfile, html, logging, concurrent.futures
 from pathlib import Path
 from typing import Any, Dict
+
+# Asegurar que el directorio src esté en el path para encontrar omimidi_core
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI, Form, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -13,80 +16,83 @@ from datetime import datetime
 import mido
 
 from omimidi_core import push_map_to_server
+from omimidi_utils import load_json, save_json
 
-LOGGER = logging.getLogger("omimidi.webui")
+from omimidi_logger import get_logger
+LOGGER = get_logger("omimidi.webui")
 
-BASE_DIR         = os.path.dirname(os.path.abspath(__file__))
-MAP_FILE         = os.path.join(BASE_DIR, "OMIMIDI_map.json")
-LEARN_REQ_FILE   = os.path.join(BASE_DIR, "OMIMIDI_learn_request.json")
-STATE_FILE       = os.path.join(BASE_DIR, "OMIMIDI_state.json")
-RESTART_REQ_FILE = os.path.join(BASE_DIR, "OMIMIDI_restart.flag")
+BASE_DIR         = Path(__file__).resolve().parents[1]
+MAP_FILE         = BASE_DIR / "OMIMIDI_map.json"
+LEARN_REQ_FILE   = BASE_DIR / "OMIMIDI_learn_request.json"
+STATE_FILE       = BASE_DIR / "OMIMIDI_state.json"
+RESTART_REQ_FILE = BASE_DIR / "OMIMIDI_restart.flag"
 
 # Backend fijo (no editable)
 mido.set_backend("mido.backends.rtmidi")
 
+# Estado en memoria para evitar I/O excesivo
+MEMORY_STATE = {}
+LAST_EVENT_STATE = {}
+
 app = FastAPI(title="OMIMIDI Web UI", version="0.6")
 
 # Static files
-STATIC_DIR = Path(__file__).resolve().parent / "web" / "static"
+STATIC_DIR = BASE_DIR / "web" / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # Templates
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "web" / "templates"))
+templates = Jinja2Templates(directory=str(BASE_DIR / "web" / "templates"))
 
-STRUCTURE_PATH = Path(__file__).resolve().parents[2] / "agent_pi" / "data" / "structure.json"
+STRUCTURE_PATH = Path(__file__).resolve().parents[3] / "agent_pi" / "data" / "structure.json"
 
-# ---------- utils JSON ----------
-def load_json(path: str, default: Any) -> Any:
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except Exception:
-        return default
-
-def save_json(path: str, data: Any) -> None:
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=directory or None, prefix=os.path.basename(path) + '.', suffix='.tmp')
-    try:
-        with os.fdopen(fd, 'w') as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp_path, path)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except FileNotFoundError:
-            pass
-        except Exception as exc:
-            LOGGER.debug("No se pudo borrar archivo temporal %s: %s", tmp_path, exc)
+# load_json y save_json ahora se importan de omimidi_utils
 
 def get_map() -> Dict[str, Any]:
     return load_json(MAP_FILE, {
-        "midi_input": "",
-        "osc_port": 1024,
-        "osc_ips": ["127.0.0.1"],
-        "ui_port": 9001,
-        "routes": [],
-        "config_name": "default",
+        "file_info": {
+            "name": "default",
+            "ui_port": 9001
+        },
+        "source": {
+            "midi_input": ""
+        },
+        "net": {
+            "vlan": 100,
+            "vlan_active": False
+        },
+        "osc": {
+            "ips": ["127.0.0.1"],
+            "port": 1024
+        },
+        "routes": []
     })
 
 def persist_map(data: Dict[str, Any]) -> None:
-    config_name = str(data.get("config_name") or "").strip() or "default"
-    data["config_name"] = config_name
-    data["osc_port"] = int(data.get("osc_port", 1024))
-    data["ui_port"] = int(data.get("ui_port", 9001))
-    data["osc_ips"] = list(data.get("osc_ips", ["127.0.0.1"]))
+    # Asegurar estructura
+    if "file_info" not in data: data["file_info"] = {}
+    if "source" not in data: data["source"] = {}
+    if "net" not in data: data["net"] = {}
+    if "osc" not in data: data["osc"] = {}
+    
+    data["file_info"]["name"] = str(data["file_info"].get("name") or "default").strip()
+    data["file_info"]["ui_port"] = int(data["file_info"].get("ui_port", 9001))
+    data["net"]["vlan"] = int(data["net"].get("vlan", 100))
+    data["net"]["vlan_active"] = bool(data["net"].get("vlan_active", False))
+    data["osc"]["port"] = int(data["osc"].get("port", 1024))
+    data["osc"]["ips"] = list(data["osc"].get("ips", ["127.0.0.1"]))
+    
     save_json(MAP_FILE, data)
     push_map_to_server(data, source="midiwebui")
     LOGGER.info(
-        "Mapa MIDI guardado (config=%s, midi_input=%s, osc_port=%s, ui_port=%s, osc_ips=%s)",
-        config_name,
-        data.get("midi_input"),
-        data.get("osc_port"),
-        data.get("ui_port"),
-        ", ".join(data.get("osc_ips") or []),
+        "Mapa MIDI guardado (config=%s, midi_input=%s, VLAN=%s, VLAN_ACTIVE=%s, osc_port=%s, ui_port=%s, osc_ips=%s)",
+        data["file_info"]["name"],
+        data["source"].get("midi_input"),
+        data["net"]["vlan"],
+        data["net"]["vlan_active"],
+        data["osc"]["port"],
+        data["file_info"]["ui_port"],
+        ", ".join(data["osc"]["ips"]),
     )
 
 
@@ -178,10 +184,11 @@ def render_routes_rows(data: Dict[str, Any]) -> str:
                 f"<td>{osc_esc}</td>"
                 f"<td>{vtype_esc}</td>"
                 f"<td><span data-route='{i}' data-osc='{osc_esc}'>–</span></td>"
-                "<td>"
+                "<td class='actions-cell'>"
+                f"<a href='/edit/{i}' class='btn ghost' title='Editar'><span class='icon'>✏️</span></a>"
                 "<form method='post' action='/delete_route' style='display:inline;'>"
                 f"<input type='hidden' name='idx' value='{i}'/>"
-                "<button class='btn'>Eliminar</button>"
+                "<button class='btn ghost danger-text' title='Eliminar'><span class='icon'>🗑️</span></button>"
                 "</form>"
                 "</td>"
                 "</tr>"
@@ -197,7 +204,7 @@ async def index(request: Request):
     context = get_template_context(active="home")
     context["request"] = request
     # Prepare BODY_HTML by loading the index fragment and injecting rendered rows
-    tmpl_path = Path(__file__).resolve().parent / "web" / "templates" / "index.html"
+    tmpl_path = BASE_DIR / "web" / "templates" / "index.html"
     try:
         raw = tmpl_path.read_text(encoding='utf-8')
     except Exception:
@@ -228,18 +235,19 @@ async def config_page(request: Request):
     context.update({
         "request": request,
         "midi_inputs": mido.get_input_names(),
-        "current_midi": data.get("midi_input", ""),
-        "config_name": data.get("config_name", "default"),
-        "osc_port": data.get("osc_port", 1024),
-        "osc_ips": ",".join(data.get("osc_ips", ["127.0.0.1"])),
-        "ui_port": data.get("ui_port", 9001),
-        "vlan": data.get("vlan", 100),
-        "routes": data.get("routes", [])
+        "current_midi": data.get("source", {}).get("midi_input", ""),
+        "config_name": data.get("file_info", {}).get("name", "default"),
+        "osc_port": data.get("osc", {}).get("port", 1024),
+        "osc_ips": ",".join(data.get("osc", {}).get("ips", ["127.0.0.1"])),
+        "ui_port": data.get("file_info", {}).get("ui_port", 9001),
+        "vlan": data.get("net", {}).get("vlan", 100),
+        "vlan_active": data.get("net", {}).get("vlan_active", False)
     })
     
     # Build local variables for template formatting
     config_name = context.get('config_name', '')
     vlan = context.get('vlan', '')
+    vlan_active = context.get('vlan_active', False)
     osc_port = context.get('osc_port', 1024)
     ui_port = context.get('ui_port', 9001)
     osc_ips = context.get('osc_ips', '')
@@ -266,7 +274,13 @@ async def config_page(request: Request):
 
       <div class="form-group">
         <label>VLAN</label>
-        <input type="number" name="vlan" value="{vlan}" min="1" max="4094">
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <input type="number" name="vlan" value="{vlan}" min="1" max="4094" style="width: 80px;">
+            <label class="checkbox-container" style="display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;">
+                <input type="checkbox" name="vlan_active" value="true" {'checked' if vlan_active else ''} style="width: auto; margin: 0;">
+                <span style="font-size: 14px; font-weight: 500;">Activar VLAN</span>
+            </label>
+        </div>
       </div>
 
                 <div class="form-group full">
@@ -291,72 +305,9 @@ async def config_page(request: Request):
     </div>
   </section>
 
-  <section class="card stack">
-    <div class="section-title">
-      <h2>Mapeo MIDI <button type="button" class="btn primary" id="addBtn">+ Añadir Mapeo</button></h2>
-    </div>
-
-    <!-- Formulario de Mapeo (oculto por defecto) -->
-    <div id="mappingForm" class="mapping-form" style="display:none;">
-      <div class="form-grid">
-        <div>
-          <label>Tipo</label>
-          <select name="map_type">
-            <option value="note">Note</option>
-            <option value="cc">CC</option>
-          </select>
-        </div>
-        <div>
-          <label>Nota/CC</label>
-          <input type="number" name="map_num" min="0" max="127">
-        </div>
-        <div>
-          <label>Canal</label>
-          <input type="number" name="map_channel" min="0" max="15">
-        </div>
-        <div class="full">
-          <label>Ruta OSC</label>
-          <input type="text" name="map_osc" placeholder="/ruta/osc">
-        </div>
-        <div>
-          <label>Tipo de valor</label>
-          <select name="map_vtype">
-            <option value="float">Float (0-1)</option>
-            <option value="int">Int (0-127)</option>
-            <option value="bool">Bool</option>
-            <option value="const">Const</option>
-          </select>
-        </div>
-        <div id="constValueField" style="display:none;">
-          <label>Valor constante</label>
-          <input type="text" name="map_const" placeholder="1.0">
-        </div>
-      </div>
-      <div class="form-actions">
-        <button type="button" class="btn" id="learnBtn">LEARN</button>
-        <button type="button" class="btn" onclick="cancelMapping()">Cancelar</button>
-      </div>
-    </div>
-
-    <!-- Lista de Mapeos -->
-    <div class="table-wrap">
-      <table class="routes-table">
-        <tr>
-          <th>#</th>
-          <th>MIDI</th>
-          <th>OSC Path</th>
-          <th>Valor</th>
-          <th>Último</th>
-          <th></th>
-        </tr>
-        {render_routes_rows(data)}
-      </table>
-    </div>
-  </section>
-
   <div class="global-actions">
-    <button type="submit" class="btn primary">Guardar Todos los Cambios</button>
-    <button type="button" class="btn" id="pingBtn">Ping OSC</button>
+    <button type="submit" class="btn primary">Guardar Configuración</button>
+    <button type="button" class="btn" id="pingBtn">Ping OSC (IGMP)</button>
     <button type="button" class="btn danger" id="reiniciarBtn">Reiniciar Servicio</button>
   </div>
 </form>
@@ -377,6 +328,9 @@ async def config_page(request: Request):
   display: block;
   margin-bottom: 5px;
   font-weight: 500;
+}}
+.checkbox-container:hover {{
+    color: var(--accent);
 }}
 .section-title {{
   display: flex;
@@ -426,31 +380,13 @@ async def config_page(request: Request):
 
 @app.get("/add", response_class=HTMLResponse)
 async def add_route_landing(request: Request):
-    context = get_template_context(active="add")
-    context["request"] = request
-    tmpl_path = Path(__file__).resolve().parent / "web" / "templates" / "add.html"
-    try:
-        raw = tmpl_path.read_text(encoding='utf-8')
-    except Exception:
-        raw = ''
-    brand = f"<strong>OMIMIDI</strong> — {get_identity_host()}"
-    nav_links = ' '.join([f"<a class=\"nav-link{' active' if item[0]==context.get('active') else ''}\" href=\"{item[2]}\">{item[1]}</a>" for item in context.get('nav_items', [])])
-    context.update({
-        'BODY_HTML': raw,
-        'PAGE_TITLE': context.get('title'),
-        'PAGE_ID': context.get('active'),
-        'BRAND_HTML': brand,
-        'NAV_LINKS': nav_links,
-        'EXTRA_HEAD': '',
-        'EXTRA_JS': ''
-    })
-    return templates.TemplateResponse('layout.html', context)
+    return RedirectResponse("/add/manual", status_code=303)
 
 @app.get("/add/manual", response_class=HTMLResponse)
 async def add_route_manual_page(request: Request):
     context = get_template_context(active="add")
     context["request"] = request
-    tmpl_path = Path(__file__).resolve().parent / "web" / "templates" / "add_manual.html"
+    tmpl_path = BASE_DIR / "web" / "templates" / "add_manual.html"
     try:
         raw = tmpl_path.read_text(encoding='utf-8')
     except Exception:
@@ -460,7 +396,7 @@ async def add_route_manual_page(request: Request):
     context.update({
         'BODY_HTML': raw,
         'PAGE_TITLE': context.get('title'),
-        'PAGE_ID': context.get('active'),
+        'PAGE_ID': "add",
         'BRAND_HTML': brand,
         'NAV_LINKS': nav_links,
         'EXTRA_HEAD': '',
@@ -470,25 +406,100 @@ async def add_route_manual_page(request: Request):
 
 @app.get("/add/learn", response_class=HTMLResponse)
 async def add_route_learn_page(request: Request):
-    context = get_template_context(active="add")
-    context["request"] = request
-    tmpl_path = Path(__file__).resolve().parent / "web" / "templates" / "add_learn.html"
+    return RedirectResponse("/add/manual", status_code=303)
+
+@app.get("/edit/{idx}", response_class=HTMLResponse)
+async def edit_route_page(idx: int, request: Request):
+    data = get_map()
+    routes = data.get("routes", [])
+    if idx < 0 or idx >= len(routes):
+        return RedirectResponse("/", status_code=303)
+    
+    route = routes[idx]
+    context = get_template_context(active="edit")
+    context.update({
+        "request": request,
+        "idx": idx,
+        "route": route,
+        "vtype": route.get("vtype", "float"),
+        "rtype": route.get("type", "note"),
+        "num": route.get("note") if route.get("type") == "note" else route.get("cc"),
+        "channel": route.get("channel", ""),
+        "osc": route.get("osc", ""),
+        "const": route.get("const", "")
+    })
+    
+    # Use add_manual.html but with edit context
+    tmpl_path = BASE_DIR / "web" / "templates" / "add_manual.html"
     try:
         raw = tmpl_path.read_text(encoding='utf-8')
     except Exception:
         raw = ''
+    
+    # Simple template injection for edit mode
+    raw = raw.replace('action="/add_route"', f'action="/edit/save/{idx}"')
+    raw = raw.replace('id="formTitle">Añadir mapeo manual</h2>', f'id="formTitle">Editar mapeo #{idx}</h2>')
+    
+    # Prefill values
+    raw = raw.replace('id="rtypeInput"', f'id="rtypeInput" data-value="{context["rtype"]}"')
+    raw = raw.replace('id="numInput"', f'id="numInput" value="{context["num"]}"')
+    raw = raw.replace('id="channelInput"', f'id="channelInput" value="{context["channel"]}"')
+    raw = raw.replace('id="oscInput"', f'id="oscInput" value="{context["osc"]}"')
+    raw = raw.replace('id="vtypeInput"', f'id="vtypeInput" data-value="{context["vtype"]}"')
+    raw = raw.replace('id="constInput"', f'id="constInput" value="{context["const"]}"')
+    
     brand = f"<strong>OMIMIDI</strong> — {get_identity_host()}"
     nav_links = ' '.join([f"<a class=\"nav-link{' active' if item[0]==context.get('active') else ''}\" href=\"{item[2]}\">{item[1]}</a>" for item in context.get('nav_items', [])])
     context.update({
         'BODY_HTML': raw,
-        'PAGE_TITLE': context.get('title'),
-        'PAGE_ID': context.get('active'),
+        'PAGE_TITLE': f"Editar Mapeo #{idx}",
+        'PAGE_ID': "edit",
         'BRAND_HTML': brand,
         'NAV_LINKS': nav_links,
         'EXTRA_HEAD': '',
-        'EXTRA_JS': ''
+        'EXTRA_JS': '<script>onReady(() => { document.querySelectorAll("select[data-value]").forEach(s => s.value = s.dataset.value); });</script>'
     })
     return templates.TemplateResponse('layout.html', context)
+
+@app.post("/edit/save/{idx}")
+async def edit_route_save(
+    idx: int,
+    rtype: str = Form(...),
+    num: int = Form(...),
+    channel: str = Form(""),
+    osc: str = Form(...),
+    vtype: str = Form(...),
+    const: str = Form("")
+):
+    data = get_map()
+    if idx < 0 or idx >= len(data["routes"]):
+        return RedirectResponse("/", status_code=303)
+    
+    new_route = {
+        "type": rtype,
+        "osc": osc.strip(),
+        "vtype": vtype
+    }
+    if rtype == "note":
+        new_route["note"] = num
+    else:
+        new_route["cc"] = num
+    
+    if channel.strip():
+        try:
+            new_route["channel"] = int(channel)
+        except ValueError:
+            pass
+            
+    if vtype == "const" and const.strip():
+        try:
+            new_route["const"] = float(const)
+        except ValueError:
+            new_route["const"] = 1.0
+
+    data["routes"][idx] = new_route
+    persist_map(data)
+    return RedirectResponse("/", status_code=303)
 # ---------- WS / Push ----------
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
@@ -501,46 +512,68 @@ async def ws_endpoint(ws: WebSocket):
     except Exception:
         await ws_manager.disconnect(ws)
 
-@app.post("/push_state")
-async def push_state(request: Request):
-    """Recibe {route_idx?, path, value, ts, route?} del core y lo refleja en el estado + websockets."""
+@app.post("/push_batch")
+async def push_batch(request: Request):
+    """Recibe un lote de estados del core y los refleja en memoria + websockets."""
     try:
-        payload = await request.json()
-        path = str(payload.get("path") or "")
-        value = payload.get("value")
-        ts = payload.get("ts") or datetime.utcnow().isoformat() + "Z"
-        route_idx = payload.get("route_idx")
-        route_meta = payload.get("route") or {}
+        data = await request.json()
+        batch = data.get("batch", [])
+        if not batch:
+            return JSONResponse({"ok": True})
 
-        st = load_json(STATE_FILE, {})
-        if route_idx is not None:
-            st[str(route_idx)] = {
-                "path": path,
-                "value": value,
-                "ts": ts,
-                "route": route_meta,
-            }
-        else:
-            st[path] = {"value": value, "ts": ts}
-        save_json(STATE_FILE, st)
+        for update in batch:
+            route_idx = update.get("route_idx")
+            if route_idx is not None:
+                MEMORY_STATE[str(route_idx)] = update
+            else:
+                path = update.get("path")
+                if path:
+                    MEMORY_STATE[path] = update
 
-        broadcast_payload = {"path": path, "value": value, "ts": ts}
-        if route_idx is not None:
-            broadcast_payload["route_idx"] = str(route_idx)
-            broadcast_payload["route"] = route_meta
-        await ws_manager.broadcast_json(broadcast_payload)
+        # Broadcast del lote completo
+        await ws_manager.broadcast_json({"batch": batch})
         return JSONResponse({"ok": True})
     except Exception as e:
-        LOGGER.exception("Error procesando push_state: %s", e)
+        LOGGER.exception("Error procesando push_batch: %s", e)
         return JSONResponse({"ok": False, "err": str(e)}, status_code=400)
+
+@app.post("/push_state")
+async def push_state(request: Request):
+    """Mantenido por compatibilidad, redirige a push_batch."""
+    try:
+        payload = await request.json()
+        return await push_batch_internal([payload])
+    except Exception as e:
+        return JSONResponse({"ok": False, "err": str(e)}, status_code=400)
+
+async def push_batch_internal(batch: list):
+    for update in batch:
+        route_idx = update.get("route_idx")
+        if route_idx is not None:
+            MEMORY_STATE[str(route_idx)] = update
+        else:
+            path = update.get("path")
+            if path:
+                MEMORY_STATE[path] = update
+    await ws_manager.broadcast_json({"batch": batch})
+    return JSONResponse({"ok": True})
 
 @app.get("/state")
 def state():
-    return JSONResponse(load_json(STATE_FILE, {}))
+    return JSONResponse(MEMORY_STATE)
 
 # ---------- Learn ----------
+@app.post("/push_last_event")
+async def push_last_event(request: Request):
+    global LAST_EVENT_STATE
+    data = await request.json()
+    event = data.get("event", {})
+    LAST_EVENT_STATE = event
+    # Opcional: Notificar vía WebSocket si se desea tiempo real extremo
+    return {"ok": True}
+
 @app.get("/learn_state")
-def learn_state():
+async def learn_state():
     raw = read_learn_state()
     resp: Dict[str, Any] = {
         "armed": bool(raw.get("armed")),
@@ -548,6 +581,7 @@ def learn_state():
         "vtype": raw.get("vtype", "float"),
         "candidate": raw.get("candidate"),
         "result": raw.get("result"),
+        "last_event": LAST_EVENT_STATE # Add last_event to the response
     }
     if resp["vtype"] == "const":
         try:
@@ -565,7 +599,7 @@ def clear_learn_result():
 
 
 @app.post("/arm_learn")
-def arm_learn(osc: str = Form(...), vtype: str = Form(...), const: str = Form("")):
+def arm_learn(osc: str = Form("/learn"), vtype: str = Form("float"), const: str = Form("")):
     existing = read_learn_state()
     prev_armed = bool(existing.get("armed"))
     osc_path = osc.strip() or "/learn"
@@ -669,12 +703,35 @@ def request_restart_flag() -> None:
         f.write("restart")
     LOGGER.info("Se solicitó reinicio del servicio OMIMIDI.")
 
-def restart_page(message: str = "Reiniciando servicio OMIMIDI…", request: Request = None) -> HTMLResponse:
-    context = {
-        "request": request,
-        "message": message
-    }
-    return templates.TemplateResponse("restart.html", context)
+def restart_page(request: Request, message: str = "Reiniciando servicio OMIMIDI…") -> HTMLResponse:
+    context = get_template_context(active="restart")
+    context["request"] = request
+    context["message"] = message
+    
+    tmpl_path = BASE_DIR / "web" / "templates" / "restart.html"
+    try:
+        raw = tmpl_path.read_text(encoding='utf-8')
+        # Reemplazar variables manuales si no usamos Jinja para el fragmento
+        body = raw.replace("{{MESSAGE}}", message)
+    except Exception:
+        body = f"<h2>{message}</h2><p>La página se actualizará automáticamente.</p>"
+
+    brand = f"<strong>OMIMIDI</strong> — {get_identity_host()}"
+    nav_links = ' '.join([f"<a class=\"nav-link{' active' if item[0]==context.get('active') else ''}\" href=\"{item[2]}\">{item[1]}</a>" for item in context.get('nav_items', [])])
+    
+    context.update({
+        'BODY_HTML': body,
+        'PAGE_TITLE': "Reiniciando...",
+        'PAGE_ID': "restart",
+        'BRAND_HTML': brand,
+        'NAV_LINKS': nav_links,
+        'EXTRA_HEAD': '',
+        'EXTRA_JS': ''
+    })
+    
+    resp = templates.TemplateResponse('layout.html', context)
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
 
 @app.post("/config/save")
 def save_config(
@@ -684,6 +741,7 @@ def save_config(
     ui_port: str = Form(""), 
     config_name: str = Form(""),
     vlan: str = Form(""),
+    vlan_active: bool = Form(False),
     map_type: str = Form(""),
     map_num: str = Form(""),
     map_channel: str = Form(""),
@@ -695,32 +753,38 @@ def save_config(
     data = get_map()
     
     # Guardar configuración general
-    data["midi_input"] = midi_input.strip()
-    data["config_name"] = config_name.strip() or data.get("config_name", "default")
+    if "source" not in data: data["source"] = {}
+    if "file_info" not in data: data["file_info"] = {}
+    if "net" not in data: data["net"] = {}
+    if "osc" not in data: data["osc"] = {}
+
+    data["source"]["midi_input"] = midi_input.strip()
+    data["file_info"]["name"] = config_name.strip() or data["file_info"].get("name", "default")
+    data["net"]["vlan_active"] = vlan_active
 
     # Validar y guardar VLAN
     try:
         vlan_num = int(vlan)
         if 1 <= vlan_num <= 4094:
-            data["vlan"] = vlan_num
+            data["net"]["vlan"] = vlan_num
     except ValueError:
-        data["vlan"] = 100
+        data["net"]["vlan"] = 100
 
     # Validar y guardar puerto OSC
     try:
         osc_port_num = int(osc_port)
         if 1 <= osc_port_num <= 65535:
-            data["osc_port"] = osc_port_num
+            data["osc"]["port"] = osc_port_num
     except ValueError:
-        data["osc_port"] = 1024
+        data["osc"]["port"] = 1024
 
     # Validar y guardar puerto UI
     try:
         ui_port_num = int(ui_port)
         if 1 <= ui_port_num <= 65535:
-            data["ui_port"] = ui_port_num
+            data["file_info"]["ui_port"] = ui_port_num
     except ValueError:
-        data["ui_port"] = 9001
+        data["file_info"]["ui_port"] = 9001
 
     # Validar y guardar IPs OSC
     valid_ips = []
@@ -731,7 +795,7 @@ def save_config(
         except ValueError:
             LOGGER.warning(f"IP inválida ignorada: {ip}")
             continue
-    data["osc_ips"] = valid_ips or ["127.0.0.1"]
+    data["osc"]["ips"] = valid_ips or ["127.0.0.1"]
 
     # Procesar nuevo mapeo si se proporcionaron los datos necesarios
     if all([map_type, map_num, map_osc]):
@@ -785,21 +849,73 @@ def save_config(
     request_restart_flag()
     return restart_page("Aplicando cambios y reiniciando...")
 
+def scan_subnet(base_ip: str) -> List[str]:
+    """Escanea una subred /24 buscando hosts activos."""
+    from omimidi_core import is_reachable
+    prefix = ".".join(base_ip.split(".")[:-1]) + "."
+    found = []
+    
+    def check_ip(i):
+        target = f"{prefix}{i}"
+        if is_reachable(target, timeout=0.2):
+            return target
+        return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+        futures = [executor.submit(check_ip, i) for i in range(1, 255)]
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res:
+                found.append(res)
+    return sorted(found)
+
 @app.post("/ping_osc")
-def ping_osc():
+async def ping_osc():
+    from omimidi_core import is_reachable
     data = get_map()
-    port = int(data.get("osc_port", 1024))
-    ips = data.get("osc_ips", ["127.0.0.1"])
-    ts = datetime.utcnow().isoformat() + "Z"
-    for ip in ips:
+    osc_cfg = data.get("osc", {})
+    ips = osc_cfg.get("ips", [])
+    port = osc_cfg.get("port", 1024)
+    
+    results = []
+    success_count = 0
+    
+    all_targets = []
+    for ip_str in ips:
         try:
-            c = SimpleUDPClient(ip, port)
-            c._sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            c.send_message("/omimidi/ping", ts)
-            LOGGER.info("Ping OSC enviado a %s:%s", ip, port)
-        except Exception as exc:
-            LOGGER.warning("No se pudo enviar ping OSC a %s:%s → %s", ip, port, exc)
-    return RedirectResponse("/config", status_code=303)
+            addr = ipaddress.ip_address(ip_str)
+            # Detección simple de broadcast (termina en .255 o es global)
+            if ip_str.endswith(".255") or ip_str == "255.255.255.255":
+                results.append({"ip": ip_str, "type": "broadcast", "info": "Detectado broadcast, iniciando descubrimiento..."})
+                discovered = scan_subnet(ip_str)
+                for d_ip in discovered:
+                    if d_ip not in all_targets:
+                        all_targets.append((d_ip, True)) # True = discovered
+            else:
+                all_targets.append((ip_str, False))
+        except ValueError:
+            all_targets.append((ip_str, False))
+
+    for ip, is_discovered in all_targets:
+        reachable = is_reachable(ip)
+        if not reachable:
+            results.append({"ip": ip, "ok": False, "error": "IP no alcanzable", "discovered": is_discovered})
+            continue
+            
+        try:
+            client = SimpleUDPClient(ip, port)
+            client.send_message("/ping", [1.0])
+            results.append({"ip": ip, "ok": True, "discovered": is_discovered})
+            success_count += 1
+        except Exception as e:
+            results.append({"ip": ip, "ok": False, "error": str(e), "discovered": is_discovered})
+            
+    return {
+        "ok": success_count > 0,
+        "total": len(all_targets),
+        "success": success_count,
+        "details": results
+    }
 
 # ---------- Mapping CRUD ----------
 @app.post("/add_route")
@@ -845,7 +961,11 @@ def delete_route(idx: int = Form(...)):
     return RedirectResponse("/", status_code=303)
 
 # ---------- Restart ----------
+@app.get("/restart")
+async def restart_get():
+    return RedirectResponse("/", status_code=303)
+
 @app.post("/restart")
-def restart():
+def restart(request: Request):
     request_restart_flag()
-    return restart_page()
+    return restart_page(request)

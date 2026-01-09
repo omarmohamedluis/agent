@@ -1,0 +1,78 @@
+{
+  "file_info": {
+    "name": "omar test 1",
+    "ui_port": 9001,
+    "updated_at": "2026-01-09T19:42:59.753615+00:00"
+  },
+  "source": {
+    "midi_input": "APC40 mkII:APC40 mkII MIDI 1 24:0"
+  },
+  "net": {
+    "vlan": 100,
+    "vlan_active": false
+  },
+  "osc": {
+    "ips": [
+      "192.168.0.255"
+    ],
+    "port": 7000
+  },
+  "routes": [
+    {
+      "type": "cc",
+      "osc": "/composition/layers/1/video/opacity",
+      "vtype": "float",
+      "cc": 7,
+      "channel": 0
+    },
+    {
+      "type": "cc",
+      "osc": "/composition/layers/2/video/opacity",
+      "vtype": "float",
+      "cc": 7,
+      "channel": 1
+    },
+    {
+      "type": "cc",
+      "osc": "/composition/layers/3/video/opacity",
+      "vtype": "float",
+      "cc": 7,
+      "channel": 2
+    },
+    {
+      "type": "cc",
+      "cc": 7,
+      "osc": "/composition/layers/4/video/opacity",
+      "vtype": "float",
+      "channel": 3
+    },
+    {
+      "type": "cc",
+      "cc": 7,
+      "osc": "/composition/layers/5/video/opacity",
+      "vtype": "float",
+      "channel": 4
+    },
+    {
+      "type": "cc",
+      "cc": 7,
+      "osc": "/composition/layers/6/video/opacity",
+      "vtype": "float",
+      "channel": 5
+    },
+    {
+      "type": "cc",
+      "cc": 7,
+      "osc": "/composition/layers/7/video/opacity",
+      "vtype": "float",
+      "channel": 6
+    },
+    {
+      "type": "cc",
+      "cc": 48,
+      "osc": "/hola/",
+      "vtype": "float",
+      "channel": 0
+    }
+  ]
+}

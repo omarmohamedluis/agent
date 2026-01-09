@@ -1,6 +1,4 @@
-# REVISAR
-# falta meter el normal.
-# ui/ui.py
+# src/ui.py
 
 import json
 import time
@@ -16,9 +14,10 @@ from heartbeat import (
 from PIL import Image, ImageDraw, ImageFont
 from NetComHandler import check_server_status
 from logger import log_event, log_print
+from display_manager import DisplayManager
 
-BASE_DIR = Path(__file__).resolve().parents[1]  # llega a client/
-ASSETS_PATH  = BASE_DIR / "utilitys"
+BASE_DIR = Path(__file__).resolve().parents[1]  # reaches client/
+ASSETS_PATH  = BASE_DIR / "web" / "utilities"
 
 DEFAULT_JSON_PATH = BASE_DIR / "data" / "structure.json"
 
@@ -31,24 +30,24 @@ _standard_listener_registered = False
 
 # -------- Hardware --------
 
-from luma.core.interface.serial import i2c
-from luma.oled.device import ssd1306
-
-serial = i2c(port=1, address=0x3C)
-_device = ssd1306(serial, width=OLED_W, height=OLED_H)
+_display_manager = DisplayManager(driver_name="ssd1306")
+try:
+    _display_manager.init()
+except Exception as e:
+    log_event("error", "ui", f"Failed to init display manager: {e}")
 
 module_name = f"{Path(__file__).parent.name}.{Path(__file__).stem}"
 
-# -------- Carga estricta de fuentes e icono --------
+# -------- Assets Loading --------
 
 _FONT = ImageFont.truetype(str(ASSETS_PATH / "PixelOperator.ttf"), 14)
 _ICON_FONT = ImageFont.truetype(str(ASSETS_PATH / "lineawesome-webfont.ttf"), 16)
 _ICON  = Image.open(ASSETS_PATH / "omarpi.png")
 
 
-# -------- Lienzos --------
+# -------- Canvases --------
 def _base_canvas() -> Image.Image:
-    """Fondo negro con icono abajo (para Loading/Error/Shutdown)."""
+    """Black background with icon at the bottom (for Loading/Error/Shutdown)."""
     img = Image.new("L", (OLED_W, OLED_H), 0)
     if _ICON:
         max_w, max_h = OLED_W, OLED_H - HEADER_H
@@ -62,7 +61,7 @@ def _base_canvas() -> Image.Image:
     return img
 
 def _new_frame() -> Image.Image:
-    """Frame completamente negro (sin icono)."""
+    """Completely black frame (no icon)."""
     return Image.new("L", (OLED_W, OLED_H), 0)
 
 # -------- Headers --------
@@ -96,27 +95,27 @@ def _draw_header_error(img: Image.Image, label: str):
 
 def _draw_wifi_icon(draw: ImageDraw.ImageDraw, ok: bool, inverted: bool):
 
-    glyph = "\uf1eb"  # usamos el normal y lo tachamos si no ok
+    glyph = "\uf1eb"  # use normal and cross it out if not ok
     fill = 0 if inverted else 255
     gw, gh = draw.textbbox((0, 0), glyph, font=_ICON_FONT)[2:]
     x = OLED_W - gw - 2
     y = max(0, (HEADER_H - gh) // 2)
     draw.text((x, y), glyph, font=_ICON_FONT, fill=fill)
     if not ok:
-        # Diagonal del recuadro del glyph
+        # Diagonal line crossing the glyph box
         x0, y0 = x, y
         x1, y1 = x + gw, y + gh
         draw.line([(x0, y0), (x1, y1)], fill=fill, width=2)
 
 def _draw_header_text_left_center_right_inverted(img: Image.Image, left:str, center:str, right_wifi_ok: bool):
-    """Header blanco, texto negro."""
+    """White header, black text."""
     draw = ImageDraw.Draw(img)
     draw.rectangle([0, 0, OLED_W - 1, HEADER_H - 1], fill=255)
     # LEFT
     l_text = left or ""
     l_tw, l_th = draw.textbbox((0,0), l_text, font=_FONT)[2:]
     draw.text((2, max(0, (HEADER_H - l_th)//2)), l_text, font=_FONT, fill=0)
-    # RIGHT (icono negro)
+    # RIGHT (black icon)
     _draw_wifi_icon(draw, ok=right_wifi_ok, inverted=True)
     # CENTER
     c_text = center or ""
@@ -125,7 +124,7 @@ def _draw_header_text_left_center_right_inverted(img: Image.Image, left:str, cen
     cy = max(0, (HEADER_H - c_th)//2)
     draw.text((cx, cy), c_text, font=_FONT, fill=0)
 
-# -------- Útiles --------
+# -------- Utils --------
 def _read_json_simple(path: Path):
     try:
         with path.open("r", encoding="utf-8") as f:
@@ -146,15 +145,22 @@ def _is_eth_iface(name: str) -> bool:
     return n.startswith("eth") or n.startswith("en")
 
 def _display(img: Image.Image):
-    if img.size != (_device.width, _device.height):
-        img = img.resize((_device.width, _device.height), Image.NEAREST)
-    if img.mode != _device.mode:
-        img = img.convert(_device.mode)
-    _device.display(img)
+    _display_manager.display(img)
 
 
 def _get_current_app_name() -> str:
-    return "HELLO"
+    try:
+        # Read active service from structure.json
+        state_path = BASE_DIR / "data" / "structure.json"
+        if state_path.exists():
+            data = _read_json_simple(state_path)
+            services = data.get("services", [])
+            for svc in services:
+                if svc.get("enabled"):
+                    return svc.get("name", "UNKNOWN").upper()
+    except Exception:
+        pass
+    return "STANDBY"
 
 
 def _get_connection_status() -> bool:
@@ -165,39 +171,39 @@ def _standard_ui_listener(snapshot: Dict[str, Any]) -> None:
 
 
 
-# -------- API pública --------
+# -------- Public API --------
 def LoadingUI(percent: int, label: str = ""):
     StopStandardUI()
-    """Pantalla de carga: barra en header que invierte el texto; icono abajo."""
+    """Loading screen: bar in header with inverted text; icon at bottom."""
     img = _base_canvas()
     _draw_header_with_progress(img, percent, label)
     _display(img)
 
 def MessageUI(label: str = ""):
     StopStandardUI()
-    """Header blanco + texto ERROR (o label), icono abajo."""
+    """White header + ERROR text (or label), icon at bottom."""
     img = _base_canvas()
     _draw_header_error(img, label)
     _display(img)
 
 
 def ErrorUI(label: str = "ERROR", times: int = 3, interval: float = 0.25) -> None:
-    """Muestra ErrorUI con parpadeo simple."""
+    """Shows ErrorUI with simple blinking."""
     times = max(1, int(times))
     delay = max(0.05, float(interval))
     for _ in range(times):
-        ErrorUI(label)
+        MessageUI(label)
         time.sleep(delay)
         UIOFF()
         time.sleep(delay)
-    ErrorUI(label)
+    MessageUI(label)
 
 
 def EstandardUse(snapshot: Dict[str, Any], json_path: Path = DEFAULT_JSON_PATH) -> None:
-    """Header blanco/negro y footer con CPU/TEMP y NET (WIFI/ETH ip/cidr)."""
+    """Header white/black and footer with CPU/TEMP and NET (WIFI/ETH ip/cidr)."""
     img = _new_frame()
 
-    # Header invertido: fondo blanco, texto negro
+    # Inverted Header: white background, black text
     data = _read_json_simple(json_path)
     index = data.get("identity", {}).get("index", None)
     index_label = f"#{index if index is not None else '--'}"
@@ -216,7 +222,7 @@ def EstandardUse(snapshot: Dict[str, Any], json_path: Path = DEFAULT_JSON_PATH) 
     temp = snapshot.get("temp")
     ifaces = snapshot.get("ifaces") or []
 
-    # Elegir interfaz principal: primero Wi-Fi; si no hay, la primera
+    # Choose primary interface: first Wi-Fi; if none, the first one
     primary = None
     for x in ifaces:
         if _is_wifi_iface(x.get("iface", "")):
@@ -252,21 +258,21 @@ def EstandardUse(snapshot: Dict[str, Any], json_path: Path = DEFAULT_JSON_PATH) 
 
 def UIOFF():
     StopStandardUI()
-    """Apaga visualmente la OLED (pantalla completamente negra)."""
-    img = Image.new("L", (OLED_W, OLED_H), 0)
-    _display(img)
-    log_event("info", module_name, "Pantalla OLED apagada")
+    """Visually turns off the OLED (completely black screen)."""
+    _display_manager.clear()
+    log_event("info", module_name, "OLED screen turned off")
 
 
 def StartStandardUI(json_path: Path = DEFAULT_JSON_PATH, ensure_heartbeat: bool = True) -> None:
-    """Registra la UI estándar para recibir actualizaciones del heartbeat."""
+    """Registers the standard UI to receive heartbeat updates."""
     global _standard_ui_json_path, _standard_listener_registered
 
-    log_print("info", module_name, "Iniciando UI estándar")
+    log_print("info", module_name, "Starting Standard UI")
     _standard_ui_json_path = Path(json_path)
 
-    # if ensure_heartbeat:
-    #     start_heartbeat(path=_standard_ui_json_path, start_active=True)
+    if ensure_heartbeat:
+        from heartbeat import start_heartbeat
+        start_heartbeat(path=_standard_ui_json_path, start_active=True)
 
     if not _standard_listener_registered:
         register_heartbeat_listener(_standard_ui_listener)
@@ -277,14 +283,14 @@ def StartStandardUI(json_path: Path = DEFAULT_JSON_PATH, ensure_heartbeat: bool 
 
 
 def StopStandardUI() -> None:
-    """Elimina la suscripción de la UI estándar y apaga la pantalla."""
+    """Removes the standard UI subscription and turns off the screen."""
     global _standard_listener_registered
 
     if _standard_listener_registered:
         unregister_heartbeat_listener(_standard_ui_listener)
         _standard_listener_registered = False
-        log_print("info", module_name, "Quitada suscripción de la UI al heartbeat")
+        log_print("info", module_name, "Removed UI subscription from heartbeat")
 
 
 
-log_print("info", module_name, "OLED inicializada y lista")
+log_print("info", module_name, "OLED initialized and ready")

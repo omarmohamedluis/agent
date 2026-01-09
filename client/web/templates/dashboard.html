@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OMI Agent Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body>
+    <header>
+        <div class="brand">
+            <img src="/assets/omarpi.png" alt="OMI Logo">
+            <span>OMI Agent</span>
+        </div>
+        <div class="stats-bar">
+            <div class="stat-item">
+                <i class="fas fa-microchip"></i>
+                <span class="stat-value">{{ status.cpu }}%</span>
+            </div>
+            <div class="stat-item">
+                <i class="fas fa-thermometer-half"></i>
+                <span class="stat-value">{{ status.temp }}°C</span>
+            </div>
+            <div class="stat-item">
+                <i class="fas fa-network-wired"></i>
+                <span class="stat-value">{{ status.ip }}</span>
+            </div>
+            <a href="/settings" class="btn btn-nav">
+                <i class="fas fa-cog"></i>
+            </a>
+            <button id="headerRefreshBtn" class="btn btn-nav" onclick="refreshIframe()"
+                style="display: {{ 'inline-flex' if active_service else 'none' }};" title="Refresh Iframe">
+                <i class="fas fa-sync-alt"></i>
+            </button>
+        </div>
+    </header>
+
+    <main>
+        <aside class="sidebar">
+            <h3>Services</h3>
+            {% for id, svc in services.items() %}
+            <div class="service-card {{ 'running' if svc.running else '' }}" data-id="{{ id }}">
+                <div class="service-header">
+                    <span class="service-name">{{ svc.display_name }}</span>
+                    {% if svc.running %}
+                    <span class="badge on">ON</span>
+                    {% else %}
+                    <span class="badge off">OFF</span>
+                    {% endif %}
+                </div>
+                <div class="service-actions">
+                    {% if svc.running %}
+                    <button class="btn btn-stop" onclick="controlService('{{ id }}', 'stop')">
+                        <i class="fas fa-stop"></i> Stop
+                    </button>
+                    {% else %}
+                    <button class="btn btn-start" onclick="controlService('{{ id }}', 'start')">
+                        <i class="fas fa-play"></i> Start
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </aside>
+
+        <section class="content-area" id="contentArea">
+            {% if active_service %}
+            <iframe id="serviceIframe" src="http://{{ status.ip }}:{{ active_service.web_port }}"></iframe>
+            {% else %}
+            <div class="placeholder">
+                <img src="/assets/omarpi.png" alt="Logo">
+                <p>Select a service to start</p>
+            </div>
+            {% endif %}
+        </section>
+    </main>
+
+    <script>
+        let currentActiveServiceId = "{{ active_service.id if active_service else '' }}";
+        let systemIp = "{{ status.ip }}";
+
+        async function controlService(id, action) {
+            try {
+                const response = await fetch(`/api/services/${id}/${action}`, { method: 'POST' });
+                if (!response.ok) {
+                    alert('Failed to ' + action + ' service');
+                }
+                // We don't reload anymore, the poller will pick it up
+            } catch (e) {
+                console.error(e);
+                alert('Error connecting to server');
+            }
+        }
+
+        function refreshIframe() {
+            const iframe = document.getElementById('serviceIframe');
+            if (iframe) {
+                iframe.src = iframe.src;
+            }
+        }
+
+        async function updateStatus() {
+            try {
+                const response = await fetch('/api/status');
+                if (!response.ok) return;
+                const data = await response.json();
+
+                // Update Sidebar
+                const services = data.services;
+                let newActiveService = null;
+
+                for (const [id, svc] of Object.entries(services)) {
+                    const card = document.querySelector(`.service-card[data-id="${id}"]`);
+                    if (!card) continue;
+
+                    // Update running class
+                    if (svc.running) {
+                        card.classList.add('running');
+                        newActiveService = svc;
+                    } else {
+                        card.classList.remove('running');
+                    }
+
+                    // Update badge
+                    const badge = card.querySelector('.badge');
+                    badge.className = `badge ${svc.running ? 'on' : 'off'}`;
+                    badge.textContent = svc.running ? 'ON' : 'OFF';
+
+                    // Update button
+                    const actionArea = card.querySelector('.service-actions');
+                    if (svc.running) {
+                        actionArea.innerHTML = `<button class="btn btn-stop" onclick="controlService('${id}', 'stop')"><i class="fas fa-stop"></i> Stop</button>`;
+                    } else {
+                        actionArea.innerHTML = `<button class="btn btn-start" onclick="controlService('${id}', 'start')"><i class="fas fa-play"></i> Start</button>`;
+                    }
+                }
+
+                // Update Content Area (Iframe)
+                const contentArea = document.getElementById('contentArea');
+                const headerRefreshBtn = document.getElementById('headerRefreshBtn');
+
+                if (newActiveService) {
+                    if (headerRefreshBtn) headerRefreshBtn.style.display = 'inline-flex';
+                    if (newActiveService.id !== currentActiveServiceId) {
+                        currentActiveServiceId = newActiveService.id;
+                        contentArea.innerHTML = `
+                            <iframe id="serviceIframe" src="http://${systemIp}:${newActiveService.web_port}"></iframe>
+                        `;
+                    }
+                } else {
+                    if (headerRefreshBtn) headerRefreshBtn.style.display = 'none';
+                    if (currentActiveServiceId !== "") {
+                        currentActiveServiceId = "";
+                        contentArea.innerHTML = `
+                            <div class="placeholder">
+                                <img src="/assets/omarpi.png" alt="Logo">
+                                <p>Select a service to start</p>
+                            </div>
+                        `;
+                    }
+                }
+
+                // Update Header Stats
+                document.querySelector('.stat-item:nth-child(1) .stat-value').textContent = `${data.system.cpu}%`;
+                document.querySelector('.stat-item:nth-child(2) .stat-value').textContent = `${data.system.temp}°C`;
+                document.querySelector('.stat-item:nth-child(3) .stat-value').textContent = data.system.ip;
+
+            } catch (e) {
+                console.error("Polling error:", e);
+            }
+        }
+
+        // Start Polling
+        setInterval(updateStatus, 2000);
+    </script>
+</body>
+
+</html>

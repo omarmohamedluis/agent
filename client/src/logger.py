@@ -62,4 +62,4 @@ def log_print(level: str, caller: str, message: str) -> Path:
     caller_colored = f"{CALLER_COLOR}{caller}{RESET_COLOR}"
     message_colored = _highlight_error_words(message)
 
-    print(f"{tag_colored} {caller_colored}: {message_colored}")
+    print(f"{tag_colored} {caller_colored}: {message_colored}\n")

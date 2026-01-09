@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import os, json, time, threading, socket, ipaddress, sys, signal, tempfile, atexit
+import os, json, time, threading, socket, ipaddress, sys, signal, tempfile, atexit, queue, subprocess
 import urllib.request
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
@@ -8,34 +8,33 @@ import urllib.request
 from pathlib import Path
 
 import logging
+# Asegurar que el directorio src esté en el path para encontrar midiwebui
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import mido
 from pythonosc.udp_client import SimpleUDPClient
+from omimidi_utils import load_json, save_json
+
+class RestartRequest(Exception):
+    """Excepción interna para solicitar un soft-restart del core."""
+    pass
 
 # ==== Archivos ====
-BASE_DIR         = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR         = Path(__file__).resolve().parents[1]
 MAP_FILE         = os.path.join(BASE_DIR, "OMIMIDI_map.json")
-LAST_EVENT_FILE  = os.path.join(BASE_DIR, "OMIMIDI_last_event.json")      # opcional
+# LAST_EVENT_FILE eliminado para evitar I/O innecesario y problemas de permisos
 LEARN_REQ_FILE   = os.path.join(BASE_DIR, "OMIMIDI_learn_request.json")   # WebUI arma LEARN; el core lo consume
 STATE_FILE       = os.path.join(BASE_DIR, "OMIMIDI_state.json")           # último valor por ruta OSC
 RESTART_REQ_FILE = os.path.join(BASE_DIR, "OMIMIDI_restart.flag")         # WebUI solicita reinicio; el core se re-ejecuta
 WEBUI_PID_FILE   = os.path.join(BASE_DIR, "OMIMIDI_webui.pid")            # PID de la WebUI para poder matarla
-SERVER_INFO_PATH = Path(__file__).resolve().parents[3] / 'client' / 'agent_pi' / 'data' / 'server.json'
+SERVER_INFO_PATH = Path(__file__).resolve().parents[4] / 'client' / 'agent_pi' / 'data' / 'server.json'
 
 
-LOG_PATH = Path(__file__).resolve().parents[2] / 'logs' / 'services' / 'midi.log'
-LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-LOGGER = logging.getLogger("omimidi.core")
-if not LOGGER.handlers:
-    handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    LOGGER.addHandler(handler)
-    LOGGER.setLevel(logging.INFO)
-    LOGGER.propagate = False
+from omimidi_logger import get_logger
+LOGGER = get_logger("omimidi.core")
 
 
 CLEANUP_FILES = [
-    LAST_EVENT_FILE,
     LEARN_REQ_FILE,
     STATE_FILE,
     WEBUI_PID_FILE,
@@ -56,7 +55,7 @@ def push_map_to_server(map_data: Dict[str, Any], *, source: str = "omimidi_core"
     host = info.get("host")
     if not server_api or not serial:
         return
-    config_name = str(map_data.get("config_name") or "default")
+    config_name = str(map_data.get("file_info", {}).get("name") or "default")
     payload = json.dumps(
         {
             "name": config_name,
@@ -85,69 +84,115 @@ def cleanup_runtime_files():
 atexit.register(cleanup_runtime_files)
 
 CHECK_INTERVAL = 0.5   # s (hot-reload)
-STATE_FLUSH_MS = 200   # ms (frecuencia de volcado de estado)
+STATE_FLUSH_MS = 20    # ms (frecuencia de volcado de estado para WebUI)
 
 # ---- Backend fijo (no editable) ----
 mido.set_backend("mido.backends.rtmidi")
 
-# ---- Helpers JSON ----
-def load_json(path: str, default: Any) -> Any:
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except Exception:
-        return default
+# load_json y save_json ahora se importan de omimidi_utils
 
-def save_json(path: str, data: Any) -> None:
-    """Guarda datos JSON de forma segura usando un archivo temporal."""
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-        
-    backup_path = None
-    # Crear backup si existe
-    if os.path.exists(path):
-        backup_path = path + ".bak"
-        try:
-            os.replace(path, backup_path)
-        except Exception as e:
-            LOGGER.warning("No se pudo crear backup de %s: %s", path, e)
-            backup_path = None
+# ---- Validation Utils ----
+def validate_osc_path(path: str) -> bool:
+    """Valida que una ruta OSC sea válida."""
+    if not path:
+        return False
+    if not path.startswith("/"):
+        return False
+    return True
+
+def validate_midi_config(config: Dict[str, Any]) -> List[str]:
+    """Valida la configuración MIDI y retorna lista de errores."""
+    errors = []
     
-    # Guardar nuevo contenido usando archivo temporal
-    fd, tmp_path = tempfile.mkstemp(dir=directory or None, prefix=os.path.basename(path) + '.', suffix='.tmp')
-    success = False
+    # Validar puertos
     try:
-        with os.fdopen(fd, 'w') as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp_path, path)
-        success = True
-    except Exception as e:
-        LOGGER.error("Error guardando %s: %s", path, e)
-        # Intentar restaurar backup
-        if backup_path and os.path.exists(backup_path):
+        osc_port = int(config.get("osc_port", 0))
+        if not (1 <= osc_port <= 65535):
+            errors.append(f"Puerto OSC inválido: {osc_port}")
+    except (TypeError, ValueError):
+        errors.append("Puerto OSC debe ser un número")
+
+    try:
+        ui_port = int(config.get("ui_port", 0))
+        if not (1 <= ui_port <= 65535):
+            errors.append(f"Puerto UI inválido: {ui_port}")
+    except (TypeError, ValueError):
+        errors.append("Puerto UI debe ser un número")
+
+    # Validar IPs
+    osc_ips = config.get("osc_ips", [])
+    if not isinstance(osc_ips, list):
+        errors.append("osc_ips debe ser una lista")
+    else:
+        for ip in osc_ips:
             try:
-                os.replace(backup_path, path)
-                LOGGER.info("Backup restaurado para %s", path)
-            except Exception as e2:
-                LOGGER.error("No se pudo restaurar backup de %s: %s", path, e2)
-        raise
-    finally:
-        # Limpiar archivos temporales
-        try:
-            os.unlink(tmp_path)
-        except FileNotFoundError:
-            pass
-        except Exception as e:
-            LOGGER.warning("No se pudo eliminar temporal %s: %s", tmp_path, e)
-            
-        if backup_path and success:
-            try:
-                os.unlink(backup_path)
-            except FileNotFoundError:
-                pass
-            except Exception as e:
-                LOGGER.warning("No se pudo eliminar backup %s: %s", backup_path, e)
+                ipaddress.ip_address(ip)
+            except ValueError:
+                errors.append(f"IP inválida: {ip}")
+
+    # Validar rutas
+    routes = config.get("routes", [])
+    if not isinstance(routes, list):
+        errors.append("routes debe ser una lista")
+    else:
+        seen_routes = set()
+        for i, route in enumerate(routes):
+            if not isinstance(route, dict):
+                errors.append(f"Ruta {i} inválida: debe ser un objeto")
+                continue
+                
+            # Validar tipo
+            rtype = route.get("type")
+            if rtype not in ("note", "cc"):
+                errors.append(f"Ruta {i}: tipo inválido {rtype}")
+                continue
+
+            # Validar número según tipo
+            if rtype == "note":
+                try:
+                    note = int(route["note"])
+                    if not (0 <= note <= 127):
+                        errors.append(f"Ruta {i}: nota fuera de rango (0-127)")
+                except (KeyError, ValueError, TypeError):
+                    errors.append(f"Ruta {i}: nota inválida")
+            else:  # cc
+                try:
+                    cc = int(route["cc"])
+                    if not (0 <= cc <= 127):
+                        errors.append(f"Ruta {i}: CC fuera de rango (0-127)")
+                except (KeyError, ValueError, TypeError):
+                    errors.append(f"Ruta {i}: CC inválido")
+
+            # Validar canal MIDI (opcional)
+            channel = route.get("channel")
+            if channel is not None:
+                try:
+                    ch = int(channel)
+                    if not (0 <= ch <= 15):
+                        errors.append(f"Ruta {i}: canal fuera de rango (0-15)")
+                except (ValueError, TypeError):
+                    errors.append(f"Ruta {i}: canal inválido")
+
+            # Validar ruta OSC
+            osc_path = route.get("osc", "")
+            if not validate_osc_path(osc_path):
+                errors.append(f"Ruta {i}: path OSC inválido {osc_path}")
+            elif osc_path in seen_routes:
+                errors.append(f"Ruta {i}: path OSC duplicado {osc_path}")
+            else:
+                seen_routes.add(osc_path)
+
+            # Validar tipo de valor
+            vtype = route.get("vtype", "float")
+            if vtype not in ("float", "int", "bool", "const"):
+                errors.append(f"Ruta {i}: tipo de valor inválido {vtype}")
+            elif vtype == "const":
+                try:
+                    float(route.get("const", 0))
+                except (ValueError, TypeError):
+                    errors.append(f"Ruta {i}: valor constante inválido")
+
+    return errors
 
 # ---- OSC ----
 class BroadcastUDPClient(SimpleUDPClient):
@@ -164,29 +209,55 @@ class MidiMap:
         self.ui_port: int = 9001
         self.routes: List[Dict[str, Any]] = []
         self.config_name: str = "default"
+        self.vlan: int = 100
+        self.vlan_active: bool = False
 
     @classmethod
     def from_file(cls, path: str) -> "MidiMap":
         data = load_json(path, {})
         mm = cls()
-        mm.midi_input_name = data.get("midi_input", "")
-        mm.osc_port = int(data.get("osc_port", 1024))
-        mm.osc_ips = data.get("osc_ips", ["127.0.0.1"])
-        mm.ui_port = int(data.get("ui_port", 9001))
+        
+        # file_info
+        info = data.get("file_info", {})
+        mm.config_name = str(info.get("name") or data.get("config_name") or "default")
+        mm.ui_port = int(info.get("ui_port") or data.get("ui_port") or 9001)
+        
+        # source
+        mm.midi_input_name = data.get("source", {}).get("midi_input") or data.get("midi_input") or ""
+        
+        # net
+        net = data.get("net", {})
+        mm.vlan = int(net.get("vlan") or data.get("vlan") or 100)
+        mm.vlan_active = bool(net.get("vlan_active") or data.get("vlan_active") or False)
+        
+        # osc
+        osc = data.get("osc", {})
+        mm.osc_port = int(osc.get("port") or data.get("osc_port") or 1024)
+        mm.osc_ips = osc.get("ips") or data.get("osc_ips") or ["127.0.0.1"]
+        
+        # routes
         mm.routes = data.get("routes", [])
-        mm.config_name = str(data.get("config_name") or "default")
+        
         return mm
 
     def persist(self) -> None:
-        from omimidi_utils import validate_midi_config
-        
         payload = {
-            "midi_input": self.midi_input_name,
-            "osc_port": self.osc_port,
-            "osc_ips": self.osc_ips,
-            "ui_port": self.ui_port,
-            "routes": self.routes,
-            "config_name": self.config_name,
+            "file_info": {
+                "name": self.config_name,
+                "ui_port": self.ui_port
+            },
+            "source": {
+                "midi_input": self.midi_input_name
+            },
+            "net": {
+                "vlan": self.vlan,
+                "vlan_active": self.vlan_active
+            },
+            "osc": {
+                "ips": self.osc_ips,
+                "port": self.osc_port
+            },
+            "routes": self.routes
         }
         
         # Validar configuración antes de guardar
@@ -261,33 +332,61 @@ def build_osc_clients_from_map(map_obj: MidiMap) -> List[BroadcastUDPClient]:
     return clients
 
 # ---- Notificación WebUI (push de valores) ----
-def _notify_webui_async(route_idx: int, path: str, value: Any, route_meta: Dict[str, Any], ui_port: int):
-    """POST no bloqueante a la WebUI para empujar estados a los clientes."""
+def _notify_webui_batch_async(batch: List[Dict[str, Any]], ui_port: int):
+    """POST no bloqueante a la WebUI para empujar un lote de estados."""
+    if not batch:
+        return
+        
     def _post():
         try:
-            payload = json.dumps({
-                "route_idx": route_idx,
-                "path": path,
-                "value": value,
-                "route": {
-                    "type": route_meta.get("type"),
-                    "note": route_meta.get("note"),
-                    "cc": route_meta.get("cc"),
-                    "channel": route_meta.get("channel"),
-                },
-                "ts": datetime.now(timezone.utc).isoformat()
-            }).encode("utf-8")
+            payload = json.dumps({"batch": batch}).encode("utf-8")
             req = urllib.request.Request(
-                url=f"http://127.0.0.1:{ui_port}/push_state",
+                url=f"http://127.0.0.1:{ui_port}/push_batch",
                 data=payload,
                 headers={"Content-Type": "application/json"},
                 method="POST"
             )
-            urllib.request.urlopen(req, timeout=0.2).read()
+            urllib.request.urlopen(req, timeout=0.5).read()
         except Exception as exc:
-            # Si no hay WebUI escuchando, seguimos sin bloquear pero lo registramos.
-            LOGGER.debug("No se pudo notificar estado a la WebUI (%s): %s", path, exc)
+            LOGGER.debug("No se pudo notificar lote a la WebUI: %s", exc)
     threading.Thread(target=_post, daemon=True).start()
+
+def _notify_last_event_async(msg: mido.Message, ui_port: int):
+    """Notifica el último evento MIDI a la WebUI para visualización en vivo."""
+    def _post():
+        try:
+            d: Dict[str, Any] = {"type": msg.type, "ts": datetime.now(timezone.utc).isoformat()}
+            if msg.type in ("note_on", "note_off"):
+                d.update({"note": msg.note, "velocity": msg.velocity, "channel": getattr(msg, "channel", 0)})
+            elif msg.type == "control_change":
+                d.update({"cc": msg.control, "value": msg.value, "channel": msg.channel})
+            
+            payload = json.dumps({"event": d}).encode("utf-8")
+            req = urllib.request.Request(
+                url=f"http://127.0.0.1:{ui_port}/push_last_event",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            urllib.request.urlopen(req, timeout=0.1).read()
+        except Exception:
+            pass
+    threading.Thread(target=_post, daemon=True).start()
+
+def is_reachable(ip: str, timeout: float = 0.5) -> bool:
+    """Comprueba si una IP es alcanzable usando el comando ping del sistema."""
+    try:
+        # -c 1: enviar 1 paquete
+        # -W timeout: esperar respuesta (segundos)
+        # -n: sin resolución DNS
+        res = subprocess.run(
+            ["ping", "-c", "1", "-W", str(timeout), "-n", ip],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
 
 # ---- Core ----
 class OmiMidiCore:
@@ -300,9 +399,10 @@ class OmiMidiCore:
 
         # Estado de rutas (para WebUI)
         self._state_lock = threading.Lock()
-        self._state: Dict[str, Dict[str, Any]] = load_json(STATE_FILE, {})
-        self._state_dirty = False
+        self._state: Dict[str, Dict[str, Any]] = {} # Estado solo en memoria
+        self._state_queue = queue.Queue()
         self._last_state_flush = 0.0
+        self._restart_requested = False
 
     def open_input(self) -> None:
         inputs = mido.get_input_names()
@@ -326,15 +426,28 @@ class OmiMidiCore:
             self.clients = build_osc_clients_from_map(new_map)
 
     def _flush_state_periodically(self):
-        """Escribe STATE_FILE como mucho cada STATE_FLUSH_MS, si hay cambios."""
+        """Procesa la cola de estados y envía lotes a la WebUI cada STATE_FLUSH_MS."""
         while not self._stop.is_set():
             now = time.time() * 1000.0
-            if self._state_dirty and (now - self._last_state_flush) >= STATE_FLUSH_MS:
-                with self._state_lock:
-                    save_json(STATE_FILE, self._state)
-                    self._state_dirty = False
-                    self._last_state_flush = now
-            time.sleep(0.05)
+            if (now - self._last_state_flush) >= STATE_FLUSH_MS:
+                batch = []
+                # Vaciar la cola
+                while not self._state_queue.empty():
+                    try:
+                        update = self._state_queue.get_nowait()
+                        batch.append(update)
+                        # Actualizar estado interno
+                        key = str(update["route_idx"])
+                        with self._state_lock:
+                            self._state[key] = update
+                    except queue.Empty:
+                        break
+                
+                if batch:
+                    _notify_webui_batch_async(batch, ui_port=self.map.ui_port)
+                
+                self._last_state_flush = now
+            time.sleep(0.01)
 
     def _kill_existing_webui(self):
         """Mata el proceso de WebUI si hay PID guardado."""
@@ -343,39 +456,33 @@ class OmiMidiCore:
         try:
             with open(WEBUI_PID_FILE, "r") as f:
                 pid = int(f.read().strip())
-            os.kill(pid, signal.SIGTERM)
+            os.kill(pid, signal.SIGKILL)
             # breve espera
-            time.sleep(0.5)
+            time.sleep(0.2)
         except Exception as exc:
             LOGGER.debug("No se pudo finalizar WebUI previa: %s", exc)
-        try:
-            os.remove(WEBUI_PID_FILE)
-        except Exception as exc:
-            LOGGER.debug("No se pudo borrar PID file de WebUI: %s", exc)
+        if os.path.exists(WEBUI_PID_FILE):
+            try:
+                os.remove(WEBUI_PID_FILE)
+            except Exception as exc:
+                LOGGER.debug("No se pudo borrar PID file de WebUI: %s", exc)
 
     def _check_restart_flag(self):
-        """Si hay flag de reinicio, mata WebUI y re-ejecuta el core."""
+        """Si hay flag de reinicio, mata WebUI y solicita soft-restart."""
         if os.path.exists(RESTART_REQ_FILE):
             try:
                 os.remove(RESTART_REQ_FILE)
             except Exception as exc:
                 LOGGER.warning("No se pudo limpiar flag de reinicio: %s", exc)
-            LOGGER.info("Reiniciando proceso…")
-
-            # Cerrar recursos antes de re-ejecutar
-            try:
-                if self.inport:
-                    self.inport.close()
-            except Exception as exc:
-                LOGGER.debug("Error cerrando puerto MIDI antes de reiniciar: %s", exc)
-
+            # Pequeño retraso para que la WebUI pueda enviar la respuesta al navegador
+            time.sleep(1.0)
+            
             # Mata la WebUI existente
             self._kill_existing_webui()
 
-            # Re-ejecuta el mismo script
-            python = sys.executable
-            script = os.path.abspath(__file__)
-            os.execv(python, [python, script])
+            LOGGER.info("Solicitando soft-restart del core…")
+            self._restart_requested = True
+            self._stop.set()
 
     def hot_reload_loop(self) -> None:
         while not self._stop.is_set():
@@ -451,28 +558,23 @@ class OmiMidiCore:
         save_json(LEARN_REQ_FILE, req)
 
     def _update_state(self, route_idx: int, path: str, value: Any, route_meta: Dict[str, Any]) -> None:
-        key = str(route_idx)
-        with self._state_lock:
-            self._state[key] = {
-                "path": path,
-                "value": value,
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "route": {
-                    "type": route_meta.get("type"),
-                    "note": route_meta.get("note"),
-                    "cc": route_meta.get("cc"),
-                    "channel": route_meta.get("channel"),
-                },
-            }
-            self._state_dirty = True
+        update = {
+            "route_idx": route_idx,
+            "path": path,
+            "value": value,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "route": {
+                "type": route_meta.get("type"),
+                "note": route_meta.get("note"),
+                "cc": route_meta.get("cc"),
+                "channel": route_meta.get("channel"),
+            },
+        }
+        self._state_queue.put(update)
 
     def write_last_event(self, msg: mido.Message) -> None:
-        d: Dict[str, Any] = {"ts": datetime.now(timezone.utc).isoformat(), "type": msg.type}
-        if msg.type in ("note_on", "note_off"):
-            d.update({"note": msg.note, "velocity": msg.velocity, "channel": getattr(msg, "channel", None)})
-        elif msg.type == "control_change":
-            d.update({"cc": msg.control, "value": msg.value, "channel": msg.channel})
-        save_json(LAST_EVENT_FILE, d)
+        # Ahora solo notifica a la WebUI en memoria
+        _notify_last_event_async(msg, ui_port=self.map.ui_port)
 
     def value_from_msg(self, msg: mido.Message, route: Dict[str, Any]) -> Any:
         vtype = route.get("vtype", "float")
@@ -500,11 +602,8 @@ class OmiMidiCore:
             LOGGER.error("Ruta OSC inválida: %s", path)
             return
             
-        # Actualiza estado visible por WebUI
+        # Actualiza estado visible por WebUI (vía cola)
         self._update_state(route_idx, path, value, route_meta=route)
-        
-        # Notifica a la WebUI (empuje para websockets) usando puerto configurado
-        _notify_webui_async(route_idx, path, value, route_meta=route, ui_port=self.map.ui_port)
         
         # Envía a todos los targets con timeout
         failed_clients = []
@@ -544,15 +643,24 @@ class OmiMidiCore:
         t_state.start()
 
         try:
-            for msg in self.inport:  # bloqueante
-                self.write_last_event(msg)
-                self._maybe_consume_learn(msg)
-                routes = self.map.match(msg)
-                for idx, r in routes:
-                    val = self.value_from_msg(msg, r)
-                    self.send_osc(idx, r, val)
-        except KeyboardInterrupt:
-            self._stop.set()
+            LOGGER.info("Bucle MIDI iniciado. Esperando mensajes...")
+            while not self._stop.is_set():
+                # poll() es no bloqueante
+                msg = self.inport.poll()
+                if msg:
+                    LOGGER.debug("MIDI Recibido: %s", msg)
+                    self.write_last_event(msg)
+                    self._maybe_consume_learn(msg)
+                    routes = self.map.match(msg)
+                    if routes:
+                        LOGGER.debug("  -> Coincide con %s rutas", len(routes))
+                    for idx, r in routes:
+                        val = self.value_from_msg(msg, r)
+                        self.send_osc(idx, r, val)
+                else:
+                    time.sleep(0.005) # Un poco más rápido para RPi
+        except Exception as exc:
+            LOGGER.error("Error crítico en bucle MIDI: %s", exc, exc_info=True)
         finally:
             self._stop.set()
             try:
@@ -562,9 +670,14 @@ class OmiMidiCore:
                 LOGGER.debug("Error cerrando puerto MIDI al finalizar: %s", exc)
             cleanup_runtime_files()
             LOGGER.info("Bye!")
+            
+        if self._restart_requested:
+            raise RestartRequest()
 
 # ---- Arranque WebUI desde el core ----
+# ---- Arranque WebUI desde el core ----
 def start_webui(host: str = "0.0.0.0", port: int = 9001):
+    print("iniciando webui")
     import uvicorn, multiprocessing
     def run_server():
         # Guardar PID del worker para poder “matarlo” en reinicio
@@ -578,52 +691,61 @@ def start_webui(host: str = "0.0.0.0", port: int = 9001):
     return p
 
 def main() -> None:
-    LOGGER.info("Iniciando OmiMidiCore...")
+    LOGGER.info("Iniciando OmiMidiCore (Process ID: %s)...", os.getpid())
     
-    # Verificar disponibilidad de dispositivos MIDI
-    inputs = mido.get_input_names()
-    LOGGER.info("Dispositivos MIDI disponibles: %s", inputs)
-    
-    # Crear instancia del core
-    LOGGER.info("Creando instancia del core...")
-    core = OmiMidiCore()
     web_proc = None
     
     def cleanup():
         """Limpieza al salir"""
+        nonlocal web_proc
         if web_proc and web_proc.is_alive():
             LOGGER.info("Deteniendo WebUI...")
             web_proc.terminate()
             web_proc.join(timeout=2.0)
         cleanup_runtime_files()
-        LOGGER.info("Servicio finalizado.")
         
-    # Configurar manejo de señales
+    # Configurar manejo de señales (solo SIGTERM, SIGINT lo maneja KeyboardInterrupt)
     def handle_stop(signum, frame):
         LOGGER.info("\nRecibida señal de parada (%s)", signum)
         cleanup()
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, handle_stop)
-    signal.signal(signal.SIGINT, handle_stop)
 
     try:
-        # Iniciar WebUI
-        LOGGER.info("Iniciando WebUI en puerto %s...", core.map.ui_port)
-        web_proc = start_webui(port=core.map.ui_port)
-        
-        LOGGER.info("Iniciando bucle principal...")
-        core.run()
+        while True:
+            try:
+                # Verificar disponibilidad de dispositivos MIDI
+                inputs = mido.get_input_names()
+                LOGGER.info("Dispositivos MIDI disponibles: %s", inputs)
+                
+                # Crear instancia del core
+                LOGGER.info("Creando instancia del core...")
+                core = OmiMidiCore()
+                
+                # Iniciar WebUI si no está corriendo o si cambió el puerto
+                if web_proc is None or not web_proc.is_alive():
+                    LOGGER.info("Iniciando WebUI en puerto %s...", core.map.ui_port)
+                    web_proc = start_webui(port=core.map.ui_port)
+                
+                LOGGER.info("Iniciando bucle principal...")
+                core.run()
+                
+                # Si run() termina normalmente (sin excepción), salimos del loop
+                break
+                
+            except RestartRequest:
+                LOGGER.info("--- REINICIANDO CORE (Soft Restart) ---")
+                continue
+                
+            except Exception as e:
+                LOGGER.error("Error en el bucle principal: %s", e, exc_info=True)
+                break
     except KeyboardInterrupt:
         LOGGER.info("\n¡Hasta luego! Servicio MIDI detenido por el usuario.")
-        cleanup()
-        sys.exit(0)
-    except Exception as e:
-        LOGGER.error("Error en el bucle principal: %s", e, exc_info=True)
-        cleanup()
-        sys.exit(1)
     finally:
         cleanup()
+        LOGGER.info("Servicio finalizado.")
 
 
 if __name__ == "__main__":
