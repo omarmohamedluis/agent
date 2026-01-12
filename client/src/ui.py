@@ -225,14 +225,14 @@ def EstandardUse(snapshot: Dict[str, Any], json_path: Path = DEFAULT_JSON_PATH) 
     # Choose primary interface: first Wi-Fi; if none, the first one
     primary = None
     for x in ifaces:
-        if _is_wifi_iface(x.get("iface", "")):
+        if _is_wifi_iface(x.get("name", "")):
             primary = x
             break
     if primary is None:
         primary = ifaces[0] if ifaces else None
 
     if primary:
-        iface_name = primary.get("iface") or ""
+        iface_name = primary.get("name") or ""
         if _is_wifi_iface(iface_name):
             kind = "WIFI"
         elif _is_eth_iface(iface_name):

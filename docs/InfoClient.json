@@ -2,7 +2,6 @@
   "version": {
     "version": ""
   },
-
   "identity": {
     "index": null,
     "name": "",
@@ -10,57 +9,43 @@
     "host": ""
   },
   "network": {
-    "desired":{
-      "eth0":{
-        "dhcp": true,
-        "ip": "192.168.0.66",
-        "netmask": "255.255.255.0",
-        "gateway": "192.168.0.1"
-      }
-
+    "desired": {
+      "mode": "dhcp",
+      "ip": "127.0.0.1",
+      "mask": "255.255.255.0",
+      "gateway": "127.0.0.1",
+      "vlan": null,
+      "vlan_from_service": false
     },
-
-    "interfaces": [
-      {
-      }
-    ]
+    "interfaces": []
   },
   "services": [
     {
-      "name": "standby",
-      "enabled": true,
-      "configuration": null,
-      "web_port": null
-    },
-    {
       "name": "MIDI",
+      "display_name": "OMI MIDI",
       "enabled": false,
-      "configuration": null,
-      "web_port": null
+      "configuration": "default",
+      "web_port": 9001,
+      "vlan": null,
+      "vlan_active": false
     },
     {
       "name": "satellite",
+      "display_name": "Companion Satellite",
       "enabled": false,
-      "configuration": null,
-      "web_port": null
-    },
-    {
-      "name": "companion",
-      "enabled": false,
-      "configuration": null,
-      "web_port": null
+      "configuration": "default",
+      "web_port": null,
+      "vlan": null,
+      "vlan_active": false
     },
     {
       "name": "OSCnum",
+      "display_name": "OSCnum Key",
       "enabled": false,
-      "configuration": null,
-      "web_port": null
-    },
-    {
-      "name": "scauting",
-      "enabled": false,
-      "configuration": "ninguna",
-      "web_port": null
+      "configuration": "default",
+      "web_port": null,
+      "vlan": null,
+      "vlan_active": false
     }
   ]
 }

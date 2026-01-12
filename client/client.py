@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import asyncio
 import logging
 import uvicorn
+import socket
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -18,13 +19,14 @@ sys.path.append(str(SRC_DIR))
 from service_manager import ServiceManager
 from system import get_system_status
 from display_manager import DisplayManager
-from logger import log_event
+from logger import log_event, configure_logging, get_logger
 import ui
 from NetComHandler import handshake, close_comm_channel
+from JsonConfig import InitJson
 
 # Setup Logging
-logging.basicConfig(level=logging.INFO)
-LOGGER = logging.getLogger("omimidi.client")
+configure_logging()
+LOGGER = get_logger("omimidi.client")
 
 # Managers
 service_manager = ServiceManager()
@@ -93,7 +95,18 @@ async def stop_service(svc_id: str):
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
-    return templates.TemplateResponse("settings.html", {"request": request})
+    structure_path = BASE_DIR / "data" / "structure.json"
+    network = {}
+    if structure_path.exists():
+        import json
+        with structure_path.open("r", encoding="utf-8") as f:
+            structure = json.load(f)
+            network = structure.get("network", {}).get("desired", {})
+            
+    return templates.TemplateResponse("settings.html", {
+        "request": request,
+        "network": network
+    })
 
 @app.post("/api/system/{action}")
 async def system_control(action: str):
@@ -108,9 +121,43 @@ async def system_control(action: str):
 
 @app.post("/api/network/config")
 async def network_config(config: dict):
-    # TODO: Implement actual network configuration logic
-    LOGGER.info(f"Received network config: {config}")
-    return {"status": "received", "config": config}
+    """Guarda la configuración de red y activa el gestor de red."""
+    try:
+        structure_path = BASE_DIR / "data" / "structure.json"
+        if not structure_path.exists():
+            raise HTTPException(status_code=404, detail="structure.json not found")
+
+        import json
+        with structure_path.open("r", encoding="utf-8") as f:
+            structure = json.load(f)
+        
+        # Actualizar sección network["desired"]
+        network = structure.setdefault("network", {})
+        desired = network.setdefault("desired", {})
+        
+        desired["mode"] = config.get("mode", "dhcp")
+        desired["ip"] = config.get("ip")
+        desired["mask"] = config.get("mask")
+        desired["gateway"] = config.get("gateway")
+        desired["vlan"] = config.get("vlan")
+        desired["vlan_from_service"] = config.get("vlan_from_service", False)
+
+        with structure_path.open("w", encoding="utf-8") as f:
+            json.dump(structure, f, indent=2, ensure_ascii=False)
+        
+        LOGGER.info(f"Network config updated: {config}")
+
+        # Disparar net_manager.py (in-process)
+        try:
+            from net_manager import update_nics
+            update_nics()
+        except Exception as e:
+            LOGGER.error(f"Failed to trigger net_manager: {e}")
+
+        return {"status": "applied", "config": config}
+    except Exception as e:
+        LOGGER.error(f"Error updating network config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --- MAIN ENTRY POINT ---
 def restore_active_service():
@@ -135,6 +182,13 @@ def restore_active_service():
 def main():
     LOGGER.info("Starting OMI Client Boot Sequence...")
     
+    # 0. Initialize Structure JSON
+    InitJson()
+    
+    # 0.1 Start Heartbeat (Explicitly)
+    from heartbeat import start_heartbeat
+    start_heartbeat()
+    
     # 1. Init UI
     ui.LoadingUI(10, "BOOTING...")
     
@@ -150,34 +204,83 @@ def main():
         ui.LoadingUI(100, "STANDALONE")
         LOGGER.info("Mode: STANDALONE (No server)")
     
+    # 2.5 Update Network Configuration (Smart Logic)
+    # Ensures VLANs are applied before services start
+    try:
+        from net_manager import update_nics
+        update_nics()
+    except Exception as e:
+        LOGGER.error(f"Failed to apply network config during boot: {e}")
+
     # 3. Restore Service (Applies to both modes)
     restore_active_service()
     
     # 4. Start UI & Main Loop
     ui.StartStandardUI(json_path=BASE_DIR / "data" / "structure.json")
     
+    # Signal Handling
+    stop_event = threading.Event()
+    
+    def handle_signal(signum, frame):
+        LOGGER.info(f"Received signal {signum}, initiating shutdown...")
+        stop_event.set()
+        # If uvicorn is running, it might catch this too, but we set the event just in case
+        
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
     try:
         if connected:
             # Connected Mode: No Web Server, just wait and listen
             LOGGER.info("Running in Connected Mode (Web Server DISABLED)")
-            while True:
+            while not stop_event.is_set():
                 time.sleep(1)
         else:
             # Standalone Mode: Start Web Server
             LOGGER.info("Running in Standalone Mode (Web Server ENABLED)")
-            uvicorn.run(app, host="0.0.0.0", port=8000)
+            
+            try:
+                hostname = socket.gethostname()
+                LOGGER.info(f"🌐 Web Interface available at http://{hostname}:8000")
+            except Exception:
+                pass
+
+            # Run uvicorn in a way that allows us to handle signals or check stop_event?
+            # uvicorn.run blocks. It handles signals itself.
+            # We rely on uvicorn returning on SIGINT.
+            try:
+                uvicorn.run(app, host="0.0.0.0", port=8000)
+            except SystemExit:
+                LOGGER.info("Uvicorn exited")
             
     except KeyboardInterrupt:
-        LOGGER.info("Interrupted by user")
+        LOGGER.info("Interrupted by user (KeyboardInterrupt)")
+    except Exception as e:
+        LOGGER.error(f"Unexpected error in main loop: {e}", exc_info=True)
     finally:
         LOGGER.info("Shutting down...")
-        # Stop services and persist state
-        for svc_id in list(service_manager.processes.keys()):
-            service_manager.stop_service(svc_id, persist_state=True)
+        
+        # Force stop all services
+        LOGGER.info("Stopping all services...")
+        try:
+            service_manager.stop_all(persist_state=True)
+        except Exception as e:
+            LOGGER.error(f"Error stopping services: {e}")
             
-        display_manager.cleanup()
-        close_comm_channel()
+        try:
+            display_manager.cleanup()
+        except Exception as e:
+            LOGGER.error(f"Error cleaning up display: {e}")
+            
+        try:
+            close_comm_channel()
+        except Exception as e:
+            LOGGER.error(f"Error closing comm channel: {e}")
+            
+        LOGGER.info("Shutdown complete.")
 
 if __name__ == "__main__":
-    import time # Ensure time is imported
+    import time
+    import threading
+    import signal
     main()

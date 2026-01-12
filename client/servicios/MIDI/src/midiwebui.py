@@ -44,7 +44,7 @@ if STATIC_DIR.exists():
 # Templates
 templates = Jinja2Templates(directory=str(BASE_DIR / "web" / "templates"))
 
-STRUCTURE_PATH = Path(__file__).resolve().parents[3] / "agent_pi" / "data" / "structure.json"
+STRUCTURE_PATH = Path(__file__).resolve().parents[3] / "data" / "structure.json"
 
 # load_json y save_json ahora se importan de omimidi_utils
 
@@ -68,6 +68,8 @@ def get_map() -> Dict[str, Any]:
         "routes": []
     })
 
+import threading
+
 def persist_map(data: Dict[str, Any]) -> None:
     # Asegurar estructura
     if "file_info" not in data: data["file_info"] = {}
@@ -82,8 +84,26 @@ def persist_map(data: Dict[str, Any]) -> None:
     data["osc"]["port"] = int(data["osc"].get("port", 1024))
     data["osc"]["ips"] = list(data["osc"].get("ips", ["127.0.0.1"]))
     
+    # 1. Guardado local (bloqueante para asegurar consistencia)
     save_json(MAP_FILE, data)
-    push_map_to_server(data, source="midiwebui")
+
+    # 2. Tareas lentas (red, subprocess) en hilo secundario
+    def _background_sync():
+        try:
+            push_map_to_server(data, source="midiwebui")
+            
+            # Notificar al cliente (OMI Agent) que la configuración ha cambiado
+            import subprocess
+            # El script de sincronización está en client/src/structure_sync.py
+            sync_script = Path(__file__).resolve().parents[3] / "src" / "structure_sync.py"
+            if sync_script.exists():
+                subprocess.run(["python3", str(sync_script), "MIDI"], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            LOGGER.warning("Error en sincronización en segundo plano: %s", e)
+
+    threading.Thread(target=_background_sync, daemon=True).start()
+
     LOGGER.info(
         "Mapa MIDI guardado (config=%s, midi_input=%s, VLAN=%s, VLAN_ACTIVE=%s, osc_port=%s, ui_port=%s, osc_ips=%s)",
         data["file_info"]["name"],
@@ -161,7 +181,10 @@ def get_template_context(active: str = "home", extra_data: dict = None) -> dict:
 
 def render_routes_rows(data: Dict[str, Any]) -> str:
     rows = []
-    for i, r in enumerate(data.get("routes", [])):
+    routes = data.get("routes", [])
+    total = len(routes)
+    
+    for i, r in enumerate(routes):
         midi_desc = "?"
         if r.get("type") == "note":
             midi_desc = f"NOTE {r.get('note')}"
@@ -176,9 +199,32 @@ def render_routes_rows(data: Dict[str, Any]) -> str:
         osc_esc = html.escape(osc, quote=True)
         midi_esc = html.escape(str(midi_desc))
         vtype_esc = html.escape(f"{vtype}{extra}")
+        
+        # Move Buttons Logic
+        move_buttons = ""
+        if total > 1:
+            up_disabled = "disabled" if i == 0 else ""
+            down_disabled = "disabled" if i == total - 1 else ""
+            
+            move_buttons = (
+                "<div style='display:flex; flex-direction:column; gap:2px; margin-right:5px;'>"
+                f"<form method='post' action='/move_route' style='margin:0;'>"
+                f"<input type='hidden' name='idx' value='{i}'/>"
+                f"<input type='hidden' name='direction' value='up'/>"
+                f"<button class='btn-icon small' {up_disabled} title='Subir'>▲</button>"
+                "</form>"
+                f"<form method='post' action='/move_route' style='margin:0;'>"
+                f"<input type='hidden' name='idx' value='{i}'/>"
+                f"<input type='hidden' name='direction' value='down'/>"
+                f"<button class='btn-icon small' {down_disabled} title='Bajar'>▼</button>"
+                "</form>"
+                "</div>"
+            )
+
         rows.append(
             (
                 "<tr>"
+                f"<td style='width:1px; white-space:nowrap;'>{move_buttons}</td>"
                 f"<td>{i}</td>"
                 f"<td>{midi_esc}</td>"
                 f"<td>{osc_esc}</td>"
@@ -186,7 +232,7 @@ def render_routes_rows(data: Dict[str, Any]) -> str:
                 f"<td><span data-route='{i}' data-osc='{osc_esc}'>–</span></td>"
                 "<td class='actions-cell'>"
                 f"<a href='/edit/{i}' class='btn ghost' title='Editar'><span class='icon'>✏️</span></a>"
-                "<form method='post' action='/delete_route' style='display:inline;'>"
+                f"<form method='post' action='/delete_route' style='display:inline; margin:0;' onsubmit=\"return confirm('¿Estás seguro de que quieres eliminar esta ruta?');\">"
                 f"<input type='hidden' name='idx' value='{i}'/>"
                 "<button class='btn ghost danger-text' title='Eliminar'><span class='icon'>🗑️</span></button>"
                 "</form>"
@@ -195,7 +241,7 @@ def render_routes_rows(data: Dict[str, Any]) -> str:
             )
         )
     if not rows:
-        return "<tr><td colspan='6' class='muted' style='text-align:center;'>No hay rutas configuradas.</td></tr>"
+        return "<tr><td colspan='7' class='muted' style='text-align:center;'>No hay rutas configuradas.</td></tr>"
     return "".join(rows)
 
 @app.get("/", response_class=HTMLResponse)
@@ -969,3 +1015,19 @@ async def restart_get():
 def restart(request: Request):
     request_restart_flag()
     return restart_page(request)
+
+@app.post("/move_route")
+def move_route(idx: int = Form(...), direction: str = Form(...)):
+    data = get_map()
+    routes = data.get("routes", [])
+    idx = int(idx)
+    
+    if 0 <= idx < len(routes):
+        if direction == "up" and idx > 0:
+            routes[idx], routes[idx-1] = routes[idx-1], routes[idx]
+            persist_map(data)
+        elif direction == "down" and idx < len(routes) - 1:
+            routes[idx], routes[idx+1] = routes[idx+1], routes[idx]
+            persist_map(data)
+            
+    return RedirectResponse("/", status_code=303)

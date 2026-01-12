@@ -2,7 +2,7 @@ from typing import Dict, Any
 from heartbeat import get_heartbeat_snapshot, start_heartbeat
 
 # Ensure heartbeat is running
-start_heartbeat()
+# start_heartbeat() # Removed to avoid side effects on import
 
 def get_system_status() -> Dict[str, Any]:
     snapshot = get_heartbeat_snapshot()

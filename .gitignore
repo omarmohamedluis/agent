@@ -23,5 +23,5 @@ Thumbs.db
 # generados
 structure.json
 server.json
-
-# servicio midi
+servicios/servicios.json
+servicios/MIDI/OMIMIDI_map.json

@@ -9,9 +9,12 @@ from typing import Any, Callable, Dict, List, Optional
 import netifaces
 import psutil
 
-from logger import log_event, log_print
+from logger import get_logger
+
+LOGGER = get_logger("omimidi.heartbeat")
 
 STRUCTURE_PATH = Path(__file__).resolve().parents[1] / "data" / "structure.json"
+STRUCTURE_LOCK_PATH = Path(__file__).resolve().parents[1] / "data" / "structure.json.lock"
 
 # ---------------- Vars de estado expuestas ----------------
 CpuUsage: Optional[float] = None  # %
@@ -33,12 +36,17 @@ _heartbeat_thread: Optional[threading.Thread] = None
 
 
 # ---------------- Utils JSON ----------------
-def _read_json(path: Path) -> Dict[str, Any]:
+def _read_json(path: Path) -> Optional[Dict[str, Any]]:
     try:
+        if not path.exists():
+            return None
         with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
+            content = f.read().strip()
+            if not content:
+                return None
+            return json.loads(content)
     except Exception:
-        return {}
+        return None
 
 
 def _write_json(path: Path, data: Dict[str, Any]) -> None:
@@ -56,13 +64,13 @@ def _normalize_json_interfaces(val) -> List[Dict[str, Optional[str]]]:
         if isinstance(item, dict):
             out.append(
                 {
-                    "iface": item.get("iface"),
+                    "name": item.get("name") or item.get("iface"),
                     "ip": item.get("ip"),
                     "netmask": item.get("netmask"),
                 }
             )
         elif isinstance(item, str):
-            out.append({"iface": None, "ip": item, "netmask": None})
+            out.append({"name": None, "ip": item, "netmask": None})
     return out
 
 
@@ -79,7 +87,7 @@ def _mask_to_prefix(netmask: Optional[str]) -> Optional[int]:
 def _get_ip_info() -> List[Dict[str, Optional[str]]]:
     """
     Devuelve lista de dicts por interfaz IPv4 (sin loopback):
-    [{"iface":"eth0","ip":"192.168.1.23","netmask":"255.255.255.0"}, ...]
+    [{"name":"eth0","ip":"192.168.1.23","netmask":"255.255.255.0"}, ...]
     """
     out: List[Dict[str, Optional[str]]] = []
     for iface in netifaces.interfaces():
@@ -90,8 +98,8 @@ def _get_ip_info() -> List[Dict[str, Optional[str]]]:
             ip = addr.get("addr")
             netmask = addr.get("netmask")
             if ip and not str(ip).startswith("127."):
-                out.append({"iface": iface, "ip": ip, "netmask": netmask})
-    out.sort(key=lambda d: (d.get("iface") or "", d.get("ip") or ""))
+                out.append({"name": iface, "ip": ip, "netmask": netmask})
+    out.sort(key=lambda d: (d.get("name") or "", d.get("ip") or ""))
     return out
 
 
@@ -103,11 +111,11 @@ def _enrich_ip_info(ip_info: List[Dict[str, Optional[str]]]) -> List[Dict[str, A
         prefix = _mask_to_prefix(netmask)
         enriched.append(
             {
-                "iface": entry.get("iface"),
+                "name": entry.get("name"),
                 "ip": ip,
                 "netmask": netmask,
-                "prefix": prefix,
                 "cidr": f"{ip}/{prefix}" if (ip and prefix is not None) else (ip or None),
+                "vlan": None, # Heartbeat doesn't detect VLANs yet, but keeps the key
             }
         )
     return enriched
@@ -183,26 +191,29 @@ def _notify_listeners(snapshot: Dict[str, Any]) -> None:
 
 # ---------------- Cálculo principal ----------------
 def _compute_snapshot(path: Path) -> Dict[str, Any]:
-    data: Dict[str, Any] = _read_json(path)
+    from file_lock import file_lock
+    with file_lock(STRUCTURE_LOCK_PATH):
+        data: Optional[Dict[str, Any]] = _read_json(path)
 
-    cpu = _get_cpu_usage()
-    temp = _get_temp_c()
-    if cpu is not None and cpu > 50.0:
-        log_event("warning", __name__, f"CPU elevada: {cpu:.1f}%")
-    if temp is not None and temp > 60.0:
-        log_event("warning", __name__, f"Temperatura elevada: {temp:.1f}°C")
-    ip_info = _get_ip_info()
+        cpu = _get_cpu_usage()
+        temp = _get_temp_c()
+        if cpu is not None and cpu > 50.0:
+            LOGGER.warning(f"CPU elevada: {cpu:.1f}%")
+        if temp is not None and temp > 60.0:
+            LOGGER.warning(f"Temperatura elevada: {temp:.1f}°C")
+        ip_info = _get_ip_info()
 
-    prev_ifaces = _normalize_json_interfaces(data.get("network", {}).get("interfaces")) if data else []
-    prev_ips = [entry.get("ip") for entry in prev_ifaces if entry.get("ip")]
-    now_ips = [entry.get("ip") for entry in ip_info if entry.get("ip")]
+        if data is not None:
+            prev_ifaces = _normalize_json_interfaces(data.get("network", {}).get("interfaces"))
+            prev_ips = [entry.get("ip") for entry in prev_ifaces if entry.get("ip")]
+            now_ips = [entry.get("ip") for entry in ip_info if entry.get("ip")]
 
-    if sorted(prev_ips) != sorted(now_ips):
-        data.setdefault("network", {})["interfaces"] = _enrich_ip_info(ip_info)
-        try:
-            _write_json(path, data)
-        except Exception:
-            pass
+            if sorted(prev_ips) != sorted(now_ips):
+                data.setdefault("network", {})["interfaces"] = _enrich_ip_info(ip_info)
+                try:
+                    _write_json(path, data)
+                except Exception:
+                    pass
 
     return {
         "cpu": cpu,
@@ -222,7 +233,7 @@ def _heartbeat_loop() -> None:
                 snapshot = _compute_snapshot(_structure_path)
                 _set_metrics(snapshot)
             except Exception as exc:
-                log_event("error", __name__, f"Error capturando métricas del heartbeat: {exc}")
+                LOGGER.error(f"Error capturando métricas del heartbeat: {exc}")
         else:
             if last_active_state is not False:
                 _set_metrics(_empty_snapshot())
@@ -242,7 +253,7 @@ def start_heartbeat(
     start_active: bool = True,
 ) -> None:
     """Arranca (o reinicia) el hilo si no está vivo y actualiza la configuración."""
-    log_print("info", __name__, f"Iniciando heartbeat: path={path}, intervalo={float(interval):.2f}s, activo={start_active}")
+    LOGGER.info(f"Iniciando heartbeat: path={path}, intervalo={float(interval):.2f}s, activo={start_active}")
     global _heartbeat_thread, _poll_interval, _structure_path, _stop_event, _active_event
 
     _structure_path = path
@@ -273,29 +284,32 @@ def start_heartbeat(
 
 def pause_heartbeat() -> None:
     """Mantiene vivo el hilo pero detiene las lecturas."""
-    log_event("info", __name__, "Heartbeat en pausa")
+    LOGGER.info("Heartbeat en pausa")
     _active_event.clear()
 
 
 def resume_heartbeat() -> None:
     """Vuelve a activar el muestreo en el hilo existente."""
-    log_event("info", __name__, "Heartbeat reanudado")
-    _active_event.set()
+    if not _active_event.is_set():
+        LOGGER.info("Heartbeat reanudado")
+        _active_event.set()
 
 
 def stop_heartbeat() -> None:
     """Detiene el hilo por completo y limpia las métricas."""
-    log_print("info", __name__, "Heartbeat detenido")
+    LOGGER.info("Heartbeat detenido")
     global _heartbeat_thread
 
     # Clear network interfaces in structure.json
     try:
-        data = _read_json(_structure_path)
-        if "network" in data:
-            data["network"]["interfaces"] = []
-            _write_json(_structure_path, data)
+        from file_lock import file_lock
+        with file_lock(STRUCTURE_LOCK_PATH):
+            data = _read_json(_structure_path)
+            if data and "network" in data:
+                data["network"]["interfaces"] = []
+                _write_json(_structure_path, data)
     except Exception as e:
-        log_event("error", __name__, f"Failed to clear network info on stop: {e}")
+        LOGGER.error(f"Failed to clear network info on stop: {e}")
 
     if not _heartbeat_thread:
         _set_metrics(_empty_snapshot())

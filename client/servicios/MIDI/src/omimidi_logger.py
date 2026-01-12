@@ -34,7 +34,9 @@ def _setup_logging(logger: logging.Logger, level: int):
     logger.propagate = False
     
     log_path = os.environ.get("OMI_LOG_PATH")
-    formatter = logging.Formatter('%(asctime)s [%(levelname)s] [%(name)s] %(message)s')
+    # Format matches client/src/logger.py: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    # Date format truncates milliseconds
+    formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     
     handlers = []
     

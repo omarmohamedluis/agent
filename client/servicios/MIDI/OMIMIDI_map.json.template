@@ -1,8 +1,8 @@
 {
   "file_info": {
-    "name": "omar test 3",
-    "ui_port": 9003,
-    "updated_at": "2026-01-12T16:02:49.733277+00:00"
+    "name": "omar test 2",
+    "ui_port": 9001,
+    "updated_at": "2026-01-10T12:20:45.912433+00:00"
   },
   "source": {
     "midi_input": "APC40 mkII:APC40 mkII MIDI 1 24:0"
@@ -66,6 +66,13 @@
       "osc": "/composition/layers/7/video/opacity",
       "vtype": "float",
       "channel": 6
+    },
+    {
+      "type": "cc",
+      "cc": 48,
+      "osc": "/hola/",
+      "vtype": "float",
+      "channel": 0
     }
   ]
 }

@@ -161,10 +161,62 @@ def _fill_json(datos: dict[str, Any], data_path: Path, project_root: Path) -> di
     if isinstance(identity.get("name"), str) and identity["name"].strip() == "":
         identity["name"] = identity["host"]
 
+    # Network Section
     network_section = datos.setdefault("network", {})
     network_section["interfaces"] = _get_network_interfaces()
+    
+    # Ensure "desired" exists with flat structure and defaults
+    if "desired" not in network_section or "eth0" in network_section["desired"]:
+        # If it has the old nested eth0 structure, flatten it
+        old_desired = network_section.get("desired", {})
+        eth0_data = old_desired.get("eth0", {})
+        
+        network_section["desired"] = {
+            "mode": eth0_data.get("mode") or old_desired.get("mode") or "dhcp",
+            "ip": eth0_data.get("ip") or old_desired.get("ip") or "",
+            "mask": eth0_data.get("netmask") or old_desired.get("mask") or "",
+            "gateway": eth0_data.get("gateway") or old_desired.get("gateway") or "",
+            "vlan": old_desired.get("vlan"),
+            "vlan_from_service": old_desired.get("vlan_from_service", False)
+        }
 
-    guardar_json(data_path, datos)
+    # Services Section
+    # Always try to sync/populate services from servicios.json to keep it up to date
+    servicios_path = project_root / "client" / "servicios" / "servicios.json"
+    if servicios_path.exists():
+        try:
+            with servicios_path.open("r", encoding="utf-8") as f:
+                servicios_data = json.load(f)
+                current_services = {s["name"]: s for s in datos.get("services", [])}
+                new_services_list = []
+                
+                for s in servicios_data.get("services", []):
+                    svc_id = s.get("id")
+                    if svc_id in current_services:
+                        # Keep existing state but update metadata if needed
+                        svc = current_services[svc_id]
+                        svc["display_name"] = s.get("display_name")
+                        svc["web_port"] = s.get("web_port")
+                        new_services_list.append(svc)
+                    else:
+                        # Add new service
+                        new_services_list.append({
+                            "name": svc_id,
+                            "display_name": s.get("display_name"),
+                            "enabled": False,
+                            "configuration": "default",
+                            "web_port": s.get("web_port"),
+                            "vlan": None,
+                            "vlan_active": False
+                        })
+                datos["services"] = new_services_list
+        except Exception as e:
+            log_event("error", module_name, f"Error sincronizando servicios.json: {e}")
+
+    from file_lock import file_lock
+    STRUCTURE_LOCK_PATH = data_path.with_suffix(".json.lock")
+    with file_lock(STRUCTURE_LOCK_PATH):
+        guardar_json(data_path, datos)
     log_print("info", module_name, "structure.json actualizado")
 
     return datos
@@ -194,7 +246,11 @@ def InitJson() -> dict[str, Any]:
             "structure.json no encontrado, creando copia desde docs/InfoClient.json",
         )
         data_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(template_path, data_path)
+        from file_lock import file_lock
+        STRUCTURE_LOCK_PATH = data_path.with_suffix(".json.lock")
+        with file_lock(STRUCTURE_LOCK_PATH):
+            if not data_path.exists():
+                shutil.copyfile(template_path, data_path)
 
     datos = cargar_json(data_path)
     datos = _fill_json(datos, data_path, project_root)
@@ -218,7 +274,10 @@ def UpdateNet():
     interfaces = _get_network_interfaces()
     network_section["interfaces"] = interfaces
 
-    guardar_json(data_path, datos)
+    from file_lock import file_lock
+    STRUCTURE_LOCK_PATH = data_path.with_suffix(".json.lock")
+    with file_lock(STRUCTURE_LOCK_PATH):
+        guardar_json(data_path, datos)
     log_print("info", module_name, "Interfaces de red actualizadas en structure.json")
 
     return interfaces

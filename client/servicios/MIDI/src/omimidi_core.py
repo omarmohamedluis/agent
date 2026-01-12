@@ -332,46 +332,73 @@ def build_osc_clients_from_map(map_obj: MidiMap) -> List[BroadcastUDPClient]:
     return clients
 
 # ---- Notificación WebUI (push de valores) ----
+# Cola para eventos de WebUI (evita crear hilos por cada mensaje)
+_WEBUI_QUEUE = queue.Queue(maxsize=100)  # Backpressure: si la UI es lenta, descartamos eventos viejos
+_WEBUI_WORKER_THREAD = None
+_WEBUI_STOP_EVENT = threading.Event()
+
+def _webui_worker_loop(ui_port: int):
+    """Worker que consume eventos de la cola y los envía a la WebUI."""
+    while not _WEBUI_STOP_EVENT.is_set():
+        try:
+            # Esperamos items (bloqueante con timeout para checkear stop_event)
+            item = _WEBUI_QUEUE.get(timeout=0.5)
+        except queue.Empty:
+            continue
+
+        try:
+            # item es (tipo, payload)
+            # tipo: 'batch' o 'event'
+            msg_type, payload_data = item
+            
+            endpoint = "/push_batch" if msg_type == 'batch' else "/push_last_event"
+            payload_dict = {"batch": payload_data} if msg_type == 'batch' else {"event": payload_data}
+            
+            payload_bytes = json.dumps(payload_dict).encode("utf-8")
+            req = urllib.request.Request(
+                url=f"http://127.0.0.1:{ui_port}{endpoint}",
+                data=payload_bytes,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            urllib.request.urlopen(req, timeout=0.2).read()
+        except Exception as exc:
+            # No logueamos cada error para no saturar, solo debug
+            pass
+        finally:
+            _WEBUI_QUEUE.task_done()
+
+def _ensure_webui_worker(ui_port: int):
+    global _WEBUI_WORKER_THREAD
+    if _WEBUI_WORKER_THREAD is None or not _WEBUI_WORKER_THREAD.is_alive():
+        _WEBUI_STOP_EVENT.clear()
+        _WEBUI_WORKER_THREAD = threading.Thread(target=_webui_worker_loop, args=(ui_port,), daemon=True)
+        _WEBUI_WORKER_THREAD.start()
+
 def _notify_webui_batch_async(batch: List[Dict[str, Any]], ui_port: int):
-    """POST no bloqueante a la WebUI para empujar un lote de estados."""
+    """Encola un lote de estados para la WebUI."""
     if not batch:
         return
-        
-    def _post():
-        try:
-            payload = json.dumps({"batch": batch}).encode("utf-8")
-            req = urllib.request.Request(
-                url=f"http://127.0.0.1:{ui_port}/push_batch",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
-            urllib.request.urlopen(req, timeout=0.5).read()
-        except Exception as exc:
-            LOGGER.debug("No se pudo notificar lote a la WebUI: %s", exc)
-    threading.Thread(target=_post, daemon=True).start()
+    _ensure_webui_worker(ui_port)
+    try:
+        _WEBUI_QUEUE.put_nowait(('batch', batch))
+    except queue.Full:
+        pass # Drop si la cola está llena
 
 def _notify_last_event_async(msg: mido.Message, ui_port: int):
-    """Notifica el último evento MIDI a la WebUI para visualización en vivo."""
-    def _post():
-        try:
-            d: Dict[str, Any] = {"type": msg.type, "ts": datetime.now(timezone.utc).isoformat()}
-            if msg.type in ("note_on", "note_off"):
-                d.update({"note": msg.note, "velocity": msg.velocity, "channel": getattr(msg, "channel", 0)})
-            elif msg.type == "control_change":
-                d.update({"cc": msg.control, "value": msg.value, "channel": msg.channel})
-            
-            payload = json.dumps({"event": d}).encode("utf-8")
-            req = urllib.request.Request(
-                url=f"http://127.0.0.1:{ui_port}/push_last_event",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
-            urllib.request.urlopen(req, timeout=0.1).read()
-        except Exception:
-            pass
-    threading.Thread(target=_post, daemon=True).start()
+    """Encola el último evento MIDI para la WebUI."""
+    _ensure_webui_worker(ui_port)
+    
+    d: Dict[str, Any] = {"type": msg.type, "ts": datetime.now(timezone.utc).isoformat()}
+    if msg.type in ("note_on", "note_off"):
+        d.update({"note": msg.note, "velocity": msg.velocity, "channel": getattr(msg, "channel", 0)})
+    elif msg.type == "control_change":
+        d.update({"cc": msg.control, "value": msg.value, "channel": msg.channel})
+    
+    try:
+        _WEBUI_QUEUE.put_nowait(('event', d))
+    except queue.Full:
+        pass # Drop si la cola está llena
 
 def is_reachable(ip: str, timeout: float = 0.5) -> bool:
     """Comprueba si una IP es alcanzable usando el comando ping del sistema."""
@@ -391,6 +418,17 @@ def is_reachable(ip: str, timeout: float = 0.5) -> bool:
 # ---- Core ----
 class OmiMidiCore:
     def __init__(self) -> None:
+        # Auto-restore map from template if missing
+        if not os.path.exists(MAP_FILE):
+            template_file = MAP_FILE + ".template"
+            if os.path.exists(template_file):
+                LOGGER.info("Restaurando %s desde plantilla...", os.path.basename(MAP_FILE))
+                import shutil
+                try:
+                    shutil.copy(template_file, MAP_FILE)
+                except Exception as e:
+                    LOGGER.error("Error restaurando plantilla: %s", e)
+
         self.map = MidiMap.from_file(MAP_FILE)
         self._map_mtime = os.path.getmtime(MAP_FILE) if os.path.exists(MAP_FILE) else 0.0
         self.clients = build_osc_clients_from_map(self.map)
@@ -687,7 +725,15 @@ def start_webui(host: str = "0.0.0.0", port: int = 9001):
         uvicorn.run(app, host=host, port=port, log_level="warning")
     p = multiprocessing.Process(target=run_server, daemon=False)
     p.start()
-    LOGGER.info("🌐 WebUI en http://%s:%s", host, port)
+    
+    display_host = host
+    if host == "0.0.0.0" or host == "127.0.0.1":
+        try:
+            display_host = socket.gethostname()
+        except Exception:
+            pass
+            
+    LOGGER.info("🌐 WebUI en http://%s:%s", display_host, port)
     return p
 
 def main() -> None:
