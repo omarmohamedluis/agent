@@ -11,8 +11,7 @@
         </div>
 
         <!-- Fila 2: MIDI Config -->
-        <div class="full"
-          style="display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 16px; align-items: flex-end;">
+        <div class="full manual-grid">
           <div>
             <label>Tipo de mensaje</label>
             <select name="rtype" id="rtypeInput">
@@ -28,39 +27,35 @@
             <label>Canal (opcional)</label>
             <input type="number" name="channel" id="channelInput" min="0" max="15" placeholder="Cualquiera">
           </div>
-          <button type="button" class="btn ghost" id="btnLearnToggle"
-            style="margin-bottom: 4px; padding: 8px 16px; height: 38px;" title="Capturar desde MIDI">
+          <button type="button" class="btn ghost learn-toggle-btn" id="btnLearnToggle" title="Capturar desde MIDI">
             <span class="icon">✨</span> Learn
           </button>
         </div>
 
         <!-- Área de Aprendizaje (aparece debajo de la fila MIDI) -->
-        <div class="full" id="learnPreviewArea"
-          style="display: none; background: rgba(var(--accent-rgb), 0.05); border: 1px dashed var(--accent); border-radius: 8px; padding: 16px; margin-top: 4px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <span style="font-size: 12px; font-weight: 600; color: var(--accent); letter-spacing: 0.05em;">MODO
-              APRENDIZAJE ACTIVO</span>
-            <button type="button" id="btnLearnClose" class="btn ghost"
-              style="padding: 4px; min-width: auto;">&times;</button>
+        <div class="full learn-preview-area" id="learnPreviewArea">
+          <div class="learn-header">
+            <span class="learn-title">MODO APRENDIZAJE ACTIVO</span>
+            <button type="button" id="btnLearnClose" class="btn ghost learn-close-btn">&times;</button>
           </div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+          <div class="learn-grid">
             <div>
-              <div class="muted" style="font-size: 11px; margin-bottom: 2px;">TIPO DETECTADO</div>
-              <span id="summaryKind" style="font-weight: 600; color: var(--text);">Esperando…</span>
+              <div class="learn-label">TIPO DETECTADO</div>
+              <span id="summaryKind" class="learn-value">Esperando…</span>
             </div>
             <div>
-              <div class="muted" style="font-size: 11px; margin-bottom: 2px;">ÚLTIMO EVENTO</div>
-              <span id="summaryCandidate" style="font-weight: 600; color: var(--accent);">Mueve un control MIDI</span>
+              <div class="learn-label">ÚLTIMO EVENTO</div>
+              <span id="summaryCandidate" class="learn-value accent">Mueve un control MIDI</span>
             </div>
           </div>
-          <div style="margin-top: 16px; text-align: right;">
-            <button type="button" class="btn primary" id="btnApplyLearn" disabled
-              style="font-size: 12px; padding: 6px 12px;">Aplicar valores</button>
+          <div class="learn-actions">
+            <button type="button" class="btn primary learn-apply-btn" id="btnApplyLearn" disabled>Aplicar
+              valores</button>
           </div>
         </div>
 
         <!-- Fila 3: OSC Value Config -->
-        <div style="grid-column: 1 / span 2;">
+        <div class="span-2">
           <label>Tipo de valor OSC</label>
           <select name="vtype" id="vtypeInput">
             <option value="float">Float (0.0 - 1.0)</option>
@@ -69,13 +64,13 @@
             <option value="const">Constante</option>
           </select>
         </div>
-        <div id="constRow" style="display:none; grid-column: 1 / span 2;">
+        <div id="constRow" class="span-2 hidden">
           <label>Valor constante</label>
           <input type="text" name="const" id="constInput" placeholder="1.0">
         </div>
       </div>
 
-      <div class="actions" style="margin-top: 32px; border-top: 1px solid var(--line); padding-top: 24px;">
+      <div class="actions form-actions">
         <button class="btn primary" type="submit">Guardar Mapeo</button>
         <a class="btn" href="/">Cancelar</a>
       </div>

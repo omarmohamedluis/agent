@@ -72,3 +72,11 @@ def _setup_logging(logger: logging.Logger, level: int):
         
     for h in handlers:
         logger.addHandler(h)
+
+    # Startup Separator (Run once)
+    if not getattr(_setup_logging, "has_run", False):
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        separator = f"\n{'='*30} INICIADO EN \"{timestamp}\" {'='*30}\n"
+        logger.info(separator)
+        _setup_logging.has_run = True

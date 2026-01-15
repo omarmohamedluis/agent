@@ -2,7 +2,7 @@ from PIL import Image
 from .base import DisplayDriver
 import logging
 
-LOGGER = logging.getLogger("omimidi.displays.dummy")
+LOGGER = logging.getLogger("omiclient.displays.dummy")
 
 class DummyDriver(DisplayDriver):
     def __init__(self, width=128, height=64):

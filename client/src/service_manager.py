@@ -1,3 +1,8 @@
+"""
+Gestor de Servicios (ServiceManager).
+Controla el ciclo de vida de los servicios (inicio, parada, estado),
+gestionando procesos en segundo plano y sincronizando su configuración.
+"""
 import json
 import subprocess
 import logging
@@ -7,13 +12,12 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from logger import get_logger
+from structure_manager import get_structure_manager
 
-LOGGER = get_logger("omimidi.service_manager")
+LOGGER = get_logger("omiclient.service_manager")
+STRUCTURE_MANAGER = get_structure_manager()
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-SERVICES_JSON_PATH = BASE_DIR / "servicios" / "servicios.json"
-STRUCTURE_PATH = BASE_DIR / "data" / "structure.json"
-STRUCTURE_LOCK_PATH = BASE_DIR / "data" / "structure.json.lock"
 
 class ServiceManager:
     def __init__(self):
@@ -22,80 +26,44 @@ class ServiceManager:
         self._load_config()
 
     def _load_config(self):
-        # Auto-restore from template if missing (Self-Healing)
-        if not SERVICES_JSON_PATH.exists():
-            template_path = SERVICES_JSON_PATH.with_suffix(".json.template")
+        # Sincronizar desde servicios.json vía manager para asegurar que structure.json esté actualizado
+        STRUCTURE_MANAGER.sync_from_servicios_json()
+        
+        # Cargar mapa de configuración interno desde estructura (¿o seguir usando servicios.json para config cruda?)
+        # El código original cargaba servicios.json directamente. Mantengamos eso por ahora ya que contiene detalles de ejecución (cmd, cwd)
+        # que podrían no estar completamente en la lista de servicios de structure.json (structure.json tiene metadatos).
+        
+        services_json_path = BASE_DIR / "servicios" / "servicios.json"
+        
+        # Auto-restaurar desde plantilla si falta (Auto-Reparación)
+        if not services_json_path.exists():
+            template_path = services_json_path.with_suffix(".json.template")
             if template_path.exists():
-                LOGGER.info(f"Restoring {SERVICES_JSON_PATH.name} from template...")
+                LOGGER.info(f"Restaurando {services_json_path.name} desde plantilla...")
                 import shutil
                 try:
-                    shutil.copy(template_path, SERVICES_JSON_PATH)
+                    shutil.copy(template_path, services_json_path)
                 except Exception as e:
-                    LOGGER.error(f"Failed to restore template: {e}")
+                    LOGGER.error(f"Fallo al restaurar plantilla: {e}")
 
         try:
-            with SERVICES_JSON_PATH.open("r", encoding="utf-8") as f:
+            with services_json_path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
-                # Convert list to dict keyed by id for easier access
                 self.services_config = {s["id"]: s for s in data.get("services", [])}
         except Exception as e:
-            LOGGER.error(f"Failed to load services config: {e}")
+            LOGGER.error(f"Fallo al cargar configuración de servicios: {e}")
             self.services_config = {}
 
-    def _update_structure_active_service(self, active_svc_id: Optional[str]):
-        """Updates structure.json to set 'enabled' flag and sync metadata for the active service."""
-        try:
-            if not STRUCTURE_PATH.exists():
-                return
-
-            from file_lock import file_lock
-            with file_lock(STRUCTURE_LOCK_PATH):
-                with STRUCTURE_PATH.open("r", encoding="utf-8") as f:
-                    structure = json.load(f)
-                
-                services = structure.get("services", [])
-                updated = False
-                
-                for svc in services:
-                    svc_name = svc.get("name")
-                    is_active = (svc_name == active_svc_id)
-                    
-                    # Sync enabled state
-                    if svc.get("enabled") != is_active:
-                        svc["enabled"] = is_active
-                        updated = True
-                    
-                    # Sync web_port from internal config if active
-                    if is_active and active_svc_id in self.services_config:
-                        config = self.services_config[active_svc_id]
-                        web_port = config.get("web_port")
-                        if svc.get("web_port") != web_port:
-                            svc["web_port"] = web_port
-                            updated = True
-
-                if updated:
-                    with STRUCTURE_PATH.open("w", encoding="utf-8") as f:
-                        json.dump(structure, f, indent=2, ensure_ascii=False)
-                    LOGGER.info(f"Updated structure.json with active service: {active_svc_id}")
-            
-            # If we have an active service, trigger metadata sync from its own map file
-            if active_svc_id:
-                from structure_sync import sync_service
-                sync_service(active_svc_id)
-                    
-        except Exception as e:
-            LOGGER.error(f"Failed to update structure.json active service: {e}")
-
     def stop_all(self, persist_state: bool = False):
-        """Stops all services."""
+        """Detiene todos los servicios."""
         for svc_id in list(self.processes.keys()):
             self.stop_service(svc_id, persist_state=persist_state)
 
     def get_services(self) -> Dict[str, Any]:
-        """Return all services with their current status, merging dynamic state from structure.json."""
+        """Retorna todos los servicios con su estado actual, fusionando estado dinámico de structure.json."""
         status_map = {}
         
-        # 1. Get base config and process status
+        # 1. Obtener configuración base y estado del proceso
         for svc_id, config in self.services_config.items():
             proc = self.processes.get(svc_id)
             is_running = proc is not None and proc.poll() is None
@@ -105,87 +73,73 @@ class ServiceManager:
                 "pid": proc.pid if is_running else None
             }
 
-        # 2. Merge dynamic state from structure.json
-        try:
-            if STRUCTURE_PATH.exists():
-                from file_lock import file_lock
-                with file_lock(STRUCTURE_LOCK_PATH):
-                    with STRUCTURE_PATH.open("r", encoding="utf-8") as f:
-                        structure = json.load(f)
-                    
-                    for svc in structure.get("services", []):
-                        svc_name = svc.get("name")
-                        if svc_name in status_map:
-                            # Merge dynamic fields
-                            if "web_port" in svc:
-                                status_map[svc_name]["web_port"] = svc["web_port"]
-                            if "enabled" in svc:
-                                status_map[svc_name]["enabled"] = svc["enabled"]
-                            if "display_name" in svc:
-                                status_map[svc_name]["display_name"] = svc["display_name"]
-        except Exception as e:
-            LOGGER.error(f"Failed to merge structure.json data in get_services: {e}")
+        # 2. Fusionar estado dinámico de structure.json vía Manager
+        structure = STRUCTURE_MANAGER.get_structure()
+        for svc in structure.get("services", []):
+            svc_name = svc.get("name")
+            if svc_name in status_map:
+                # Fusionar campos dinámicos
+                if "web_port" in svc:
+                    status_map[svc_name]["web_port"] = svc["web_port"]
+                if "enabled" in svc:
+                    status_map[svc_name]["enabled"] = svc["enabled"]
+                if "display_name" in svc:
+                    status_map[svc_name]["display_name"] = svc["display_name"]
 
         return status_map
 
     def start_service(self, svc_id: str) -> bool:
         if svc_id not in self.services_config:
-            LOGGER.error(f"Service {svc_id} not found")
+            LOGGER.error(f"Servicio {svc_id} no encontrado")
             return False
 
         if svc_id in self.processes and self.processes[svc_id].poll() is None:
-            LOGGER.info(f"Service {svc_id} is already running")
+            LOGGER.info(f"El servicio {svc_id} ya se está ejecutando")
             return True
 
         config = self.services_config[svc_id]
         if config.get("type") != "process":
-            LOGGER.info(f"Service {svc_id} is not a process type")
+            LOGGER.info(f"El servicio {svc_id} no es de tipo proceso")
             return False
 
         try:
+            STRUCTURE_MANAGER.set_busy(f"SERVICE_OP_{svc_id}", f"Iniciando {svc_id}...")
+            
             cwd = BASE_DIR / config.get("cwd", ".")
             entry = config.get("entry", [])
             
-            # Resolve ${PYTHON} variable
+            # Resolver variable ${PYTHON}
             cmd = [x.replace("${PYTHON}", "python3") for x in entry]
             
-            # EXCLUSIVE MODE: Stop all other running services first
+            # MODO EXCLUSIVO: Detener todos los otros servicios en ejecución primero
             for other_id in list(self.processes.keys()):
                 if other_id != svc_id:
-                    LOGGER.info(f"Exclusive mode: Stopping {other_id} before starting {svc_id}")
+                    LOGGER.info(f"Modo exclusivo: Deteniendo {other_id} antes de iniciar {svc_id}")
                     self.stop_service(other_id)
             
-            LOGGER.info(f"Starting service {svc_id}: {cmd} in {cwd}")
+            LOGGER.info(f"Iniciando servicio {svc_id}: {cmd} en {cwd}")
             
-            # Update Active Service State in structure.json
-            self._update_structure_active_service(svc_id)
-
-            # Trigger Network Update (VLANs)
-            try:
-                from net_manager import update_nics
-                update_nics()
-            except Exception as e:
-                LOGGER.error(f"Failed to update NICs before start: {e}")
+            # Actualizar Estado de Servicio Activo en structure.json
+            # Nota: client.py ya debería haberlo habilitado para asegurar configuración de red correcta,
+            # pero lo reafirmamos aquí.
+            STRUCTURE_MANAGER.update_service_state(svc_id, enabled=True)
             
-            # Prepare Environment
+            # Preparar Entorno
             env = os.environ.copy()
             
-            # Determine Log Path
-            # We use the 'stdout' path from JSON as the target for the internal logger
+            # Determinar Ruta de Log
             log_rel_path = config.get("logs", {}).get("stdout", f"logs/services/{svc_id}.log")
             log_path = BASE_DIR / log_rel_path
             
-            # Ensure directory exists
+            # Asegurar que el directorio existe
             log_path.parent.mkdir(parents=True, exist_ok=True)
             
             env["OMI_LOG_PATH"] = str(log_path)
             env["OMI_SERVICE_ID"] = svc_id
             
-            LOGGER.info(f"Starting service {svc_id} with log path: {log_path}")
+            LOGGER.info(f"Iniciando servicio {svc_id} con ruta de log: {log_path}")
 
-            # Start Process
-            # We do NOT redirect stdout/stderr here, relying on the service to log to OMI_LOG_PATH
-            # We redirect to DEVNULL to avoid cluttering the client console or blocking pipes
+            # Iniciar Proceso
             proc = subprocess.Popen(
                 cmd,
                 cwd=cwd,
@@ -195,10 +149,19 @@ class ServiceManager:
                 stderr=subprocess.DEVNULL
             )
             self.processes[svc_id] = proc
+            
+            # Disparar sincronización de metadatos (web_port, etc)
+            try:
+                STRUCTURE_MANAGER.sync_service_metadata(svc_id)
+            except Exception as e:
+                LOGGER.error(f"Fallo al sincronizar metadatos del servicio: {e}")
+
             return True
         except Exception as e:
-            LOGGER.error(f"Failed to start service {svc_id}: {e}")
+            LOGGER.error(f"Fallo al iniciar servicio {svc_id}: {e}")
             return False
+        finally:
+            STRUCTURE_MANAGER.clear_busy(f"SERVICE_OP_{svc_id}")
 
     def stop_service(self, svc_id: str, persist_state: bool = False) -> bool:
         proc = self.processes.get(svc_id)
@@ -210,7 +173,8 @@ class ServiceManager:
             return True
 
         try:
-            LOGGER.info(f"Stopping service {svc_id} (PID {proc.pid})")
+            STRUCTURE_MANAGER.set_busy(f"SERVICE_OP_{svc_id}", f"Deteniendo {svc_id}...")
+            LOGGER.info(f"Deteniendo servicio {svc_id} (PID {proc.pid})")
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
             try:
                 proc.wait(timeout=5)
@@ -219,21 +183,13 @@ class ServiceManager:
             
             del self.processes[svc_id]
             
-            # Update Active Service State to None (STANDBY)
-            # Only if this was the active service? 
-            # If we stop a service, we should check if any other is running (unlikely in exclusive mode)
-            # or just set all to disabled.
+            # Actualizar Estado de Servicio Activo a None (STANDBY)
             if not self.processes and not persist_state:
-                 self._update_structure_active_service(None)
+                 STRUCTURE_MANAGER.update_service_state(svc_id, enabled=False)
             
-            # Trigger Network Update (Cleanup/Revert)
-            try:
-                from net_manager import update_nics
-                update_nics()
-            except Exception as e:
-                LOGGER.error(f"Failed to update NICs after stop: {e}")
-                
             return True
         except Exception as e:
-            LOGGER.error(f"Failed to stop service {svc_id}: {e}")
+            LOGGER.error(f"Fallo al detener servicio {svc_id}: {e}")
             return False
+        finally:
+            STRUCTURE_MANAGER.clear_busy(f"SERVICE_OP_{svc_id}")

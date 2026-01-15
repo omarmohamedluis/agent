@@ -1,42 +1,89 @@
 <form id="configForm" method="post" action="/config/save" class="stack">
   <section class="card stack">
-    <div class="section-title">
-      <h2>Configuración General</h2>
-    </div>
 
-    <div class="config-grid">
-      <div class="form-group">
-        <label>Nombre del Preset</label>
-        <input type="text" name="config_name" value="{{CONFIG_NAME}}" maxlength="64">
-      </div>
-
-      <div class="form-group">
-        <label>VLAN</label>
-        <input type="number" name="vlan" value="{{VLAN}}" min="1" max="4094">
-      </div>
-
-      <div class="form-group full">
-        <label>Dispositivo MIDI</label>
-        <select name="midi_input">{{MIDI_OPTIONS}}</select>
-      </div>
-
-      <div class="form-group">
-        <label>Puerto OSC</label>
-        <input type="number" name="osc_port" value="{{OSC_PORT}}" min="1" max="65535">
-      </div>
-
-      <div class="form-group">
-        <label>Puerto WebUI</label>
-        <input type="number" name="ui_port" value="{{UI_PORT}}" min="1" max="65535">
-      </div>
-
-      <div class="form-group full">
-        <label>IPs OSC</label>
-        <input type="text" name="osc_ips" value="{{OSC_IPS}}" placeholder="127.0.0.1, 192.168.1.100">
+    <!-- 1. Configuración General -->
+    <div class="config-section">
+      <h3>Configuración General</h3>
+      <div class="compact-grid">
+        <div class="form-group">
+          <label>Nombre del Preset</label>
+          <input type="text" name="config_name" value="{{ config_name }}" maxlength="64">
+        </div>
+        <div class="form-group">
+          <label>Puerto WebUI</label>
+          <input type="number" name="ui_port" value="{{ ui_port }}" min="1" max="65535">
+        </div>
       </div>
     </div>
-  </section>
 
+    <!-- 2. Configuración VLAN -->
+    <div class="config-section">
+      <h3>Configuración VLAN</h3>
+      <div class="compact-grid">
+        <div class="form-group full">
+          <label>VLAN ID</label>
+          <div class="vlan-group">
+            <input type="number" name="vlan" value="{{ vlan }}" min="1" max="4094" class="vlan-input">
+            <label class="checkbox-container">
+              <input type="checkbox" id="vlanActive" name="vlan_active" value="true" {% if vlan_active %}checked{% endif
+                %}>
+              <span class="checkbox-label">Activar VLAN</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group full">
+          <label>Modo IP</label>
+          <select name="vlan_mode" id="vlanMode" class="form-control">
+            <option value="dhcp" {% if vlan_mode=='dhcp' %}selected{% endif %}>DHCP (Automático)</option>
+            <option value="static" {% if vlan_mode=='static' %}selected{% endif %}>Manual (Estático)</option>
+          </select>
+        </div>
+
+        <div id="staticIpFields" class="span-2 compact-grid" style="grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+          <div class="form-group">
+            <label>Dirección IP</label>
+            <input type="text" name="vlan_ip" value="{{ vlan_ip }}" class="form-control"
+              placeholder="Ej: 192.168.100.10">
+          </div>
+          <div class="form-group">
+            <label>Máscara (CIDR)</label>
+            <input type="text" name="vlan_mask" value="{{ vlan_mask }}" class="form-control"
+              placeholder="Ej: 24 o 255.255.255.0">
+          </div>
+          <div class="form-group">
+            <label>Gateway</label>
+            <input type="text" name="vlan_gateway" value="{{ vlan_gateway }}" class="form-control"
+              placeholder="Opcional">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. Servicio -->
+    <div class="config-section">
+      <h3>Servicio</h3>
+      <div class="compact-grid">
+        <div class="form-group full">
+          <label>Dispositivo MIDI</label>
+          <select name="midi_input">
+            {% for m in midi_inputs %}
+            <option value="{{ m }}" {% if m==current_midi %}selected{% endif %}>{{ m }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-group full">
+          <label>IPs OSC</label>
+          <input type="text" name="osc_ips" value="{{ osc_ips }}" placeholder="127.0.0.1, 192.168.1.100">
+        </div>
+
+        <div class="form-group">
+          <label>Puerto OSC</label>
+          <input type="number" name="osc_port" value="{{ osc_port }}" min="1" max="65535">
+        </div>
+      </div>
+    </div>
   </section>
 
   <div class="global-actions">

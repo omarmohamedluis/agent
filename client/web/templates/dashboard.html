@@ -10,6 +10,13 @@
 </head>
 
 <body>
+    <div id="loadingOverlay">
+        <div class="spinner"></div>
+        <h2 id="loadingMessage">Processing...</h2>
+        <button id="emergencyUnlock" onclick="document.getElementById('loadingOverlay').style.display='none'"
+            title="Emergency Unlock"></button>
+    </div>
+
     <header>
         <div class="brand">
             <img src="/assets/omarpi.png" alt="OMI Logo">
@@ -31,6 +38,9 @@
             <a href="/settings" class="btn btn-nav">
                 <i class="fas fa-cog"></i>
             </a>
+            <button id="logsBtn" class="btn btn-nav" onclick="openLogViewer()" title="View Logs">
+                <i class="fas fa-file-alt"></i>
+            </button>
             <button id="headerRefreshBtn" class="btn btn-nav" onclick="refreshIframe()"
                 style="display: {{ 'inline-flex' if active_service else 'none' }};" title="Refresh Iframe">
                 <i class="fas fa-sync-alt"></i>
@@ -78,11 +88,44 @@
         </section>
     </main>
 
+    <!-- Log Viewer Modal -->
+    <div id="logModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Log Viewer</h2>
+                <span class="close" onclick="closeLogViewer()">&times;</span>
+            </div>
+            <div class="modal-controls">
+                <select id="logCategory" onchange="loadLogFiles()">
+                    <option value="components">Components</option>
+                    <option value="services">Services</option>
+                </select>
+                <select id="logFile" onchange="loadLogContent()">
+                    <option value="">Select File...</option>
+                </select>
+                <button class="btn btn-nav" onclick="loadLogContent()" title="Refresh">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
+            </div>
+            <div class="log-container">
+                <pre id="logContent">Select a log file to view...</pre>
+            </div>
+        </div>
+    </div>
+
     <script>
         let currentActiveServiceId = "{{ active_service.id if active_service else '' }}";
         let systemIp = "{{ status.ip }}";
+        let isManualActionPending = false;
 
         async function controlService(id, action) {
+            // Show overlay immediately
+            isManualActionPending = true;
+            const overlay = document.getElementById('loadingOverlay');
+            const msg = document.getElementById('loadingMessage');
+            overlay.style.display = 'flex';
+            msg.textContent = action === 'start' ? "Starting Service..." : "Stopping Service...";
+
             try {
                 const response = await fetch(`/api/services/${id}/${action}`, { method: 'POST' });
                 if (!response.ok) {
@@ -92,6 +135,11 @@
             } catch (e) {
                 console.error(e);
                 alert('Error connecting to server');
+            } finally {
+                isManualActionPending = false;
+                // We don't hide it immediately here, we let the poller decide based on system status
+                // or if we want to force hide if not busy:
+                // updateStatus(); // Trigger an immediate update check
             }
         }
 
@@ -102,11 +150,93 @@
             }
         }
 
+        // --- Log Viewer Logic ---
+        const logModal = document.getElementById('logModal');
+        const logCategory = document.getElementById('logCategory');
+        const logFile = document.getElementById('logFile');
+        const logContent = document.getElementById('logContent');
+
+        function openLogViewer() {
+            logModal.style.display = "block";
+            loadLogFiles();
+        }
+
+        function closeLogViewer() {
+            logModal.style.display = "none";
+        }
+
+        async function loadLogFiles() {
+            try {
+                const response = await fetch('/api/logs/list');
+                const data = await response.json();
+                const category = logCategory.value;
+                const files = data[category] || [];
+
+                logFile.innerHTML = '<option value="">Select File...</option>';
+                files.forEach(f => {
+                    const opt = document.createElement('option');
+                    opt.value = f;
+                    opt.textContent = f;
+                    logFile.appendChild(opt);
+                });
+
+                // If files exist, select first one automatically? No, let user choose.
+                logContent.textContent = "Select a log file to view...";
+            } catch (e) {
+                console.error("Error loading log list:", e);
+                logContent.textContent = "Error loading log list.";
+            }
+        }
+
+        async function loadLogContent() {
+            const category = logCategory.value;
+            const filename = logFile.value;
+            if (!filename) return;
+
+            logContent.textContent = "Loading...";
+            try {
+                const response = await fetch(`/api/logs/read?category=${category}&filename=${filename}`);
+                if (!response.ok) throw new Error("Failed to load log");
+                const data = await response.json();
+                logContent.textContent = data.content;
+                // Scroll to bottom of the container
+                const container = document.querySelector('.log-container');
+                if (container) {
+                    container.scrollTop = container.scrollHeight;
+                }
+            } catch (e) {
+                console.error("Error loading log content:", e);
+                logContent.textContent = "Error loading log content.";
+            }
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function (event) {
+            if (event.target == logModal) {
+                closeLogViewer();
+            }
+        }
+
         async function updateStatus() {
             try {
                 const response = await fetch('/api/status');
                 if (!response.ok) return;
                 const data = await response.json();
+
+                // Update Overlay
+                const overlay = document.getElementById('loadingOverlay');
+                const msg = document.getElementById('loadingMessage');
+                const sysStatus = data.system_status || {};
+
+                if (sysStatus.is_busy) {
+                    overlay.style.display = 'flex';
+                    msg.textContent = sysStatus.busy_message || "Processing...";
+                } else {
+                    // Only hide if we are NOT waiting for a manual action
+                    if (!isManualActionPending) {
+                        overlay.style.display = 'none';
+                    }
+                }
 
                 // Update Sidebar
                 const services = data.services;

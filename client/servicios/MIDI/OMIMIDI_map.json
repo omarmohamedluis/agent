@@ -1,15 +1,19 @@
 {
   "file_info": {
-    "name": "omar test 3",
-    "ui_port": 9003,
-    "updated_at": "2026-01-12T16:02:49.733277+00:00"
+    "name": "Default",
+    "ui_port": 9001,
+    "updated_at": "2026-01-15T21:31:44.612371+00:00"
   },
   "source": {
     "midi_input": "APC40 mkII:APC40 mkII MIDI 1 24:0"
   },
   "net": {
     "vlan": 90,
-    "vlan_active": false
+    "vlan_active": false,
+    "ip_mode": "dhcp",
+    "ip": "",
+    "mask": "",
+    "gateway": ""
   },
   "osc": {
     "ips": [
@@ -20,52 +24,10 @@
   "routes": [
     {
       "type": "cc",
-      "osc": "/composition/layers/1/video/opacity",
-      "vtype": "float",
-      "cc": 7,
-      "channel": 0
-    },
-    {
-      "type": "cc",
-      "osc": "/composition/layers/2/video/opacity",
-      "vtype": "float",
-      "cc": 7,
-      "channel": 1
-    },
-    {
-      "type": "cc",
       "osc": "/composition/layers/3/video/opacity",
       "vtype": "float",
       "cc": 7,
-      "channel": 2
-    },
-    {
-      "type": "cc",
-      "cc": 7,
-      "osc": "/composition/layers/4/video/opacity",
-      "vtype": "float",
-      "channel": 3
-    },
-    {
-      "type": "cc",
-      "cc": 7,
-      "osc": "/composition/layers/5/video/opacity",
-      "vtype": "float",
-      "channel": 4
-    },
-    {
-      "type": "cc",
-      "cc": 7,
-      "osc": "/composition/layers/6/video/opacity",
-      "vtype": "float",
-      "channel": 5
-    },
-    {
-      "type": "cc",
-      "cc": 7,
-      "osc": "/composition/layers/7/video/opacity",
-      "vtype": "float",
-      "channel": 6
+      "channel": 0
     }
   ]
 }

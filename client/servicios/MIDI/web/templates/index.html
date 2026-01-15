@@ -1,26 +1,74 @@
-<section class="card">
-  <div class="card-header">
-    <h2>Rutas MIDI → OSC</h2>
-    <a class="btn primary" href="/add">+ Añadir ruta</a>
-  </div>
-  <div class="card-body">
-    <div class="table-wrap">
-      <table class="routes-table">
-        <thead>
-          <tr>
-            <th></th>
-            <th>#</th>
-            <th>MIDI</th>
-            <th>OSC Path</th>
-            <th>Valor</th>
-            <th>Último</th>
-            <th style="text-align:right;">Acciones</th>
-          </tr>
-        </thead>
-        <tbody>
-          {{ROUTES_HTML}}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
+<div class="table-wrap">
+  <table class="routes-table">
+    <thead>
+      <tr>
+        <th class="narrow-col"></th>
+        <th>#</th>
+        <th>Mensaje MIDI</th>
+        <th>Ruta OSC</th>
+        <th>Valor</th>
+        <th>Valor Actual</th>
+        <th class="text-right">Acciones</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if routes %}
+      {% for route in routes %}
+      <tr>
+        <td class="narrow-cell">
+          {% if loop.length > 1 %}
+          <div class="move-buttons">
+            <form method='post' action='/move_route' class="move-form">
+              <input type='hidden' name='idx' value='{{ loop.index0 }}' />
+              <input type='hidden' name='direction' value='up' />
+              <button class='btn-icon small' {% if loop.first %}disabled{% endif %} title='Subir'>▲</button>
+            </form>
+            <form method='post' action='/move_route' class="move-form">
+              <input type='hidden' name='idx' value='{{ loop.index0 }}' />
+              <input type='hidden' name='direction' value='down' />
+              <button class='btn-icon small' {% if loop.last %}disabled{% endif %} title='Bajar'>▼</button>
+            </form>
+          </div>
+          {% endif %}
+        </td>
+        <td>{{ loop.index0 }}</td>
+        <td>
+          {% if route.type == 'note' %}
+          NOTE {{ route.note }}
+          {% elif route.type == 'cc' %}
+          CC {{ route.cc }} ch {{ route.channel if route.channel is not none else 'any' }}
+          {% else %}
+          ?
+          {% endif %}
+        </td>
+        <td>{{ route.osc }}</td>
+        <td>
+          {{ route.vtype }}
+          {% if route.vtype == 'const' and route.const is defined %}
+          const={{ route.const }}
+          {% endif %}
+        </td>
+        <td><span data-route='{{ loop.index0 }}' data-osc='{{ route.osc }}'>–</span></td>
+        <td>
+          <div class='actions-wrapper'>
+            <a href='/edit/{{ loop.index0 }}' class='btn ghost' title='Editar'><span class='icon'>✏️</span></a>
+            <form method='post' action='/delete_route' class="delete-form"
+              onsubmit="return confirm('¿Estás seguro de que quieres eliminar esta ruta?');">
+              <input type='hidden' name='idx' value='{{ loop.index0 }}' />
+              <button class='btn ghost danger-text' title='Eliminar'><span class='icon'>🗑️</span></button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+      {% else %}
+      <tr>
+        <td colspan='7' class='empty-message'>No hay rutas configuradas.</td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+<div class="global-actions">
+  <a href="/add/manual" class="btn primary">Añadir Ruta</a>
+</div>

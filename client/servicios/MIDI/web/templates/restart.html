@@ -1,4 +1,50 @@
-<div class="restart-page">
+<div class="restart-page stack" style="text-align: center; padding: 40px;">
+  <div class="activity-indicator"
+    style="display:inline-block; width: 40px; height: 40px; border: 4px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite;">
+  </div>
   <h2>{{MESSAGE}}</h2>
-  <p>La página se actualizará automáticamente.</p>
+  <p class="muted">Esperando a que el servicio vuelva a estar disponible...</p>
+  <p id="statusText" style="font-size: 14px; color: var(--muted);">Intentando reconectar...</p>
 </div>
+
+<style>
+  @keyframes spin {
+    0% {
+      transform: rotate(0deg);
+    }
+
+    100% {
+      transform: rotate(360deg);
+    }
+  }
+</style>
+
+<script>
+  (function () {
+    var statusText = document.getElementById('statusText');
+    var attempts = 0;
+
+    function checkService() {
+      attempts++;
+      if (statusText) statusText.textContent = 'Intento de reconexión #' + attempts;
+
+      fetch('/state', { cache: 'no-store' })
+        .then(function (res) {
+          if (res.ok) {
+            if (statusText) statusText.textContent = '¡Servicio disponible! Recargando...';
+            setTimeout(function () {
+              window.location.href = '/';
+            }, 500);
+          } else {
+            setTimeout(checkService, 2000);
+          }
+        })
+        .catch(function () {
+          setTimeout(checkService, 2000);
+        });
+    }
+
+    // Esperar 3 segundos antes de empezar a comprobar (dar tiempo al shutdown)
+    setTimeout(checkService, 3000);
+  })();
+</script>

@@ -1,3 +1,8 @@
+"""
+Utilidades Comunes para OMIMIDI.
+Proporciona funciones para carga y guardado seguro de JSON,
+gestión de backups y logging centralizado para el servicio MIDI.
+"""
 import os
 import json
 import logging
@@ -10,7 +15,7 @@ from datetime import datetime, timezone
 LOGGER = logging.getLogger("omimidi.utils")
 
 def load_json(path: str | Path, default: Any) -> Any:
-    """Carga un archivo JSON de forma segura."""
+    """Carga un archivo JSON de forma segura, retornando 'default' si falla."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -19,15 +24,15 @@ def load_json(path: str | Path, default: Any) -> Any:
 
 def save_json(path: str | Path, data: Any, backup: bool = True) -> None:
     """
-    Guarda datos JSON de forma segura usando un archivo temporal.
-    Si data es un diccionario, añade 'updated_at' y asegura el orden de las claves.
+    Guarda datos JSON de forma segura usando un archivo temporal y reemplazo atómico.
+    Si 'data' es un diccionario, añade metadatos ('updated_at') y ordena las claves
+    para mantener consistencia visual.
     """
     path_obj = Path(path)
     directory = path_obj.parent
     if directory:
         directory.mkdir(parents=True, exist_ok=True)
 
-    # ... (rest of metadata logic) ...
     if isinstance(data, dict):
         # Asegurar que file_info existe
         if "file_info" not in data:
@@ -36,7 +41,7 @@ def save_json(path: str | Path, data: Any, backup: bool = True) -> None:
         # Actualizar timestamp dentro de file_info
         data["file_info"]["updated_at"] = datetime.now(timezone.utc).isoformat()
         
-        # Definir orden de claves prioritarias
+        # Definir orden de claves prioritarias para legibilidad
         priority_keys = ["file_info", "source", "net", "osc", "routes"]
         ordered_data = {}
         
@@ -53,16 +58,16 @@ def save_json(path: str | Path, data: Any, backup: bool = True) -> None:
         data = ordered_data
 
     backup_path = None
-    # Crear backup si existe y se solicita
+    # Crear backup si existe el archivo y se solicita
     if backup and path_obj.exists():
         backup_path = path_obj.with_suffix(path_obj.suffix + ".bak")
         try:
             shutil.copy2(path_obj, backup_path)
         except FileNotFoundError:
-            # Race condition: el archivo desapareció justo antes de copiar
+            # Condición de carrera: el archivo desapareció justo antes de copiar
             backup_path = None
         except Exception as e:
-            LOGGER.warning("No se pudo crear backup de %s: %s", path, e)
+            LOGGER.warning(f"No se pudo crear backup de {path}: {e}")
             backup_path = None
 
     # Guardar nuevo contenido usando archivo temporal
@@ -80,7 +85,7 @@ def save_json(path: str | Path, data: Any, backup: bool = True) -> None:
         # Reemplazo atómico
         os.replace(tmp_path, path)
         
-        # Asegurar permisos 664 (rw-rw-r--)
+        # Asegurar permisos 664 (rw-rw-r--) para acceso compartido
         try:
             os.chmod(path, 0o664)
         except Exception:
@@ -88,24 +93,24 @@ def save_json(path: str | Path, data: Any, backup: bool = True) -> None:
             
         success = True
     except Exception as e:
-        LOGGER.error("Error guardando %s: %s", path, e)
-        # Intentar restaurar backup si falló el reemplazo
+        LOGGER.error(f"Error guardando {path}: {e}")
+        # Intentar restaurar backup si falló el reemplazo y teníamos uno
         if backup_path and backup_path.exists():
             try:
                 os.replace(backup_path, path_obj)
-                LOGGER.info("Backup restaurado para %s", path)
+                LOGGER.info(f"Backup restaurado para {path}")
             except Exception as e2:
-                LOGGER.error("No se pudo restaurar backup de %s: %s", path, e2)
+                LOGGER.error(f"No se pudo restaurar backup de {path}: {e2}")
         raise
     finally:
-        # Limpiar archivos temporales
+        # Limpiar archivos temporales si quedaron
         if os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
             except Exception:
                 pass
             
-        # Eliminar backup si todo fue bien
+        # Eliminar backup si todo fue bien (no queremos acumular basura)
         if backup_path and success and backup_path.exists():
             try:
                 os.unlink(backup_path)

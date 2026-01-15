@@ -5,7 +5,7 @@ from displays.base import DisplayDriver
 from displays.ssd1306 import SSD1306Driver
 from displays.dummy import DummyDriver
 
-LOGGER = logging.getLogger("omimidi.display_manager")
+LOGGER = logging.getLogger("omiclient.display_manager")
 
 class DisplayManager:
     def __init__(self, driver_name: str = "ssd1306"):

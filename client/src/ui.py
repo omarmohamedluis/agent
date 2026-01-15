@@ -1,5 +1,8 @@
-# src/ui.py
-
+"""
+Interfaz de Usuario (UI).
+Gestiona la pantalla OLED, mostrando el estado del sistema, carga, errores
+y la información de red. Se suscribe al heartbeat para actualizaciones.
+"""
 import json
 import time
 from pathlib import Path
@@ -10,22 +13,21 @@ from heartbeat import (
     get_heartbeat_snapshot,
     register_heartbeat_listener,
     unregister_heartbeat_listener,
+    start_heartbeat
 )
 from PIL import Image, ImageDraw, ImageFont
-from NetComHandler import check_server_status
+from net_com_handler import check_server_status
 from logger import log_event, log_print
 from display_manager import DisplayManager
+from structure_manager import get_structure_manager
 
+STRUCTURE_MANAGER = get_structure_manager()
 BASE_DIR = Path(__file__).resolve().parents[1]  # reaches client/
 ASSETS_PATH  = BASE_DIR / "web" / "utilities"
-
-DEFAULT_JSON_PATH = BASE_DIR / "data" / "structure.json"
-
 
 OLED_W, OLED_H = 128, 64
 HEADER_H = 16
 
-_standard_ui_json_path = DEFAULT_JSON_PATH
 _standard_listener_registered = False
 
 # -------- Hardware --------
@@ -34,20 +36,26 @@ _display_manager = DisplayManager(driver_name="ssd1306")
 try:
     _display_manager.init()
 except Exception as e:
-    log_event("error", "ui", f"Failed to init display manager: {e}")
+    log_event("error", "ui", f"Fallo al iniciar display manager: {e}")
 
-module_name = f"{Path(__file__).parent.name}.{Path(__file__).stem}"
+module_name = "omiclient.ui"
 
-# -------- Assets Loading --------
+# -------- Carga de Assets --------
 
-_FONT = ImageFont.truetype(str(ASSETS_PATH / "PixelOperator.ttf"), 14)
-_ICON_FONT = ImageFont.truetype(str(ASSETS_PATH / "lineawesome-webfont.ttf"), 16)
-_ICON  = Image.open(ASSETS_PATH / "omarpi.png")
+try:
+    _FONT = ImageFont.truetype(str(ASSETS_PATH / "PixelOperator.ttf"), 14)
+    _ICON_FONT = ImageFont.truetype(str(ASSETS_PATH / "lineawesome-webfont.ttf"), 16)
+    _ICON  = Image.open(ASSETS_PATH / "omarpi.png")
+except Exception as e:
+    log_event("error", module_name, f"Fallo al cargar assets: {e}")
+    _FONT = ImageFont.load_default()
+    _ICON_FONT = ImageFont.load_default()
+    _ICON = None
 
 
-# -------- Canvases --------
+# -------- Lienzos (Canvases) --------
 def _base_canvas() -> Image.Image:
-    """Black background with icon at the bottom (for Loading/Error/Shutdown)."""
+    """Fondo negro con icono en la parte inferior (para Carga/Error/Apagado)."""
     img = Image.new("L", (OLED_W, OLED_H), 0)
     if _ICON:
         max_w, max_h = OLED_W, OLED_H - HEADER_H
@@ -61,10 +69,10 @@ def _base_canvas() -> Image.Image:
     return img
 
 def _new_frame() -> Image.Image:
-    """Completely black frame (no icon)."""
+    """Frame completamente negro (sin icono)."""
     return Image.new("L", (OLED_W, OLED_H), 0)
 
-# -------- Headers --------
+# -------- Cabeceras (Headers) --------
 def _draw_header_with_progress(img: Image.Image, percent: int, label: str):
     percent = max(0, min(100, int(percent)))
     draw = ImageDraw.Draw(img)
@@ -95,42 +103,36 @@ def _draw_header_error(img: Image.Image, label: str):
 
 def _draw_wifi_icon(draw: ImageDraw.ImageDraw, ok: bool, inverted: bool):
 
-    glyph = "\uf1eb"  # use normal and cross it out if not ok
+    glyph = "\uf1eb"  # usar normal y tachar si no ok
     fill = 0 if inverted else 255
     gw, gh = draw.textbbox((0, 0), glyph, font=_ICON_FONT)[2:]
     x = OLED_W - gw - 2
     y = max(0, (HEADER_H - gh) // 2)
     draw.text((x, y), glyph, font=_ICON_FONT, fill=fill)
     if not ok:
-        # Diagonal line crossing the glyph box
+        # Línea diagonal cruzando la caja del glifo
         x0, y0 = x, y
         x1, y1 = x + gw, y + gh
         draw.line([(x0, y0), (x1, y1)], fill=fill, width=2)
 
 def _draw_header_text_left_center_right_inverted(img: Image.Image, left:str, center:str, right_wifi_ok: bool):
-    """White header, black text."""
+    """Cabecera blanca, texto negro."""
     draw = ImageDraw.Draw(img)
     draw.rectangle([0, 0, OLED_W - 1, HEADER_H - 1], fill=255)
-    # LEFT
+    # IZQUIERDA
     l_text = left or ""
     l_tw, l_th = draw.textbbox((0,0), l_text, font=_FONT)[2:]
     draw.text((2, max(0, (HEADER_H - l_th)//2)), l_text, font=_FONT, fill=0)
-    # RIGHT (black icon)
+    # DERECHA (icono negro)
     _draw_wifi_icon(draw, ok=right_wifi_ok, inverted=True)
-    # CENTER
+    # CENTRO
     c_text = center or ""
     c_tw, c_th = draw.textbbox((0,0), c_text, font=_FONT)[2:]
     cx = max(2, (OLED_W - c_tw)//2)
     cy = max(0, (HEADER_H - c_th)//2)
     draw.text((cx, cy), c_text, font=_FONT, fill=0)
 
-# -------- Utils --------
-def _read_json_simple(path: Path):
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+# -------- Utilidades --------
 
 def _is_wifi_iface(name: str) -> bool:
     if not name:
@@ -150,14 +152,9 @@ def _display(img: Image.Image):
 
 def _get_current_app_name() -> str:
     try:
-        # Read active service from structure.json
-        state_path = BASE_DIR / "data" / "structure.json"
-        if state_path.exists():
-            data = _read_json_simple(state_path)
-            services = data.get("services", [])
-            for svc in services:
-                if svc.get("enabled"):
-                    return svc.get("name", "UNKNOWN").upper()
+        svc = STRUCTURE_MANAGER.get_active_service()
+        if svc:
+            return svc.get("name", "DESCONOCIDO").upper()
     except Exception:
         pass
     return "STANDBY"
@@ -167,45 +164,59 @@ def _get_connection_status() -> bool:
     return check_server_status()
 
 def _standard_ui_listener(snapshot: Dict[str, Any]) -> None:
-    EstandardUse(snapshot, json_path=_standard_ui_json_path)
+    update_standard_ui(snapshot)
 
 
-
-# -------- Public API --------
-def LoadingUI(percent: int, label: str = ""):
-    StopStandardUI()
-    """Loading screen: bar in header with inverted text; icon at bottom."""
+# -------- API Pública --------
+def show_loading_ui(percent: int, label: str = ""):
+    stop_standard_ui()
+    """Pantalla de carga: barra en cabecera con texto invertido; icono abajo."""
     img = _base_canvas()
     _draw_header_with_progress(img, percent, label)
     _display(img)
 
-def MessageUI(label: str = ""):
-    StopStandardUI()
-    """White header + ERROR text (or label), icon at bottom."""
+def show_message_ui(label: str = ""):
+    stop_standard_ui()
+    """Cabecera blanca + texto ERROR (o etiqueta), icono abajo."""
     img = _base_canvas()
     _draw_header_error(img, label)
     _display(img)
 
 
-def ErrorUI(label: str = "ERROR", times: int = 3, interval: float = 0.25) -> None:
-    """Shows ErrorUI with simple blinking."""
+def show_error_ui(label: str = "ERROR", times: int = 3, interval: float = 0.25) -> None:
+    """Muestra ErrorUI con parpadeo simple."""
     times = max(1, int(times))
     delay = max(0.05, float(interval))
     for _ in range(times):
-        MessageUI(label)
+        show_message_ui(label)
         time.sleep(delay)
-        UIOFF()
+        turn_ui_off()
         time.sleep(delay)
-    MessageUI(label)
+    show_message_ui(label)
 
 
-def EstandardUse(snapshot: Dict[str, Any], json_path: Path = DEFAULT_JSON_PATH) -> None:
-    """Header white/black and footer with CPU/TEMP and NET (WIFI/ETH ip/cidr)."""
+def update_standard_ui(snapshot: Dict[str, Any]) -> None:
+    """Cabecera blanco/negro y pie con CPU/TEMP y RED (WIFI/ETH ip/cidr)."""
+    
+    # Verificar Estado Ocupado primero
+    structure = STRUCTURE_MANAGER.get_structure()
+    sys_status = structure.get("system_status", {})
+    if sys_status.get("is_busy"):
+        msg = sys_status.get("busy_message") or "PROCESANDO..."
+        # Mostrar UI de carga en lugar del frame estándar
+        # Usamos una versión simplificada aquí para evitar recursión si show_loading_ui llama a stop_standard_ui
+        # De hecho show_loading_ui llama a stop_standard_ui que desregistra este listener!
+        # Así que no podemos llamar a show_loading_ui directamente si queremos seguir escuchando.
+        # Solo dibujamos el frame de carga aquí.
+        img = _base_canvas()
+        _draw_header_with_progress(img, 50, msg) # 50% como "ocupado" genérico
+        _display(img)
+        return
+
     img = _new_frame()
 
-    # Inverted Header: white background, black text
-    data = _read_json_simple(json_path)
-    index = data.get("identity", {}).get("index", None)
+    # Cabecera Invertida: fondo blanco, texto negro
+    index = structure.get("identity", {}).get("index", None)
     index_label = f"#{index if index is not None else '--'}"
     app_label = (_get_current_app_name() or "").strip().upper() or "--"
     server_online = _get_connection_status()
@@ -216,13 +227,13 @@ def EstandardUse(snapshot: Dict[str, Any], json_path: Path = DEFAULT_JSON_PATH) 
         right_wifi_ok=server_online,
     )
 
-    # Footer
+    # Pie (Footer)
     draw = ImageDraw.Draw(img)
     cpu  = snapshot.get("cpu")
     temp = snapshot.get("temp")
     ifaces = snapshot.get("ifaces") or []
 
-    # Choose primary interface: first Wi-Fi; if none, the first one
+    # Elegir interfaz primaria: primera Wi-Fi; si no, la primera
     primary = None
     for x in ifaces:
         if _is_wifi_iface(x.get("name", "")):
@@ -256,41 +267,37 @@ def EstandardUse(snapshot: Dict[str, Any], json_path: Path = DEFAULT_JSON_PATH) 
 
     _display(img)
 
-def UIOFF():
-    StopStandardUI()
-    """Visually turns off the OLED (completely black screen)."""
+def turn_ui_off():
+    stop_standard_ui()
+    """Apaga visualmente el OLED (pantalla completamente negra)."""
     _display_manager.clear()
-    log_event("info", module_name, "OLED screen turned off")
+    log_event("info", module_name, "Pantalla OLED apagada")
 
 
-def StartStandardUI(json_path: Path = DEFAULT_JSON_PATH, ensure_heartbeat: bool = True) -> None:
-    """Registers the standard UI to receive heartbeat updates."""
-    global _standard_ui_json_path, _standard_listener_registered
+def start_standard_ui(ensure_heartbeat: bool = True) -> None:
+    """Registra la UI estándar para recibir actualizaciones del heartbeat."""
+    global _standard_listener_registered
 
-    log_print("info", module_name, "Starting Standard UI")
-    _standard_ui_json_path = Path(json_path)
+    log_print("info", module_name, "Iniciando UI Estándar")
 
     if ensure_heartbeat:
-        from heartbeat import start_heartbeat
-        start_heartbeat(path=_standard_ui_json_path, start_active=True)
+        start_heartbeat(start_active=True)
 
     if not _standard_listener_registered:
         register_heartbeat_listener(_standard_ui_listener)
         _standard_listener_registered = True
 
     snapshot = get_heartbeat_snapshot()
-    EstandardUse(snapshot, json_path=_standard_ui_json_path)
+    update_standard_ui(snapshot)
 
 
-def StopStandardUI() -> None:
-    """Removes the standard UI subscription and turns off the screen."""
+def stop_standard_ui() -> None:
+    """Elimina la suscripción de la UI estándar y apaga la pantalla."""
     global _standard_listener_registered
 
     if _standard_listener_registered:
         unregister_heartbeat_listener(_standard_ui_listener)
         _standard_listener_registered = False
-        log_print("info", module_name, "Removed UI subscription from heartbeat")
+        log_print("info", module_name, "Suscripción UI eliminada del heartbeat")
 
-
-
-log_print("info", module_name, "OLED initialized and ready")
+log_print("info", module_name, "OLED inicializado y listo")

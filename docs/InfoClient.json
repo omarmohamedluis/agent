@@ -11,11 +11,15 @@
   "network": {
     "desired": {
       "mode": "dhcp",
-      "ip": "127.0.0.1",
-      "mask": "255.255.255.0",
-      "gateway": "127.0.0.1",
+      "ip": "",
+      "mask": "",
+      "gateway": "",
       "vlan": null,
-      "vlan_from_service": false
+      "vlan_from_service": true,
+      "vlan_mode": "dhcp",
+      "vlan_ip": "",
+      "vlan_mask": "",
+      "vlan_gateway": ""
     },
     "interfaces": []
   },
@@ -27,7 +31,11 @@
       "configuration": "default",
       "web_port": 9001,
       "vlan": null,
-      "vlan_active": false
+      "vlan_active": false,
+      "vlan_mode": "dhcp",
+      "vlan_ip": "",
+      "vlan_mask": "",
+      "vlan_gateway": ""
     },
     {
       "name": "satellite",
@@ -36,7 +44,11 @@
       "configuration": "default",
       "web_port": null,
       "vlan": null,
-      "vlan_active": false
+      "vlan_active": false,
+      "vlan_mode": "dhcp",
+      "vlan_ip": "",
+      "vlan_mask": "",
+      "vlan_gateway": ""
     },
     {
       "name": "OSCnum",
@@ -45,7 +57,11 @@
       "configuration": "default",
       "web_port": null,
       "vlan": null,
-      "vlan_active": false
+      "vlan_active": false,
+      "vlan_mode": "dhcp",
+      "vlan_ip": "",
+      "vlan_mask": "",
+      "vlan_gateway": ""
     }
   ]
 }

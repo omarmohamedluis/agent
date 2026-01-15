@@ -21,7 +21,13 @@ Thumbs.db
 *_TEMP.json
 
 # generados
-structure.json
-server.json
-servicios/servicios.json
-servicios/MIDI/OMIMIDI_map.json
+client/data/structure.json
+client/data/structure.json.lock
+client/data/server.json
+client/servicios/servicios.json
+client/servicios/MIDI/OMIMIDI_map.json
+client/servicios/MIDI/OMIMIDI_state.json
+client/servicios/MIDI/OMIMIDI_learn_request.json
+client/servicios/MIDI/OMIMIDI_restart.flag
+client/servicios/MIDI/OMIMIDI_webui.pid
+

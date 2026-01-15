@@ -10,6 +10,13 @@
 </head>
 
 <body>
+    <div id="loadingOverlay">
+        <div class="spinner"></div>
+        <h2 id="loadingMessage">Processing...</h2>
+        <button id="emergencyUnlock" onclick="document.getElementById('loadingOverlay').style.display='none'"
+            title="Emergency Unlock"></button>
+    </div>
+
     <header>
         <div class="brand">
             <img src="/assets/omarpi.png" alt="OMI Logo">
@@ -27,43 +34,94 @@
             <section class="section">
                 <h2><i class="fas fa-network-wired"></i> Network Configuration</h2>
                 <form id="network-form">
-                    <div class="form-group">
-                        <label>Mode</label>
-                        <select id="net-mode" name="mode">
-                            <option value="dhcp" {{ 'selected' if network.mode=='dhcp' else '' }}>DHCP</option>
-                            <option value="static" {{ 'selected' if network.mode=='static' else '' }}>Static IP</option>
-                        </select>
-                    </div>
-                    <div id="static-config" style="display: {{ 'block' if network.mode == 'static' else 'none' }};">
-                        <div class="form-group">
-                            <label>IP Address</label>
-                            <input type="text" name="ip" value="{{ network.ip or '' }}" placeholder="192.168.1.100">
-                        </div>
-                        <div class="form-group">
-                            <label>Subnet Mask</label>
-                            <input type="text" name="mask" value="{{ network.mask or '' }}" placeholder="255.255.255.0">
-                        </div>
-                        <div class="form-group">
-                            <label>Gateway</label>
-                            <input type="text" name="gateway" value="{{ network.gateway or '' }}"
-                                placeholder="192.168.1.1">
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label>VLAN ID (Optional)</label>
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            <input type="number" id="vlan-id" name="vlan" value="{{ network.vlan or '' }}"
-                                placeholder="e.g., 10" style="width: 100px;" {{ 'disabled' if network.vlan_from_service
-                                else '' }}>
-                            <label class="checkbox-container"
-                                style="display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;">
-                                <input type="checkbox" id="vlan-from-service" name="vlan_from_service" value="true"
-                                    {{ 'checked' if network.vlan_from_service else '' }}
-                                    style="width: auto; margin: 0;">
-                                <span style="font-size: 14px; font-weight: 500;">Desde el servicio</span>
-                            </label>
+
+                    <!-- 1. Configuración General -->
+                    <div class="config-section">
+                        <h3>Configuración General</h3>
+                        <div class="compact-grid">
+                            <div class="form-group full">
+                                <label>Mode</label>
+                                <select id="net-mode" name="mode">
+                                    <option value="dhcp" {{ 'selected' if network.mode=='dhcp' else '' }}>DHCP</option>
+                                    <option value="static" {{ 'selected' if network.mode=='static' else '' }}>Static IP
+                                    </option>
+                                </select>
+                            </div>
+
+                            <!-- Increased gap to 30px to prevent overlapping -->
+                            <div id="static-config" class="full compact-grid"
+                                style="display: {{ 'grid' if network.mode == 'static' else 'none' }}; grid-template-columns: 1fr 1fr 1fr; gap: 30px;">
+                                <div class="form-group">
+                                    <label>IP Address</label>
+                                    <input type="text" name="ip" value="{{ network.ip or '' }}"
+                                        placeholder="192.168.1.100">
+                                </div>
+                                <div class="form-group">
+                                    <label>Subnet Mask</label>
+                                    <input type="text" name="mask" value="{{ network.mask or '' }}"
+                                        placeholder="255.255.255.0">
+                                </div>
+                                <div class="form-group">
+                                    <label>Gateway</label>
+                                    <input type="text" name="gateway" value="{{ network.gateway or '' }}"
+                                        placeholder="192.168.1.1">
+                                </div>
+                            </div>
                         </div>
                     </div>
+
+                    <!-- 2. Configuración VLAN -->
+                    <div class="config-section">
+                        <h3>Configuración VLAN</h3>
+                        <div class="compact-grid">
+                            <div class="form-group full">
+                                <label>VLAN ID</label>
+                                <div class="vlan-group">
+                                    <input type="number" id="vlan-id" name="vlan" value="{{ network.vlan or '' }}"
+                                        min="1" max="4094" class="vlan-input" {{ 'disabled' if network.vlan_from_service
+                                        else '' }}>
+
+                                    <label class="checkbox-container">
+                                        <input type="checkbox" id="vlan-from-service" name="vlan_from_service"
+                                            value="true" {{ 'checked' if network.vlan_from_service else '' }}>
+                                        <span class="checkbox-label">Desde el servicio</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- VLAN IP Mode -->
+                            <div class="form-group full">
+                                <label>VLAN IP Mode</label>
+                                <select id="vlan-mode" name="vlan_mode">
+                                    <option value="dhcp" {{ 'selected' if network.vlan_mode=='dhcp' else '' }}>DHCP
+                                        (Automático)</option>
+                                    <option value="static" {{ 'selected' if network.vlan_mode=='static' else '' }}>
+                                        Manual (Estático)</option>
+                                </select>
+                            </div>
+
+                            <!-- VLAN IP Fields -->
+                            <div id="vlan-static-config" class="full compact-grid"
+                                style="display: {{ 'grid' if network.vlan_mode == 'static' else 'none' }}; grid-template-columns: 1fr 1fr 1fr; gap: 30px;">
+                                <div class="form-group">
+                                    <label>VLAN IP</label>
+                                    <input type="text" name="vlan_ip" value="{{ network.vlan_ip or '' }}"
+                                        placeholder="VLAN IP">
+                                </div>
+                                <div class="form-group">
+                                    <label>VLAN Mask</label>
+                                    <input type="text" name="vlan_mask" value="{{ network.vlan_mask or '' }}"
+                                        placeholder="VLAN Netmask">
+                                </div>
+                                <div class="form-group">
+                                    <label>VLAN Gateway</label>
+                                    <input type="text" name="vlan_gateway" value="{{ network.vlan_gateway or '' }}"
+                                        placeholder="VLAN Gateway">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <button type="submit" class="btn btn-primary">Save & Apply</button>
                 </form>
             </section>
@@ -85,11 +143,17 @@
     <script>
         document.getElementById('net-mode').addEventListener('change', function (e) {
             document.getElementById('static-config').style.display =
-                e.target.value === 'static' ? 'block' : 'none';
+                e.target.value === 'static' ? 'grid' : 'none';
+        });
+
+        document.getElementById('vlan-mode').addEventListener('change', function (e) {
+            document.getElementById('vlan-static-config').style.display =
+                e.target.value === 'static' ? 'grid' : 'none';
         });
 
         document.getElementById('vlan-from-service').addEventListener('change', function (e) {
-            document.getElementById('vlan-id').disabled = e.target.checked;
+            const vlanInput = document.getElementById('vlan-id');
+            vlanInput.disabled = e.target.checked;
         });
 
         document.getElementById('network-form').addEventListener('submit', async function (e) {
@@ -100,8 +164,15 @@
             // Convert checkbox to boolean
             data.vlan_from_service = document.getElementById('vlan-from-service').checked;
 
-            // Ensure numeric VLAN
+            // Ensure numeric VLAN if present
             if (data.vlan) data.vlan = parseInt(data.vlan);
+            else data.vlan = null;
+
+            // If disabled (from service), we might still want to send the value if it exists in the input?
+            if (document.getElementById('vlan-id').disabled) {
+                const val = document.getElementById('vlan-id').value;
+                if (val) data.vlan = parseInt(val);
+            }
 
             try {
                 const res = await fetch('/api/network/config', {
@@ -126,6 +197,28 @@
                 console.error(err);
             }
         }
+
+        async function updateStatus() {
+            try {
+                const response = await fetch('/api/status');
+                if (!response.ok) return;
+                const data = await response.json();
+
+                const overlay = document.getElementById('loadingOverlay');
+                const msg = document.getElementById('loadingMessage');
+                const sysStatus = data.system_status || {};
+
+                if (sysStatus.is_busy) {
+                    overlay.style.display = 'flex';
+                    msg.textContent = sysStatus.busy_message || "Processing...";
+                } else {
+                    overlay.style.display = 'none';
+                }
+            } catch (e) {
+                console.error("Polling error:", e);
+            }
+        }
+        setInterval(updateStatus, 2000);
     </script>
 </body>
 

@@ -42,6 +42,93 @@
     /**
      * HOME PAGE LOGIC
      */
+    /**
+     * Shared Logger
+     */
+    function logToConsole(msg, type) {
+        var cb = document.getElementById('consoleBody');
+        if (!cb) return;
+        var div = document.createElement('div');
+        div.className = 'log-entry' + (type ? ' log-' + type : '');
+        div.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+        cb.appendChild(div);
+        cb.scrollTop = cb.scrollHeight;
+    }
+    // Expose globally for inline scripts if needed
+    window.logToConsole = logToConsole;
+
+    /**
+     * WebSocket Setup
+     */
+    function setupWS() {
+        var proto = (location.protocol === 'https:') ? 'wss' : 'ws';
+        var ws = new WebSocket(proto + '://' + location.host + '/ws');
+        ws.onmessage = function (ev) {
+            try {
+                var data = JSON.parse(ev.data);
+
+                // Manejo de logs de Ping
+                if (data.type === 'ping_log' && data.data) {
+                    var res = data.data;
+                    var consoleBody = document.getElementById('consoleBody');
+
+                    // Asegurar que el overlay sea visible si llega un log importante?
+                    // No forzamos display aquí para no ser intrusivos, 
+                    // pero el botón de ping ya lo abre.
+
+                    if (res.summary) {
+                        if (res.success > 0) {
+                            logToConsole('Resumen: ' + res.success + '/' + res.total + ' IPs alcanzadas.', 'success');
+                        } else {
+                            logToConsole('Resumen: Fallo total. Ninguna IP respondió.', 'error');
+                        }
+                        var pingBtn = document.getElementById('pingBtn');
+                        if (pingBtn) {
+                            pingBtn.disabled = false;
+                            pingBtn.textContent = 'Ping OSC (IGMP)';
+                        }
+                    } else if (res.error) {
+                        logToConsole('ERROR: ' + res.error, 'error');
+                        var pingBtn = document.getElementById('pingBtn');
+                        if (pingBtn) {
+                            pingBtn.disabled = false;
+                            pingBtn.textContent = 'Ping OSC (IGMP)';
+                        }
+                    } else {
+                        // Resultado individual
+                        if (res.type === 'broadcast') {
+                            logToConsole('BROADCAST: ' + res.ip + ' - ' + res.info, 'info');
+                        } else if (res.ok) {
+                            var prefix = res.discovered ? 'DESCUBIERTO: ' : 'EXITO: ';
+                            logToConsole(prefix + res.ip + ' respondió correctamente.', 'success');
+                        } else {
+                            var prefix = res.discovered ? 'DESCUBIERTO (Fallo): ' : 'ERROR: ';
+                            logToConsole(prefix + res.ip + ' falló. ' + (res.error || ''), 'error');
+                        }
+                    }
+                    return;
+                }
+
+                var batch = data.batch || [data];
+                batch.forEach(function (msg) {
+                    if (msg && (msg.route_idx !== undefined || msg.path !== undefined)) {
+                        var routeIdx = msg.route_idx ?? msg.routeIndex ?? msg.idx;
+                        var value = msg.value;
+                        var path = msg.path;
+                        var matched = applyValueByRoute(routeIdx, value);
+                        if (!matched) {
+                            applyValueByPath(path, value);
+                        }
+                    }
+                });
+            } catch (e) { }
+        };
+        ws.onclose = function () { setTimeout(setupWS, 1000); };
+    }
+
+    /**
+     * HOME PAGE LOGIC
+     */
     function initHome() {
         fetch('/state').then(function (r) { return r.json(); }).then(function (st) {
             Object.entries(st || {}).forEach(function (entry) {
@@ -55,29 +142,6 @@
                 }
             });
         }).catch(function () { });
-
-        (function setupWS() {
-            var proto = (location.protocol === 'https:') ? 'wss' : 'ws';
-            var ws = new WebSocket(proto + '://' + location.host + '/ws');
-            ws.onmessage = function (ev) {
-                try {
-                    var data = JSON.parse(ev.data);
-                    var batch = data.batch || [data];
-                    batch.forEach(function (msg) {
-                        if (msg && (msg.route_idx !== undefined || msg.path !== undefined)) {
-                            var routeIdx = msg.route_idx ?? msg.routeIndex ?? msg.idx;
-                            var value = msg.value;
-                            var path = msg.path;
-                            var matched = applyValueByRoute(routeIdx, value);
-                            if (!matched) {
-                                applyValueByPath(path, value);
-                            }
-                        }
-                    });
-                } catch (e) { }
-            };
-            ws.onclose = function () { setTimeout(setupWS, 1000); };
-        })();
     }
 
     /**
@@ -90,13 +154,13 @@
         var consoleBody = document.getElementById('consoleBody');
         var consoleClose = document.getElementById('consoleClose');
 
-        function logToConsole(msg, type) {
-            if (!consoleBody) return;
-            var div = document.createElement('div');
-            div.className = 'log-entry' + (type ? ' log-' + type : '');
-            div.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
-            consoleBody.appendChild(div);
-            consoleBody.scrollTop = consoleBody.scrollHeight;
+        // Exponer logToConsole globalmente para que el WS pueda usarlo (chapuza rápida)
+        // YA NO ES NECESARIO: logToConsole es compartido arriba.
+
+        if (consoleClose) {
+            consoleClose.addEventListener('click', function () {
+                consoleOverlay.style.display = 'none';
+            });
         }
 
         if (consoleClose) {
@@ -109,41 +173,26 @@
             pingBtn.addEventListener('click', function () {
                 consoleOverlay.style.display = 'flex';
                 consoleBody.innerHTML = '';
-                logToConsole('Iniciando Ping OSC (IGMP)...', 'info');
+                window.logToConsole('Iniciando Ping OSC (IGMP)...', 'info');
 
                 pingBtn.disabled = true;
-                var originalText = pingBtn.textContent;
                 pingBtn.textContent = 'Enviando…';
 
                 fetch('/ping_osc', { method: 'POST' })
                     .then(function (res) { return res.json(); })
                     .then(function (data) {
-                        if (data.details && data.details.length > 0) {
-                            data.details.forEach(function (res) {
-                                if (res.type === 'broadcast') {
-                                    logToConsole('BROADCAST: ' + res.ip + ' - ' + res.info, 'info');
-                                } else if (res.ok) {
-                                    var prefix = res.discovered ? 'DESCUBIERTO: ' : 'EXITO: ';
-                                    logToConsole(prefix + res.ip + ' respondió correctamente.', 'success');
-                                } else {
-                                    var prefix = res.discovered ? 'DESCUBIERTO (Fallo): ' : 'ERROR: ';
-                                    logToConsole(prefix + res.ip + ' falló. ' + (res.error || ''), 'error');
-                                }
-                            });
-                        }
-
                         if (data.ok) {
-                            logToConsole('Resumen: ' + data.success + '/' + data.total + ' IPs alcanzadas.', 'success');
+                            window.logToConsole('Solicitud enviada. Esperando resultados...', 'info');
                         } else {
-                            logToConsole('Resumen: Fallo total. Ninguna IP respondió.', 'error');
+                            window.logToConsole('Error al iniciar ping: ' + (data.err || 'Desconocido'), 'error');
+                            pingBtn.disabled = false;
+                            pingBtn.textContent = 'Ping OSC (IGMP)';
                         }
                     })
                     .catch(function (err) {
-                        logToConsole('Error de red: ' + err.message, 'error');
-                    })
-                    .finally(function () {
+                        window.logToConsole('Error de red: ' + err.message, 'error');
                         pingBtn.disabled = false;
-                        pingBtn.textContent = originalText;
+                        pingBtn.textContent = 'Ping OSC (IGMP)';
                     });
             });
         }
@@ -152,10 +201,14 @@
         var restartBtn = document.getElementById('reiniciarBtn');
         if (restartBtn) {
             restartBtn.addEventListener('click', function () {
-                if (confirm('Se reiniciará el servicio (Soft Restart), ¿desea continuar?')) {
-                    fetch('/restart', { method: 'POST' }).then(function () {
-                        window.location.href = '/restart';
-                    });
+                if (confirm('Se reiniciará el servicio completo (Parada -> Red -> Inicio). Esto tomará unos segundos.\n¿Desea continuar?')) {
+                    // Crear un form oculto para hacer POST y navegar
+                    var form = document.createElement('form');
+                    form.method = 'POST';
+                    form.action = '/restart_service';
+                    document.body.appendChild(form);
+                    form.submit();
+                    // VLAN Logic removed (always visible)
                 }
             });
         }
@@ -310,6 +363,7 @@
         var page = document.body.getAttribute('data-page') || '';
 
         initGlobalActivity();
+        setupWS();
 
         if (page === 'home') initHome();
         else if (page === 'config') initConfig();

@@ -1,8 +1,11 @@
-# Seguimiento periódico de métricas (CPU, temperatura, IPs) para el cliente.
-# REVISAR
-
+"""
+Monitor de Sistema (Heartbeat).
+Realiza el seguimiento periódico de métricas del sistema (CPU, temperatura) y de red (IPs, interfaces),
+notificando a los listeners registrados (como la UI).
+"""
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -10,11 +13,10 @@ import netifaces
 import psutil
 
 from logger import get_logger
+from structure_manager import get_structure_manager
 
-LOGGER = get_logger("omimidi.heartbeat")
-
-STRUCTURE_PATH = Path(__file__).resolve().parents[1] / "data" / "structure.json"
-STRUCTURE_LOCK_PATH = Path(__file__).resolve().parents[1] / "data" / "structure.json.lock"
+LOGGER = get_logger("omiclient.heartbeat")
+STRUCTURE_MANAGER = get_structure_manager()
 
 # ---------------- Vars de estado expuestas ----------------
 CpuUsage: Optional[float] = None  # %
@@ -27,51 +29,12 @@ _metrics_snapshot: Dict[str, Any] = {"cpu": None, "temp": None, "ifaces": []}
 _listeners: List[Callable[[Dict[str, Any]], None]] = []
 _listeners_lock = threading.Lock()
 
-_poll_interval: float = 1.0
-_structure_path: Path = STRUCTURE_PATH
+_poll_interval_fast: float = 1.0   # CPU / Temp
+_poll_interval_slow: float = 10.0  # Red
 
 _stop_event = threading.Event()
 _active_event = threading.Event()
 _heartbeat_thread: Optional[threading.Thread] = None
-
-
-# ---------------- Utils JSON ----------------
-def _read_json(path: Path) -> Optional[Dict[str, Any]]:
-    try:
-        if not path.exists():
-            return None
-        with path.open("r", encoding="utf-8") as f:
-            content = f.read().strip()
-            if not content:
-                return None
-            return json.loads(content)
-    except Exception:
-        return None
-
-
-def _write_json(path: Path, data: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-# Acepta formatos antiguos (lista de strings) o nuevos (lista de objetos)
-def _normalize_json_interfaces(val) -> List[Dict[str, Optional[str]]]:
-    out: List[Dict[str, Optional[str]]] = []
-    if not isinstance(val, list):
-        return out
-    for item in val:
-        if isinstance(item, dict):
-            out.append(
-                {
-                    "name": item.get("name") or item.get("iface"),
-                    "ip": item.get("ip"),
-                    "netmask": item.get("netmask"),
-                }
-            )
-        elif isinstance(item, str):
-            out.append({"name": None, "ip": item, "netmask": None})
-    return out
 
 
 # ---------------- Lecturas del sistema ----------------
@@ -90,15 +53,22 @@ def _get_ip_info() -> List[Dict[str, Optional[str]]]:
     [{"name":"eth0","ip":"192.168.1.23","netmask":"255.255.255.0"}, ...]
     """
     out: List[Dict[str, Optional[str]]] = []
-    for iface in netifaces.interfaces():
-        addrs = netifaces.ifaddresses(iface)
-        if netifaces.AF_INET not in addrs:
-            continue
-        for addr in addrs[netifaces.AF_INET]:
-            ip = addr.get("addr")
-            netmask = addr.get("netmask")
-            if ip and not str(ip).startswith("127."):
-                out.append({"name": iface, "ip": ip, "netmask": netmask})
+    try:
+        for iface in netifaces.interfaces():
+            addrs = netifaces.ifaddresses(iface)
+            if netifaces.AF_INET in addrs:
+                for addr in addrs[netifaces.AF_INET]:
+                    ip = addr.get("addr")
+                    netmask = addr.get("netmask")
+                    if ip and not str(ip).startswith("127."):
+                        out.append({"name": iface, "ip": ip, "netmask": netmask})
+            else:
+                # Incluir interfaz incluso si no tiene IP (ej. VLAN raw o trunk)
+                if iface != "lo":
+                    out.append({"name": iface, "ip": None, "netmask": None})
+    except Exception as e:
+        LOGGER.error(f"Error leyendo interfaces: {e}")
+    
     out.sort(key=lambda d: (d.get("name") or "", d.get("ip") or ""))
     return out
 
@@ -115,14 +85,53 @@ def _enrich_ip_info(ip_info: List[Dict[str, Optional[str]]]) -> List[Dict[str, A
                 "ip": ip,
                 "netmask": netmask,
                 "cidr": f"{ip}/{prefix}" if (ip and prefix is not None) else (ip or None),
-                "vlan": None, # Heartbeat doesn't detect VLANs yet, but keeps the key
+                "vlan": None, # Heartbeat aún no detecta VLANs, pero mantiene la clave
             }
         )
     return enriched
 
+def _determine_main_nic(ifaces: List[Dict[str, Any]]) -> Optional[str]:
+    """
+    Determina la interfaz principal basada en prioridad:
+    eth0 > wlan0 > eth0.vlan > otras
+    Retorna el nombre de la interfaz o None.
+    """
+    # Mapa de prioridades
+    # 0: eth0 (física cableada)
+    # 1: wlan0 (wifi)
+    # 2: eth0.X (vlan)
+    # 3: otras
+    
+    candidates = []
+    
+    for iface in ifaces:
+        name = iface.get("name", "")
+        ip = iface.get("ip")
+        
+        # Solo consideramos interfaces con IP para ser "Main NIC"
+        if not ip:
+            continue
+            
+        priority = 99
+        if name == "eth0":
+            priority = 0
+        elif name == "wlan0":
+            priority = 1
+        elif name.startswith("eth0."):
+            priority = 2
+        
+        candidates.append((priority, name))
+    
+    if not candidates:
+        return None
+        
+    # Ordenar por prioridad (menor es mejor)
+    candidates.sort(key=lambda x: x[0])
+    return candidates[0][1]
+
 
 def _get_cpu_usage() -> float:
-    return float(psutil.cpu_percent(interval=0.2))
+    return float(psutil.cpu_percent(interval=None)) # Interval None es no bloqueante si se llama periódicamente
 
 
 def _get_temp_c() -> Optional[float]:
@@ -186,52 +195,74 @@ def _notify_listeners(snapshot: Dict[str, Any]) -> None:
             continue
 
 
-
-
-
 # ---------------- Cálculo principal ----------------
-def _compute_snapshot(path: Path) -> Dict[str, Any]:
-    from file_lock import file_lock
-    with file_lock(STRUCTURE_LOCK_PATH):
-        data: Optional[Dict[str, Any]] = _read_json(path)
+def _compute_fast_metrics() -> Dict[str, Any]:
+    """Calcula métricas rápidas (CPU, Temp)."""
+    cpu = _get_cpu_usage()
+    temp = _get_temp_c()
+    
+    if cpu is not None and cpu > 50.0:
+        try:
+            # Solo logueamos si es muy alto para no saturar
+            if cpu > 80.0:
+                proc_cpu = psutil.Process().cpu_percent(interval=None)
+                LOGGER.warning(f"CPU crítica: {cpu:.1f}% (Sistema)")
+        except Exception:
+            pass
+            
+    if temp is not None and temp > 75.0:
+        LOGGER.warning(f"Temperatura crítica: {temp:.1f}°C")
+        
+    return {"cpu": cpu, "temp": temp}
 
-        cpu = _get_cpu_usage()
-        temp = _get_temp_c()
-        if cpu is not None and cpu > 50.0:
-            LOGGER.warning(f"CPU elevada: {cpu:.1f}%")
-        if temp is not None and temp > 60.0:
-            LOGGER.warning(f"Temperatura elevada: {temp:.1f}°C")
-        ip_info = _get_ip_info()
-
-        if data is not None:
-            prev_ifaces = _normalize_json_interfaces(data.get("network", {}).get("interfaces"))
-            prev_ips = [entry.get("ip") for entry in prev_ifaces if entry.get("ip")]
-            now_ips = [entry.get("ip") for entry in ip_info if entry.get("ip")]
-
-            if sorted(prev_ips) != sorted(now_ips):
-                data.setdefault("network", {})["interfaces"] = _enrich_ip_info(ip_info)
-                try:
-                    _write_json(path, data)
-                except Exception:
-                    pass
-
-    return {
-        "cpu": cpu,
-        "temp": temp,
-        "ifaces": _enrich_ip_info(ip_info),
-    }
+def _compute_network_metrics() -> Dict[str, Any]:
+    """Calcula métricas de red (lento)."""
+    ip_info = _get_ip_info()
+    enriched_ifaces = _enrich_ip_info(ip_info)
+    
+    # Determinar Main NIC
+    main_nic = _determine_main_nic(enriched_ifaces)
+    
+    # Actualizar StructureManager
+    # El manager maneja la verificación internamente para evitar escrituras en disco si es idéntico
+    STRUCTURE_MANAGER.update_network_interfaces(enriched_ifaces, main_nic=main_nic)
+    
+    return {"ifaces": enriched_ifaces, "main_nic": main_nic}
 
 
 def _heartbeat_loop() -> None:
     last_active_state: Optional[bool] = None
+    
+    last_network_check = 0.0
+    
+    # Init psutil cpu
+    psutil.cpu_percent(interval=None)
 
     while not _stop_event.is_set():
         is_active = _active_event.is_set()
+        now = time.time()
 
         if is_active:
             try:
-                snapshot = _compute_snapshot(_structure_path)
+                # 1. Métricas Rápidas (Siempre)
+                fast_metrics = _compute_fast_metrics()
+                
+                # 2. Métricas Lentas (Intervalo)
+                network_metrics = {}
+                if now - last_network_check >= _poll_interval_slow:
+                    network_metrics = _compute_network_metrics()
+                    last_network_check = now
+                else:
+                    # Reutilizar últimas ifaces conocidas de memoria si es posible
+                    # Idealmente queremos que el snapshot siempre tenga datos completos.
+                    # Tomemos de _metrics_snapshot protegido por lock
+                    with _metrics_lock:
+                        network_metrics["ifaces"] = _metrics_snapshot.get("ifaces", [])
+                
+                # Fusionar
+                snapshot = {**fast_metrics, **network_metrics}
                 _set_metrics(snapshot)
+                
             except Exception as exc:
                 LOGGER.error(f"Error capturando métricas del heartbeat: {exc}")
         else:
@@ -240,7 +271,7 @@ def _heartbeat_loop() -> None:
 
         last_active_state = is_active
 
-        if _stop_event.wait(_poll_interval):
+        if _stop_event.wait(_poll_interval_fast):
             break
 
     _set_metrics(_empty_snapshot())
@@ -248,16 +279,14 @@ def _heartbeat_loop() -> None:
 
 # ---------------- API pública ----------------
 def start_heartbeat(
-    path: Path = STRUCTURE_PATH,
+    path: Optional[Path] = None, # Obsoleto
     interval: float = 1.0,
     start_active: bool = True,
 ) -> None:
-    """Arranca (o reinicia) el hilo si no está vivo y actualiza la configuración."""
-    LOGGER.info(f"Iniciando heartbeat: path={path}, intervalo={float(interval):.2f}s, activo={start_active}")
-    global _heartbeat_thread, _poll_interval, _structure_path, _stop_event, _active_event
+    """Arranca (o reinicia) el hilo si no está vivo."""
+    global _heartbeat_thread, _poll_interval_fast, _stop_event, _active_event
 
-    _structure_path = path
-    _poll_interval = max(0.2, float(interval))
+    _poll_interval_fast = max(0.2, float(interval))
 
     if _heartbeat_thread and _heartbeat_thread.is_alive():
         if start_active:
@@ -266,6 +295,8 @@ def start_heartbeat(
             pause_heartbeat()
         return
 
+    LOGGER.info(f"Iniciando heartbeat híbrido: Rápido={_poll_interval_fast}s, Lento={_poll_interval_slow}s")
+    
     _stop_event = threading.Event()
     _active_event = threading.Event()
 
@@ -300,16 +331,11 @@ def stop_heartbeat() -> None:
     LOGGER.info("Heartbeat detenido")
     global _heartbeat_thread
 
-    # Clear network interfaces in structure.json
+    # Limpiar interfaces de red en structure.json vía Manager
     try:
-        from file_lock import file_lock
-        with file_lock(STRUCTURE_LOCK_PATH):
-            data = _read_json(_structure_path)
-            if data and "network" in data:
-                data["network"]["interfaces"] = []
-                _write_json(_structure_path, data)
+        STRUCTURE_MANAGER.update_network_interfaces([])
     except Exception as e:
-        LOGGER.error(f"Failed to clear network info on stop: {e}")
+        LOGGER.error(f"Fallo al limpiar info de red al detener: {e}")
 
     if not _heartbeat_thread:
         _set_metrics(_empty_snapshot())
@@ -317,7 +343,7 @@ def stop_heartbeat() -> None:
 
     _active_event.clear()
     _stop_event.set()
-    _heartbeat_thread.join(timeout=_poll_interval + 1.0)
+    _heartbeat_thread.join(timeout=_poll_interval_fast + 1.0)
     _heartbeat_thread = None
     _set_metrics(_empty_snapshot())
 
@@ -344,3 +370,12 @@ def get_heartbeat_snapshot() -> Dict[str, Any]:
             "temp": _metrics_snapshot["temp"],
             "ifaces": list(_metrics_snapshot["ifaces"]),
         }
+
+def force_update_interfaces() -> None:
+    """Fuerza una lectura inmediata de las interfaces y actualiza structure.json."""
+    try:
+        # Solo llamar a la lógica de computación interna
+        _compute_network_metrics()
+        LOGGER.info("Interfaces de red actualizadas (Forzado)")
+    except Exception as e:
+        LOGGER.error(f"Error actualizando interfaces: {e}")

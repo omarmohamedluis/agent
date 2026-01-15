@@ -12,7 +12,9 @@
       "logs": {
         "stdout": "logs/services/midi.log",
         "stderr": "logs/services/midi.log"
-      }
+      },
+      "web_port": 9001,
+      "description": "Traduce eventos MIDI a OSC y gestiona la Web UI."
     },
     {
       "id": "satellite",
@@ -26,7 +28,8 @@
       "logs": {
         "stdout": "logs/services/satellitelog.out",
         "stderr": "logs/services/satellitelog.err"
-      }
+      },
+      "description": "Servicio de integraci\u00f3n Companion Satellite."
     },
     {
       "id": "OSCnum",
@@ -40,7 +43,8 @@
       "logs": {
         "stdout": "logs/services/osclog.out",
         "stderr": "logs/services/osclog.err"
-      }
+      },
+      "description": "Gateway OSC."
     }
   ]
 }
