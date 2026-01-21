@@ -233,21 +233,33 @@ def update_standard_ui(snapshot: Dict[str, Any]) -> None:
     temp = snapshot.get("temp")
     ifaces = snapshot.get("ifaces") or []
 
-    # Elegir interfaz primaria: primera Wi-Fi; si no, la primera
+    # Elegir interfaz primaria con prioridad:
+    # 1. Ethernet Física (eth0)
+    # 2. WiFi (wlan0)
+    # 3. VLAN (eth0.X)
+    # 4. Otros
     primary = None
-    for x in ifaces:
-        if _is_wifi_iface(x.get("name", "")):
-            primary = x
-            break
-    if primary is None:
-        primary = ifaces[0] if ifaces else None
+    
+    def _get_prio(iface):
+        name = iface.get("name", "").lower()
+        if _is_eth_iface(name) and "." not in name: return 0
+        if _is_wifi_iface(name): return 1
+        if _is_eth_iface(name) and "." in name: return 2
+        return 3
+
+    if ifaces:
+        sorted_ifaces = sorted(ifaces, key=lambda x: (_get_prio(x), x.get("name", "")))
+        primary = sorted_ifaces[0]
 
     if primary:
         iface_name = primary.get("name") or ""
         if _is_wifi_iface(iface_name):
             kind = "WIFI"
         elif _is_eth_iface(iface_name):
-            kind = "ETH"
+            if "." in iface_name:
+                kind = "VLAN"
+            else:
+                kind = "ETH"
         else:
             kind = "NET"
         ip_cidr = primary.get("cidr") or primary.get("ip") or "-"

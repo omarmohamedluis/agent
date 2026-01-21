@@ -119,7 +119,14 @@ async def start_service(svc_id: str):
     # 1. Habilitar Servicio en Estructura (para que net_manager lo vea)
     STRUCTURE_MANAGER.update_service_state(svc_id, enabled=True)
     
-    # 2. Configurar Red
+    # 2. Sincronizar Metadatos (CRÍTICO: Hacerlo ANTES de configurar red)
+    # Esto asegura que structure.json tenga la VLAN/IP correcta de la config activa
+    try:
+        await asyncio.to_thread(STRUCTURE_MANAGER.sync_service_metadata, svc_id)
+    except Exception as e:
+        LOGGER.error(f"Fallo al sincronizar metadatos previos al inicio para {svc_id}: {e}")
+
+    # 3. Configurar Red
     try:
         from net_manager import update_nics
         update_nics()
@@ -134,15 +141,22 @@ async def start_service(svc_id: str):
 
 @app.post("/api/services/{svc_id}/stop")
 async def stop_service(svc_id: str):
+    # Verificar si está en modo configuración ANTES de detenerlo (porque stop limpia el flag)
+    is_config_mode = svc_id in service_manager.config_mode_services
+
     # 1. Detener Proceso
     if service_manager.stop_service(svc_id):
         # 2. Actualizar Red (Limpieza)
-        # El gestor de servicios ya lo deshabilitó en la estructura si se detuvo
-        try:
-            from net_manager import update_nics
-            update_nics()
-        except Exception as e:
-            LOGGER.error(f"Fallo al actualizar red tras detener servicio {svc_id}: {e}")
+        # Si estaba en modo config, NO tocamos la red (ya que no se aplicó nada)
+        if is_config_mode:
+            LOGGER.info(f"Servicio {svc_id} detenido (Modo Config). Saltando actualización de red.")
+        else:
+            # El gestor de servicios ya lo deshabilitó en la estructura si se detuvo
+            try:
+                from net_manager import update_nics
+                update_nics()
+            except Exception as e:
+                LOGGER.error(f"Fallo al actualizar red tras detener servicio {svc_id}: {e}")
             
         return {"status": "stopped", "id": svc_id}
     raise HTTPException(status_code=500, detail="Fallo al detener servicio")
@@ -164,6 +178,9 @@ async def reload_service_config(svc_id: str):
     try:
         # 1. Detener Servicio (Bloqueante)
         # Usamos asyncio.to_thread para evitar bloquear el bucle de eventos
+        # Esperar un poco para que el servicio que solicitó el reload pueda terminar su request
+        await asyncio.sleep(2.0)
+        
         if not await asyncio.to_thread(service_manager.stop_service, svc_id):
             LOGGER.warning(f"No se pudo detener servicio {svc_id} (¿quizás no corría?), procediendo con sync...")
         
@@ -209,6 +226,42 @@ async def service_message(svc_id: str, message: dict):
     """
     LOGGER.info(f"Mensaje de servicio {svc_id}: {message}")
     return {"status": "received", "id": svc_id}
+
+# --- ENDPOINTS GESTIÓN DE CONFIGURACIONES (MULTI-CONFIG) ---
+@app.get("/api/services/{svc_id}/configs")
+async def list_service_configs(svc_id: str):
+    configs = service_manager.get_configs(svc_id)
+    return {"configs": configs}
+
+@app.post("/api/services/{svc_id}/config/select")
+async def select_service_config(svc_id: str, payload: dict):
+    config_name = payload.get("name")
+    if not config_name:
+        raise HTTPException(status_code=400, detail="Nombre de configuración requerido")
+        
+    if service_manager.select_config(svc_id, config_name):
+        # Sincronizar metadatos inmediatamente después de cargar
+        STRUCTURE_MANAGER.sync_service_metadata(svc_id)
+        return {"status": "selected", "config": config_name}
+    raise HTTPException(status_code=500, detail="Fallo al seleccionar configuración")
+
+@app.post("/api/services/{svc_id}/config/save")
+async def save_service_config(svc_id: str, payload: dict):
+    config_name = payload.get("name")
+    if not config_name:
+        raise HTTPException(status_code=400, detail="Nombre de configuración requerido")
+        
+    if service_manager.save_config_as(svc_id, config_name):
+        return {"status": "saved", "config": config_name}
+    raise HTTPException(status_code=500, detail="Fallo al guardar configuración")
+
+@app.post("/api/services/{svc_id}/configure")
+async def configure_service(svc_id: str):
+    """Inicia el servicio en modo configuración (Offline)."""
+    # Verificar que no haya otros servicios corriendo (el manager ya lo hace, pero bueno)
+    if service_manager.start_config_mode(svc_id):
+        return {"status": "config_mode_started", "id": svc_id}
+    raise HTTPException(status_code=500, detail="Fallo al iniciar modo configuración")
 
 # --- ENDPOINTS VISOR DE LOGS ---
 @app.get("/api/logs/list")

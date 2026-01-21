@@ -35,7 +35,11 @@
       "vlan_mode": "dhcp",
       "vlan_ip": "",
       "vlan_mask": "",
-      "vlan_gateway": ""
+      "vlan_gateway": "",
+      "ip_mode": "dhcp",
+      "ip": "",
+      "mask": "",
+      "gateway": ""
     },
     {
       "name": "satellite",
@@ -48,7 +52,11 @@
       "vlan_mode": "dhcp",
       "vlan_ip": "",
       "vlan_mask": "",
-      "vlan_gateway": ""
+      "vlan_gateway": "",
+      "ip_mode": "dhcp",
+      "ip": "",
+      "mask": "",
+      "gateway": ""
     },
     {
       "name": "OSCnum",
@@ -61,7 +69,11 @@
       "vlan_mode": "dhcp",
       "vlan_ip": "",
       "vlan_mask": "",
-      "vlan_gateway": ""
+      "vlan_gateway": "",
+      "ip_mode": "dhcp",
+      "ip": "",
+      "mask": "",
+      "gateway": ""
     }
   ]
 }

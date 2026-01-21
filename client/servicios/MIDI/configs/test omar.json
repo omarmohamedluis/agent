@@ -1,0 +1,33 @@
+{
+  "file_info": {
+    "name": "test omar",
+    "ui_port": 9001,
+    "updated_at": "2026-01-20T14:44:28.044768+00:00"
+  },
+  "source": {
+    "midi_input": "APC40 mkII:APC40 mkII MIDI 1 24:0"
+  },
+  "net": {
+    "vlan": 10,
+    "vlan_active": true,
+    "ip_mode": "dhcp",
+    "ip": "192.168.100.10",
+    "mask": "255.255.255.0",
+    "gateway": ""
+  },
+  "osc": {
+    "ips": [
+      "30.0.10.255"
+    ],
+    "port": 7401
+  },
+  "routes": [
+    {
+      "type": "cc",
+      "osc": "/test/1",
+      "vtype": "float",
+      "cc": 7,
+      "channel": 0
+    }
+  ]
+}

@@ -52,7 +52,8 @@
         <aside class="sidebar">
             <h3>Services</h3>
             {% for id, svc in services.items() %}
-            <div class="service-card {{ 'running' if svc.running else '' }}" data-id="{{ id }}">
+            <div class="service-card {{ 'running' if svc.running else '' }}" data-id="{{ id }}"
+                data-active-config="{{ svc.active_config }}">
                 <div class="service-header">
                     <span class="service-name">{{ svc.display_name }}</span>
                     {% if svc.running %}
@@ -71,6 +72,17 @@
                         <i class="fas fa-play"></i> Start
                     </button>
                     {% endif %}
+                </div>
+                <!-- Config Area -->
+                <div class="service-config-area" style="margin-top: 10px; display: flex; gap: 5px;">
+                    <select id="config-select-{{ id }}" class="config-select"
+                        onchange="selectConfig('{{ id }}', this.value)" disabled>
+                        <option value="default">Loading...</option>
+                    </select>
+                    <button id="btn-config-{{ id }}" class="btn btn-config" onclick="startConfigMode('{{ id }}')"
+                        title="Configure (Offline)">
+                        <i class="fas fa-cog"></i>
+                    </button>
                 </div>
             </div>
             {% endfor %}
@@ -242,9 +254,20 @@
                 const services = data.services;
                 let newActiveService = null;
 
+                if (typeof window.serviceStates === 'undefined') {
+                    window.serviceStates = {};
+                }
+
                 for (const [id, svc] of Object.entries(services)) {
                     const card = document.querySelector(`.service-card[data-id="${id}"]`);
                     if (!card) continue;
+
+                    // Detectar parada del servicio para recargar configs
+                    if (window.serviceStates[id] && window.serviceStates[id].running && !svc.running) {
+                        console.log(`Service ${id} stopped. Refreshing configs...`);
+                        loadServiceConfigs(id, svc.active_config);
+                    }
+                    window.serviceStates[id] = svc;
 
                     // Update running class
                     if (svc.running) {
@@ -261,10 +284,23 @@
 
                     // Update button
                     const actionArea = card.querySelector('.service-actions');
+                    const configSelect = document.getElementById(`config-select-${id}`);
+                    const configBtn = document.getElementById(`btn-config-${id}`);
+
                     if (svc.running) {
-                        actionArea.innerHTML = `<button class="btn btn-stop" onclick="controlService('${id}', 'stop')"><i class="fas fa-stop"></i> Stop</button>`;
+                        if (svc.config_mode) {
+                            actionArea.innerHTML = `<button class="btn btn-stop" style="background-color: #e67e22;" onclick="controlService('${id}', 'stop')"><i class="fas fa-sign-out-alt"></i> Exit Offline</button>`;
+                        } else {
+                            actionArea.innerHTML = `<button class="btn btn-stop" onclick="controlService('${id}', 'stop')"><i class="fas fa-stop"></i> Stop</button>`;
+                        }
+                        // Deshabilitar config mientras corre
+                        if (configSelect) configSelect.disabled = true;
+                        if (configBtn) configBtn.disabled = true;
                     } else {
                         actionArea.innerHTML = `<button class="btn btn-start" onclick="controlService('${id}', 'start')"><i class="fas fa-play"></i> Start</button>`;
+                        // Habilitar config si está parado
+                        if (configSelect) configSelect.disabled = false;
+                        if (configBtn) configBtn.disabled = false;
                     }
                 }
 
@@ -276,9 +312,24 @@
                     if (headerRefreshBtn) headerRefreshBtn.style.display = 'inline-flex';
                     if (newActiveService.id !== currentActiveServiceId) {
                         currentActiveServiceId = newActiveService.id;
+
+                        // Mostrar estado de carga
                         contentArea.innerHTML = `
-                            <iframe id="serviceIframe" src="http://${systemIp}:${newActiveService.web_port}"></iframe>
+                            <div class="placeholder">
+                                <div class="spinner"></div>
+                                <p>Conectando con ${newActiveService.display_name}...</p>
+                            </div>
                         `;
+
+                        // Esperar 1.5s antes de cargar el iframe para dar tiempo al servicio
+                        setTimeout(() => {
+                            // Verificar que sigue siendo el servicio activo
+                            if (currentActiveServiceId === newActiveService.id) {
+                                contentArea.innerHTML = `
+                                    <iframe id="serviceIframe" src="http://${systemIp}:${newActiveService.web_port}"></iframe>
+                                `;
+                            }
+                        }, 1500);
                     }
                 } else {
                     if (headerRefreshBtn) headerRefreshBtn.style.display = 'none';
@@ -302,6 +353,89 @@
                 console.error("Polling error:", e);
             }
         }
+
+        // --- Config Management ---
+        async function loadServiceConfigs(svcId, activeConfig) {
+            const select = document.getElementById(`config-select-${svcId}`);
+            if (!select) return;
+
+            try {
+                const response = await fetch(`/api/services/${svcId}/configs`);
+                const data = await response.json();
+                const configs = data.configs || [];
+
+                // Guardar selección actual o usar la activa del backend
+                const current = select.value !== "default" ? select.value : activeConfig;
+
+                select.innerHTML = '';
+                // Siempre opción default/current si no hay nada
+                if (configs.length === 0) {
+                    const opt = document.createElement('option');
+                    opt.value = "default";
+                    opt.textContent = "Default";
+                    select.appendChild(opt);
+                } else {
+                    configs.forEach(c => {
+                        const opt = document.createElement('option');
+                        opt.value = c;
+                        opt.textContent = c;
+                        select.appendChild(opt);
+                    });
+                }
+
+                // Restaurar selección si existe, o seleccionar la primera
+                if (current && Array.from(select.options).some(o => o.value === current)) {
+                    select.value = current;
+                }
+
+                select.disabled = false;
+            } catch (e) {
+                console.error(`Error loading configs for ${svcId}:`, e);
+                select.innerHTML = '<option>Error</option>';
+            }
+        }
+
+        async function selectConfig(svcId, configName) {
+            try {
+                const response = await fetch(`/api/services/${svcId}/config/select`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: configName })
+                });
+                if (!response.ok) throw new Error("Failed to select config");
+                // Feedback visual?
+            } catch (e) {
+                alert("Error selecting config: " + e.message);
+            }
+        }
+
+        async function startConfigMode(svcId) {
+            if (!confirm(`Enter Configuration Mode for ${svcId}?\nThis will stop other services.`)) return;
+
+            isManualActionPending = true;
+            const overlay = document.getElementById('loadingOverlay');
+            const msg = document.getElementById('loadingMessage');
+            overlay.style.display = 'flex';
+            msg.textContent = "Starting Config Mode...";
+
+            try {
+                const response = await fetch(`/api/services/${svcId}/configure`, { method: 'POST' });
+                if (!response.ok) throw new Error("Failed to start config mode");
+            } catch (e) {
+                alert("Error: " + e.message);
+            } finally {
+                isManualActionPending = false;
+            }
+        }
+
+        // Cargar configs al inicio
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.service-card').forEach(card => {
+                const id = card.dataset.id;
+                const activeConfig = card.dataset.activeConfig || "Default";
+                loadServiceConfigs(id, activeConfig);
+            });
+        });
 
         // Start Polling
         setInterval(updateStatus, 2000);

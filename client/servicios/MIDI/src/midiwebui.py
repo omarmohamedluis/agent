@@ -38,13 +38,26 @@ from omimidi_logger import get_logger
 LOGGER = get_logger("omimidi.webui")
 
 BASE_DIR         = Path(__file__).resolve().parents[1]
-MAP_FILE         = BASE_DIR / "OMIMIDI_map.json"
+_env_config = os.environ.get("OMI_CONFIG_PATH")
+if _env_config:
+    MAP_FILE = Path(_env_config).resolve()
+else:
+    MAP_FILE = BASE_DIR / "configs" / "Default.json"
 LEARN_REQ_FILE   = BASE_DIR / "OMIMIDI_learn_request.json"
 STATE_FILE       = BASE_DIR / "OMIMIDI_state.json"
 RESTART_REQ_FILE = BASE_DIR / "OMIMIDI_restart.flag"
 
 # Backend fijo (no editable)
 mido.set_backend("mido.backends.rtmidi")
+
+# MODO CONFIGURACIÓN (OFFLINE)
+IS_CONFIG_MODE = os.environ.get("OMI_CONFIG_MODE") == "1"
+if IS_CONFIG_MODE:
+    LOGGER.info("⚠️ EJECUTANDO EN MODO CONFIGURACIÓN (OFFLINE) ⚠️")
+    # En modo config, no abrimos puertos MIDI reales ni OSC
+    # Podríamos usar un backend dummy si mido lo permite, o simplemente no abrir puertos en omimidi_core
+    # Pero como omimidi_core se importa, debemos manejarlo allí o aquí.
+    # Por ahora, asumiremos que el core verificará esta variable o nosotros evitaremos llamarlo.
 
 # Estado en memoria para evitar I/O excesivo
 MEMORY_STATE = {}
@@ -108,10 +121,15 @@ def persist_map(data: Dict[str, Any], restart_service: bool = True) -> None:
     
     # 1. Guardado local (bloqueante para asegurar consistencia)
     save_json(MAP_FILE, data)
+    LOGGER.info(f"Configuración guardada en {MAP_FILE}")
 
     # 2. Tareas lentas (red, subprocess) en hilo secundario
     def _background_sync():
         try:
+            if IS_CONFIG_MODE:
+                LOGGER.info("Modo Configuración: Saltando sincronización de red y recarga.")
+                return
+
             push_map_to_server(data, source="midiwebui")
             
             if restart_service:
@@ -200,15 +218,18 @@ def get_identity_host() -> str:
 def get_template_context(active: str = "home", extra_data: dict = None) -> dict:
     """Genera el contexto base para las plantillas."""
     host_label = get_identity_host()
+    
+    nav_items = [("home", "Home", "/"), ("config", "Configuración", "/config")]
+    if IS_CONFIG_MODE:
+        nav_items = [("config", "Configuración", "/config")]
+
     context = {
         "request": None,  # Se reemplazará en cada ruta
         "active": active,
         "host": host_label,
         "title": f"OMIMIDI @ {host_label} Web UI",
-        "nav_items": [
-            ("home", "Home", "/"),
-            ("config", "Configuración", "/config")
-        ]
+        "is_config_mode": IS_CONFIG_MODE,
+        "nav_items": nav_items
     }
     if extra_data:
         context.update(extra_data)
@@ -219,6 +240,9 @@ def get_template_context(active: str = "home", extra_data: dict = None) -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
+    if IS_CONFIG_MODE:
+        return RedirectResponse("/config", status_code=303)
+
     data = get_map()
     context = get_template_context(active="home")
     context["request"] = request
@@ -254,7 +278,8 @@ async def config_page(request: Request):
         "vlan_mode": data.get("net", {}).get("ip_mode", "dhcp"),
         "vlan_ip": data.get("net", {}).get("ip", ""),
         "vlan_mask": data.get("net", {}).get("mask", ""),
-        "vlan_gateway": data.get("net", {}).get("gateway", "")
+        "vlan_gateway": data.get("net", {}).get("gateway", ""),
+        "existing_configs": [f.stem for f in (BASE_DIR / "configs").glob("*.json")]
     })
     
     # Renderizar config.html
@@ -306,7 +331,7 @@ async def add_route_learn_page(request: Request):
 @app.post("/add_route")
 async def add_route(
     rtype: str = Form(...),
-    num: int = Form(...),
+    num: int = Form(0),
     channel: str = Form(""),
     osc: str = Form(...),
     vtype: str = Form(...),
@@ -397,7 +422,7 @@ async def edit_route_page(idx: int, request: Request):
 async def edit_route_save(
     idx: int,
     rtype: str = Form(...),
-    num: int = Form(...),
+    num: int = Form(0),
     channel: str = Form(""),
     osc: str = Form(...),
     vtype: str = Form(...),
@@ -697,8 +722,8 @@ def restart_service_endpoint(request: Request):
     persist_map(data, restart_service=True)
     return restart_page(request, "Reiniciando servicio (Ciclo completo)...")
 
-@app.post("/config/save")
-def save_config(
+@app.post("/api/config/save")
+async def save_config(
     midi_input: str = Form(""), 
     osc_port: str = Form(""),
     osc_ips: str = Form(""), 
@@ -718,6 +743,7 @@ def save_config(
     map_const: str = Form("")
 ):
     """Guarda la configuración general y opcionalmente añade un nuevo mapeo."""
+    global MAP_FILE
     data = get_map()
     
     # Guardar configuración general
@@ -769,49 +795,45 @@ def save_config(
             continue
     data["osc"]["ips"] = valid_ips or ["127.0.0.1"]
 
-    # Procesar nuevo mapeo si se proporcionaron los datos necesarios
-    if all([map_type, map_num, map_osc]):
-        try:
-            map_num_int = int(map_num)
-            if not (0 <= map_num_int <= 127):
-                raise ValueError("Número MIDI fuera de rango (0-127)")
+    # --- Lógica de Guardado y Sobreescritura ---
+    new_name = data["file_info"]["name"]
+    target_file = BASE_DIR / "configs" / f"{new_name}.json"
+    
+    # Verificar si estamos cambiando de archivo
+    if target_file.resolve() != MAP_FILE.resolve():
+        if target_file.exists():
+            # TODO: Recibir flag de confirmación desde el frontend
+            # Por ahora, si existe, logueamos warning pero permitimos (comportamiento "Save As")
+            # O mejor, si el usuario pide warning, deberíamos lanzar error si no hay confirmación.
+            # Para simplificar en este paso, asumimos que si cambia el nombre es intencional.
+            LOGGER.warning(f"Sobreescribiendo configuración existente: {new_name}")
+    
+    # Actualizar active_config.txt para que persista el cambio de selección
+    try:
+        active_txt = BASE_DIR / "active_config.txt"
+        active_txt.write_text(new_name, encoding="utf-8")
+    except Exception as e:
+        LOGGER.error(f"No se pudo actualizar active_config.txt: {e}")
 
-            new_route = {
-                "type": map_type,
-                "osc": map_osc.strip(),
-                "vtype": map_vtype or "float"
-            }
-
-            if map_type == "note":
-                new_route["note"] = map_num_int
-            else:
-                new_route["cc"] = map_num_int
-
-            # Procesar canal MIDI si se especificó
-            if map_channel.strip():
-                channel = int(map_channel)
-                if 0 <= channel <= 15:
-                    new_route["channel"] = channel
-
-            # Procesar valor constante si el tipo es 'const'
-            if map_vtype == "const" and map_const.strip():
-                try:
-                    new_route["const"] = float(map_const)
-                except ValueError:
-                    new_route["const"] = 1.0
-                    LOGGER.warning(f"Valor constante inválido: {map_const}, usando 1.0")
-
-            data["routes"].append(new_route)
-            LOGGER.info(f"Nuevo mapeo añadido: {new_route}")
-
-        except ValueError as e:
-            LOGGER.error(f"Error añadiendo mapeo: {e}")
+    # Si cambiamos de archivo, actualizar MAP_FILE global para futuras escrituras en esta sesión
+    if target_file.resolve() != MAP_FILE.resolve():
+        LOGGER.info(f"Cambiando archivo activo: {MAP_FILE} -> {target_file}")
+        MAP_FILE = target_file
 
     # Guardar todos los cambios
-    # SIEMPRE reiniciar el servicio completo al guardar configuración general
-    persist_map(data, restart_service=True)
-    
-    return restart_page(request, "Reiniciando servicio con nueva configuración...")
+    try:
+        # SIEMPRE reiniciar el servicio completo al guardar configuración general
+        persist_map(data, restart_service=True)
+        
+        if IS_CONFIG_MODE:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"success": True, "message": "Configuración guardada. Cerrando..."})
+
+        return restart_page(request, "Reiniciando servicio con nueva configuración...")
+    except Exception as e:
+        LOGGER.error(f"Error crítico al guardar configuración: {e}")
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 @app.post("/ping_osc")
 async def ping_osc():
@@ -862,3 +884,16 @@ async def ping_osc():
     threading.Thread(target=_run_ping, name="PingWorker", daemon=True).start()
 
     return JSONResponse({"ok": True, "info": "Ping iniciado en segundo plano..."})
+
+@app.post("/api/close_config")
+async def close_config():
+    """Solicita al cliente que detenga este servicio (Exit Offline)."""
+    import urllib.request
+    try:
+        url = "http://localhost:8000/api/services/MIDI/stop"
+        req = urllib.request.Request(url, method="POST")
+        with urllib.request.urlopen(req, timeout=2) as response:
+            return JSONResponse({"ok": True})
+    except Exception as e:
+        LOGGER.error(f"Fallo al solicitar cierre: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)

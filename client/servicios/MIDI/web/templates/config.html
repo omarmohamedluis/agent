@@ -87,8 +87,90 @@
   </section>
 
   <div class="global-actions">
-    <button type="submit" class="btn primary">Guardar Configuración</button>
+    <button type="button" class="btn primary" onclick="saveConfig()">Guardar Configuración</button>
     <button type="button" class="btn" id="pingBtn">Ping OSC (IGMP)</button>
+
+    {% if is_config_mode %}
+    <button type="button" class="btn danger" id="closeConfigBtn" onclick="closeConfig()">Cerrar Configuración</button>
+    {% else %}
     <button type="button" class="btn danger" id="reiniciarBtn">Reiniciar Servicio</button>
+    {% endif %}
   </div>
+
+  <script>
+    const existingConfigs = {{ existing_configs | tojson }};
+    const currentConfigName = "{{ config_name }}";
+
+    async function saveConfig() {
+      const form = document.getElementById('configForm');
+      const formData = new FormData(form);
+      const newName = formData.get('config_name').trim();
+      const btn = document.querySelector('button[onclick="saveConfig()"]');
+
+      // Check overwrite (Always warn if exists, per user request)
+      if (existingConfigs.includes(newName)) {
+        if (!confirm(`La configuración "${newName}" ya existe. ¿Deseas sobreescribirla?`)) {
+          return;
+        }
+      }
+
+      btn.disabled = true;
+      btn.innerText = "Guardando...";
+
+      try {
+        const resp = await fetch('/api/config/save', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (resp.ok) {
+          // Si estamos en modo config, cerramos el servicio también
+          {% if is_config_mode %}
+          btn.innerText = "Cerrando servicio...";
+          try {
+            await fetch('/api/close_config', { method: 'POST' });
+          } catch (e) {
+            console.error("Error stopping service:", e);
+          }
+
+          window.close();
+          document.body.innerHTML = "<div style='display:flex;justify-content:center;align-items:center;height:100vh;background:#222;color:#fff'><h1>Guardado. Cerrando...</h1></div>";
+          setTimeout(() => window.close(), 1000);
+          {% else %}
+          // Si no, recargamos (comportamiento normal)
+          const text = await resp.text();
+          document.open();
+          document.write(text);
+          document.close();
+          {% endif %}
+        } else {
+          let errorMsg = resp.statusText;
+          try {
+            const errData = await resp.json();
+            if (errData.error) errorMsg = errData.error;
+          } catch (e) {
+            // No JSON body
+          }
+          alert("Error al guardar: " + errorMsg);
+          btn.disabled = false;
+          btn.innerText = "Guardar Configuración";
+        }
+      } catch (e) {
+        alert("Error de red: " + e);
+        btn.disabled = false;
+        btn.innerText = "Guardar Configuración";
+      }
+    }
+
+    async function closeConfig() {
+      if (!confirm("¿Salir del modo configuración sin guardar?")) return;
+      try {
+        await fetch('/api/close_config', { method: 'POST' });
+        window.close();
+        document.body.innerHTML = "<h1>Cerrando...</h1>";
+      } catch (e) {
+        alert("Error cerrando: " + e);
+      }
+    }
+  </script>
 </form>

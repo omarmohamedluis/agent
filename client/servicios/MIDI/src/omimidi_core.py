@@ -36,7 +36,16 @@ class RestartRequest(Exception):
 
 # ==== Archivos ====
 BASE_DIR         = Path(__file__).resolve().parents[1]
-MAP_FILE         = os.path.join(BASE_DIR, "OMIMIDI_map.json")
+# Usar ruta de configuración desde variable de entorno, o fallback a configs/Default.json
+_env_config = os.environ.get("OMI_CONFIG_PATH")
+if _env_config:
+    MAP_FILE = str(Path(_env_config).resolve())
+else:
+    MAP_FILE = os.path.join(BASE_DIR, "configs", "Default.json")
+    
+# Asegurar que el directorio configs existe si usamos el fallback
+if not os.path.exists(os.path.dirname(MAP_FILE)):
+    os.makedirs(os.path.dirname(MAP_FILE), exist_ok=True)
 LEARN_REQ_FILE   = os.path.join(BASE_DIR, "OMIMIDI_learn_request.json")   # WebUI arma LEARN; el core lo consume
 STATE_FILE       = os.path.join(BASE_DIR, "OMIMIDI_state.json")           # último valor por ruta OSC
 RESTART_REQ_FILE = os.path.join(BASE_DIR, "OMIMIDI_restart.flag")         # WebUI solicita reinicio; el core se re-ejecuta
@@ -218,9 +227,14 @@ def validate_midi_config(config: Dict[str, Any]) -> List[str]:
 
 # ---- OSC ----
 class BroadcastUDPClient(SimpleUDPClient):
-    def __init__(self, address, port):
+    def __init__(self, address, port, bind_address="0.0.0.0"):
         super().__init__(address, port)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        try:
+            # Bind to specific interface to ensure broadcast goes out correctly
+            self._sock.bind((bind_address, 0))
+        except Exception as e:
+            LOGGER.warning(f"No se pudo vincular socket a {bind_address}: {e}")
 
 # ---- Mapa ----
 class MidiMap:
@@ -233,6 +247,7 @@ class MidiMap:
         self.config_name: str = "default"
         self.vlan: int = 100
         self.vlan_active: bool = False
+        self.net_ip: str = ""
 
     @classmethod
     def from_file(cls, path: str) -> "MidiMap":
@@ -251,6 +266,7 @@ class MidiMap:
         net = data.get("net", {})
         mm.vlan = int(net.get("vlan") or data.get("vlan") or 100)
         mm.vlan_active = bool(net.get("vlan_active") or data.get("vlan_active") or False)
+        mm.net_ip = str(net.get("ip") or "").strip()
         
         # osc
         osc = data.get("osc", {})
@@ -344,13 +360,20 @@ class MidiMap:
 
 def build_osc_clients_from_map(map_obj: MidiMap) -> List[BroadcastUDPClient]:
     clients: List[BroadcastUDPClient] = []
+    
+    # Determinar IP de origen (Bind IP)
+    # Si la VLAN está activa, usamos su IP para asegurar que el broadcast salga por esa interfaz
+    bind_ip = "0.0.0.0"
+    if map_obj.vlan_active and map_obj.net_ip:
+        bind_ip = map_obj.net_ip
+        
     for ip in map_obj.osc_ips:
         try:
             ipaddress.ip_address(ip)
-            clients.append(BroadcastUDPClient(ip, map_obj.osc_port))
+            clients.append(BroadcastUDPClient(ip, map_obj.osc_port, bind_address=bind_ip))
         except Exception:
             LOGGER.warning(f"IP inválida ignorada: {ip}")
-    LOGGER.info(f"OSC → {len(clients)} targets @ port {map_obj.osc_port}")
+    LOGGER.info(f"OSC → {len(clients)} targets @ port {map_obj.osc_port} (Bound to: {bind_ip})")
     return clients
 
 # ---- Notificación WebUI (push de valores) ----
@@ -767,24 +790,44 @@ def main() -> None:
     try:
         while True:
             try:
-                # Verificar disponibilidad de dispositivos MIDI
-                inputs = mido.get_input_names()
-                LOGGER.info(f"Dispositivos MIDI disponibles: {inputs}")
+                # Verificar modo configuración
+                if os.environ.get("OMI_CONFIG_MODE") == "1":
+                    LOGGER.info("⚠️ MODO CONFIGURACIÓN DETECTADO: Saltando inicialización del Core MIDI/OSC")
+                    
+                    # Cargar mapa solo para obtener el puerto UI
+                    try:
+                        temp_map = MidiMap.from_file(MAP_FILE)
+                        ui_port = temp_map.ui_port
+                    except Exception:
+                        ui_port = 9001
+                    
+                    if web_proc is None or not web_proc.is_alive():
+                        LOGGER.info(f"Iniciando WebUI (Solo Config) en puerto {ui_port}...")
+                        web_proc = start_webui(port=ui_port)
+                    
+                    # Mantener el proceso vivo
+                    while True:
+                        time.sleep(1)
                 
-                # Crear instancia del core
-                LOGGER.info("Creando instancia del core...")
-                core = OmiMidiCore()
-                
-                # Iniciar WebUI si no está corriendo o si cambió el puerto
-                if web_proc is None or not web_proc.is_alive():
-                    LOGGER.info(f"Iniciando WebUI en puerto {core.map.ui_port}...")
-                    web_proc = start_webui(port=core.map.ui_port)
-                
-                LOGGER.info("Iniciando bucle principal...")
-                core.run()
-                
-                # Si run() termina normalmente (sin excepción), salimos del loop
-                break
+                else:
+                    # Verificar disponibilidad de dispositivos MIDI
+                    inputs = mido.get_input_names()
+                    LOGGER.info(f"Dispositivos MIDI disponibles: {inputs}")
+                    
+                    # Crear instancia del core
+                    LOGGER.info("Creando instancia del core...")
+                    core = OmiMidiCore()
+                    
+                    # Iniciar WebUI si no está corriendo o si cambió el puerto
+                    if web_proc is None or not web_proc.is_alive():
+                        LOGGER.info(f"Iniciando WebUI en puerto {core.map.ui_port}...")
+                        web_proc = start_webui(port=core.map.ui_port)
+                    
+                    LOGGER.info("Iniciando bucle principal...")
+                    core.run()
+                    
+                    # Si run() termina normalmente (sin excepción), salimos del loop
+                    break
                 
             except RestartRequest:
                 LOGGER.info("--- REINICIANDO CORE (Soft Restart) ---")

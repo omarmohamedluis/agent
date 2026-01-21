@@ -265,7 +265,15 @@ class StructureManager:
                             "configuration": "default",
                             "web_port": s.get("web_port"),
                             "vlan": None,
-                            "vlan_active": False
+                            "vlan_active": False,
+                            "vlan_mode": "dhcp",
+                            "vlan_ip": "",
+                            "vlan_mask": "",
+                            "vlan_gateway": "",
+                            "ip_mode": "dhcp",
+                            "ip": "",
+                            "mask": "",
+                            "gateway": ""
                         })
                         updated = True
                 
@@ -314,9 +322,30 @@ class StructureManager:
 
                 # 3. Intentar encontrar y leer archivo map
                 updated = False
-                map_files = ["OMIMIDI_map.json", "map.json", "config.json"]
-                for mf in map_files:
-                    p = cwd / mf
+                map_files = []
+                
+                # Prioridad 1: Configuración Activa
+                active_config_file = cwd / "active_config.txt"
+                if active_config_file.exists():
+                    try:
+                        active_name = active_config_file.read_text(encoding="utf-8").strip()
+                        if active_name:
+                            # Asumimos que está en configs/
+                            map_files.append(cwd / "configs" / f"{active_name}.json")
+                            # También intentar en raíz por compatibilidad
+                            map_files.append(cwd / f"{active_name}.json")
+                    except Exception as e:
+                        LOGGER.warning(f"Error leyendo active_config.txt: {e}")
+
+                # Prioridad 2: Archivos por defecto (Legacy)
+                map_files.extend([
+                    cwd / "configs" / "Default.json",
+                    cwd / "OMIMIDI_map.json", 
+                    cwd / "map.json", 
+                    cwd / "config.json"
+                ])
+
+                for p in map_files:
                     if p.exists():
                         try:
                             with p.open("r", encoding="utf-8") as f_map:

@@ -12,11 +12,18 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # 0. Detener Servicios en Ejecución
+# 0. Detener Servicios en Ejecución
 echo "🛑 Deteniendo servicios en ejecución..."
-sudo pkill -f "service.py" 2>/dev/null
-sudo pkill -f "midiwebui.py" 2>/dev/null
-sudo pkill -f "uvicorn" 2>/dev/null
-sudo pkill -f "client.py" 2>/dev/null
+# Usar close.sh para asegurar cierre elegante y consistente
+if [ -f "./close.sh" ]; then
+    ./close.sh
+else
+    echo "⚠️  No se encontró close.sh, usando método forzoso..."
+    sudo pkill -f "service.py" 2>/dev/null
+    sudo pkill -f "midiwebui.py" 2>/dev/null
+    sudo pkill -f "uvicorn" 2>/dev/null
+    sudo pkill -9 -f "client.py" 2>/dev/null
+fi
 
 # 1. Limpiar Logs
 echo "📁 Limpiando logs..."
