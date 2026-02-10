@@ -324,10 +324,18 @@ async def settings_page(request: Request):
 @app.post("/api/system/{action}")
 async def system_control(action: str):
     import subprocess
+    
     if action == "reboot":
+        STRUCTURE_MANAGER.set_busy("SYSTEM_REBOOT", "REBOOTING...")
+        # Dar tiempo a la UI para actualizarse
+        await asyncio.sleep(3)
         subprocess.run(["sudo", "reboot"])
         return {"status": "rebooting"}
+        
     elif action == "shutdown":
+        STRUCTURE_MANAGER.set_busy("SYSTEM_SHUTDOWN", "SHUTTING DOWN...")
+        # Dar tiempo a la UI para actualizarse
+        await asyncio.sleep(3)
         subprocess.run(["sudo", "shutdown", "now"])
         return {"status": "shutting_down"}
     raise HTTPException(status_code=400, detail="Acción inválida")

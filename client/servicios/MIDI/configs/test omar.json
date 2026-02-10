@@ -2,17 +2,17 @@
   "file_info": {
     "name": "test omar",
     "ui_port": 9001,
-    "updated_at": "2026-01-20T14:44:28.044768+00:00"
+    "updated_at": "2026-02-10T16:54:34.778047+00:00"
   },
   "source": {
-    "midi_input": "APC40 mkII:APC40 mkII MIDI 1 24:0"
+    "midi_input": "Midi Through:Midi Through Port-0 14:0"
   },
   "net": {
-    "vlan": 10,
+    "vlan": 60,
     "vlan_active": true,
     "ip_mode": "dhcp",
-    "ip": "192.168.100.10",
-    "mask": "255.255.255.0",
+    "ip": "",
+    "mask": "",
     "gateway": ""
   },
   "osc": {
@@ -28,6 +28,13 @@
       "vtype": "float",
       "cc": 7,
       "channel": 0
+    },
+    {
+      "type": "cc",
+      "osc": "/test/2",
+      "vtype": "float",
+      "cc": 7,
+      "channel": 1
     }
   ]
 }

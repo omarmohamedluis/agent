@@ -21,6 +21,8 @@ Thumbs.db
 # jsons autogenerados (contenidos dentro de data/)
 *_TEMP.json
 
+active_confit.txt
+
 # generados
 client/data/structure.json
 client/data/structure.json.lock
