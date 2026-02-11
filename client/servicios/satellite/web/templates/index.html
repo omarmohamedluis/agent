@@ -288,6 +288,12 @@
             box-shadow: 0 0 8px var(--success);
         }
 
+        .status-config .status-dot {
+            background: #f97316;
+            /* Orange-500 */
+            box-shadow: 0 0 8px #f97316;
+        }
+
         .toast {
             position: fixed;
             bottom: 24px;
@@ -391,9 +397,12 @@
             <!-- Actions -->
             <div class="actions">
                 <button class="btn-success" id="saveBtn" onclick="saveConfig()">💾 Guardar Todo</button>
-                <button class="btn-primary" id="pingBtn" onclick="openPingModal()">🌐 Ping</button>
-                <button class="btn-secondary" onclick="restartService()">🔄 Reiniciar</button>
-                <button class="btn-danger" id="closeConfigBtn" onclick="closeConfig()">🚪 Cerrar</button>
+                <button class="btn-primary" id="pingBtn" onclick="openPingModal()" style="display: none;">🌐
+                    Ping</button>
+                <button class="btn-secondary" id="restartBtn" onclick="restartService()" style="display: none;">🔄
+                    Reiniciar</button>
+                <button class="btn-danger" id="closeConfigBtn" onclick="closeConfig()" style="display: none;">🚪
+                    Cerrar</button>
             </div>
 
             <div class="status-bar" id="statusBar">
@@ -445,8 +454,9 @@
 
         async function init() {
             connectWS();
+            await checkStatus(); // Primero checking de estado para saber si es config
             await loadActivePresetData();
-            checkStatus();
+            // checkStatus ya fue llamado, pero mantenemos el intervalo
             setInterval(checkStatus, 3000);
         }
 
@@ -489,9 +499,11 @@
 
                 toggleStaticFields();
 
-                const iframe = document.getElementById('satelliteFrame');
-                const target = `http://${window.location.hostname}:${data.restPort || 9999}`;
-                if (iframe.src !== target) iframe.src = target;
+                if (!isConfigMode) {
+                    const iframe = document.getElementById('satelliteFrame');
+                    const target = `http://${window.location.hostname}:${data.restPort || 9999}`;
+                    if (iframe.src !== target) iframe.src = target;
+                }
             } catch (e) {
                 console.error("Error loading active preset", e);
             }
@@ -591,8 +603,8 @@
             if (!confirm("¿Cerrar modo configuración?")) return;
             try {
                 const res = await fetch('/api/close_config', { method: 'POST' });
-                // Volver al Dashboard (puerto 8000)
-                window.location.href = `http://${window.location.hostname}:8000`;
+                // En modo iframe, el dashboard recargará automáticamente al detectar el cambio de estado
+                document.body.innerHTML = "<h1>Cerrando...</h1>";
             } catch (e) {
                 console.error("Error closing config", e);
                 alert("Error al cerrar modo configuración.");
@@ -611,8 +623,15 @@
 
                 if (data.state === 'running') {
                     overlay.style.display = 'none';
+                    document.getElementById('statusBar').classList.remove('status-config');
                     document.getElementById('statusBar').classList.add('status-active');
                     document.getElementById('statusText').innerText = 'En servicio';
+
+                    // Show standard elements
+                    document.getElementById('pingBtn').style.display = 'flex';
+                    document.getElementById('restartBtn').style.display = 'flex';
+                    document.getElementById('closeConfigBtn').style.display = 'none';
+
                 } else if (data.state === 'not_installed') {
                     overlay.style.display = 'flex';
                     document.getElementById('loadingTitle').innerText = 'Satellite no instalado';
@@ -628,10 +647,40 @@
                     bar.style.width = (data.progress || 0) + '%';
                 }
 
-                if (data.message && data.message.includes("Modo Configuración")) {
+                // Detectar Modo Configuración desde el mensaje o el estado
+                if (data.state === 'config' ||
+                    (data.message && data.message.includes("Modo Configuración")) ||
+                    (data.state === 'starting' && data.message && data.message.includes("Config"))) {
+
                     isConfigMode = true;
-                    document.getElementById('closeConfigBtn').style.display = 'block';
-                    document.getElementById('statusText').innerText = 'Modo Config (Offline)';
+                    document.getElementById('closeConfigBtn').style.display = 'flex';
+
+                    // Update Status to Orange
+                    document.getElementById('statusText').innerText = 'Configurando...';
+                    document.getElementById('statusBar').classList.remove('status-active');
+                    document.getElementById('statusBar').classList.add('status-config');
+
+                    // Hide Operational Buttons
+                    document.getElementById('pingBtn').style.display = 'none';
+                    document.getElementById('restartBtn').style.display = 'none';
+
+                    // Layout Full Screen para Config
+                    overlay.style.display = 'none'; // Siempre ocultar overlay en config
+
+                    const panelLeft = document.querySelector('.panel-left');
+                    const panelRight = document.querySelector('.panel-right');
+
+                    if (panelLeft && panelRight) {
+                        panelLeft.style.width = '100%';
+                        panelLeft.style.borderRight = 'none';
+                        panelRight.style.display = 'none';
+                    }
+
+                    // Asegurar que no hay iframe
+                    const iframe = document.getElementById('satelliteFrame');
+                    if (iframe && iframe.src !== 'about:blank') {
+                        iframe.src = 'about:blank';
+                    }
                 }
             } catch (e) {
                 document.getElementById('statusText').innerText = 'Desconectado';

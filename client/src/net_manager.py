@@ -179,7 +179,14 @@ def _configure_nm_connection(con_name: str, mode: str, ip: str = None, mask: str
 def _ensure_vlan_exists(vlan_id: int) -> bool:
     """Asegura que exista la conexión eth0.{vlan_id}."""
     con_name = f"eth0.{vlan_id}"
-    if _run_cmd(["nmcli", "con", "show", con_name], f"Verificando {con_name}"):
+    
+    # Quiet check - do not use _run_cmd to avoid ERROR log if not found
+    check = subprocess.run(
+        ["nmcli", "con", "show", con_name], 
+        stdout=subprocess.DEVNULL, 
+        stderr=subprocess.DEVNULL
+    )
+    if check.returncode == 0:
         return True
     
     STRUCTURE_MANAGER.set_busy("NET_CONFIG", f"Creando VLAN {vlan_id}...")

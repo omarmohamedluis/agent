@@ -1,7 +1,7 @@
 """
-Gestor de Servicios (ServiceManager).
-Controla el ciclo de vida de los servicios (inicio, parada, estado),
-gestionando procesos en segundo plano y sincronizando su configuración.
+Service Manager (ServiceManager).
+Controls the lifecycle of services (start, stop, status),
+managing background processes and synchronizing their configuration.
 """
 import json
 import subprocess
@@ -27,61 +27,61 @@ class ServiceManager:
         self._load_config()
 
     def _load_config(self):
-        # Sincronizar desde servicios.json vía manager para asegurar que structure.json esté actualizado
+        # Sync from servicios.json via manager to ensure structure.json is up to date
         STRUCTURE_MANAGER.sync_from_servicios_json()
         
-        # Cargar mapa de configuración interno desde estructura (¿o seguir usando servicios.json para config cruda?)
-        # El código original cargaba servicios.json directamente. Mantengamos eso por ahora ya que contiene detalles de ejecución (cmd, cwd)
-        # que podrían no estar completamente en la lista de servicios de structure.json (structure.json tiene metadatos).
+        # Load internal config map from structure (or keep using servicios.json for raw config?)
+        # Original code loaded servicios.json directly. Keeping that for now as it contains execution details (cmd, cwd)
+        # that might not be fully in structure.json service list (structure.json has metadata).
         
         services_json_path = BASE_DIR / "servicios" / "servicios.json"
         
-        # Auto-restaurar desde plantilla si falta (Auto-Reparación)
+        # Auto-restore from template if missing (Auto-Repair)
         if not services_json_path.exists():
             template_path = services_json_path.with_suffix(".json.template")
             if template_path.exists():
-                LOGGER.info(f"Restaurando {services_json_path.name} desde plantilla...")
+                LOGGER.info(f"Restoring {services_json_path.name} from template...")
                 import shutil
                 try:
                     shutil.copy(template_path, services_json_path)
                 except Exception as e:
-                    LOGGER.error(f"Fallo al restaurar plantilla: {e}")
+                    LOGGER.error(f"Failed to restore template: {e}")
 
         try:
             with services_json_path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
                 self.services_config = {s["id"]: s for s in data.get("services", [])}
         except Exception as e:
-            LOGGER.error(f"Fallo al cargar configuración de servicios: {e}")
+            LOGGER.error(f"Failed to load service configuration: {e}")
             self.services_config = {}
 
     def stop_all(self, persist_state: bool = False):
-        """Detiene todos los servicios."""
+        """Stops all services."""
         for svc_id in list(self.processes.keys()):
             self.stop_service(svc_id, persist_state=persist_state)
 
     def get_services(self) -> Dict[str, Any]:
-        """Retorna todos los servicios con su estado actual, fusionando estado dinámico de structure.json."""
+        """Returns all services with their current state, merging dynamic state from structure.json."""
         status_map = {}
         
-        # 1. Obtener configuración base y estado del proceso
+        # 1. Get base config and process state
         for svc_id, config in self.services_config.items():
             proc = self.processes.get(svc_id)
             is_running = proc is not None and proc.poll() is None
             
-            # Detectar si está en modo configuración
+            # Detect if in config mode
             is_config_mode = False
             if is_running:
-                # Verificar variable de entorno en el proceso (si es posible)
-                # O mejor, mantener un registro interno.
-                # Como no tenemos registro interno fácil sin cambiar __init__,
-                # podemos inferirlo si el comando tiene la variable de entorno.
-                # Pero subprocess.Popen no expone env fácilmente después de creado.
-                # Usaremos un hack: si el log path tiene "configs" o algo así? No.
-                # Mejor: añadir un set 'config_mode_services' en __init__.
+                # Check environment variable in process (if possible)
+                # Or better, keep internal registry.
+                # Since we don't have easy internal registry without changing __init__,
+                # we can infer if command has env var.
+                # But subprocess.Popen doesn't expose env easily after creation.
+                # We'll use a hack: if log path has "configs" or something? No.
+                # Better: added a set 'config_mode_services' in __init__.
                 pass
 
-            # Obtener config activa
+            # Get active config
             active_config = "Default"
             try:
                 active_file = self._get_service_dir(svc_id) / "active_config.txt"
@@ -98,12 +98,12 @@ class ServiceManager:
                 "active_config": active_config
             }
 
-        # 2. Fusionar estado dinámico de structure.json vía Manager
+        # 2. Merge dynamic state from structure.json via Manager
         structure = STRUCTURE_MANAGER.get_structure()
         for svc in structure.get("services", []):
             svc_name = svc.get("name")
             if svc_name in status_map:
-                # Fusionar campos dinámicos
+                # Merge dynamic fields
                 if "web_port" in svc:
                     status_map[svc_name]["web_port"] = svc["web_port"]
                 if "enabled" in svc:
@@ -115,63 +115,78 @@ class ServiceManager:
 
     def start_service(self, svc_id: str) -> bool:
         if svc_id not in self.services_config:
-            LOGGER.error(f"Servicio {svc_id} no encontrado")
+            LOGGER.error(f"Service {svc_id} not found")
             return False
 
-        if svc_id in self.processes and self.processes[svc_id].poll() is None:
-            LOGGER.info(f"El servicio {svc_id} ya se está ejecutando")
-            return True
+        if svc_id in self.processes:
+            proc = self.processes[svc_id]
+            if proc.poll() is None:
+                LOGGER.info(f"Service {svc_id} is already running (PID {proc.pid})")
+                return True
+            else:
+                # Clean invalid reference
+                del self.processes[svc_id]
 
         config = self.services_config[svc_id]
         if config.get("type") != "process":
-            LOGGER.info(f"El servicio {svc_id} no es de tipo proceso")
+            LOGGER.info(f"Service {svc_id} is not of type process")
             return False
 
+        subprocess_obj = None
         try:
-            STRUCTURE_MANAGER.set_busy(f"SERVICE_OP_{svc_id}", f"Iniciando {svc_id}...")
+            STRUCTURE_MANAGER.set_busy(f"SERVICE_OP_{svc_id}", f"Starting {svc_id}...")
             
             cwd = BASE_DIR / config.get("cwd", ".")
             entry = config.get("entry", [])
             
-            # Resolver variable ${PYTHON}
+            if not entry:
+                 LOGGER.error(f"Service {svc_id} has no entry point defined")
+                 return False
+
+            # Resolve variable ${PYTHON}
             cmd = [x.replace("${PYTHON}", "python3") for x in entry]
             
-            # MODO EXCLUSIVO: Detener todos los otros servicios en ejecución primero
-            for other_id in list(self.processes.keys()):
+            # EXCLUSIVE MODE: Stop all other running services first
+            # Copy keys to avoid "dictionary changed size during iteration"
+            active_ids = list(self.processes.keys())
+            for other_id in active_ids:
                 if other_id != svc_id:
-                    LOGGER.info(f"Modo exclusivo: Deteniendo {other_id} antes de iniciar {svc_id}")
+                    LOGGER.info(f"Exclusive mode: Stopping {other_id} before starting {svc_id}")
                     self.stop_service(other_id)
             
-            LOGGER.info(f"Iniciando servicio {svc_id}: {cmd} en {cwd}")
+            LOGGER.info(f"Starting service {svc_id}: {cmd} in {cwd}")
             
-            # Actualizar Estado de Servicio Activo en structure.json
-            # Nota: client.py ya debería haberlo habilitado para asegurar configuración de red correcta,
-            # pero lo reafirmamos aquí.
+            # Update Active Service State in structure.json
             STRUCTURE_MANAGER.update_service_state(svc_id, enabled=True)
             
-            # Preparar Entorno
+            # Prepare Environment
             env = os.environ.copy()
             
-            # Determinar Ruta de Log
+            # Determine Log Path
             log_rel_path = config.get("logs", {}).get("stdout", f"logs/services/{svc_id}.log")
             log_path = BASE_DIR / log_rel_path
             
-            # Asegurar que el directorio existe
-            log_path.parent.mkdir(parents=True, exist_ok=True)
+            # Ensure directory exists
+            try:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                LOGGER.error(f"Could not create log directory for {svc_id}: {e}")
+                # Continue without log or fail? Fail to not lose output
+                # return False
             
             env["OMI_LOG_PATH"] = str(log_path)
             env["OMI_SERVICE_ID"] = svc_id
             
-            # Inyectar Configuración Activa
+            # Inject Active Configuration
             config_path = self._get_active_config_path(svc_id)
             if config_path:
                 env["OMI_CONFIG_PATH"] = str(config_path)
-                LOGGER.info(f"Usando configuración: {config_path}")
+                LOGGER.info(f"Using configuration: {config_path}")
             
-            LOGGER.info(f"Iniciando servicio {svc_id} con ruta de log: {log_path}")
+            LOGGER.info(f"Starting service {svc_id} with log path: {log_path}")
 
-            # Iniciar Proceso
-            proc = subprocess.Popen(
+            # Start Process
+            subprocess_obj = subprocess.Popen(
                 cmd,
                 cwd=cwd,
                 env=env,
@@ -179,17 +194,33 @@ class ServiceManager:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
-            self.processes[svc_id] = proc
             
-            # Disparar sincronización de metadatos (web_port, etc)
+            # Wait a bit to see if it crashes immediately
+            try:
+                subprocess_obj.wait(timeout=0.5)
+                # If does not raise TimeoutExpired, it finished (crash?)
+                if subprocess_obj.returncode != 0:
+                     LOGGER.error(f"Service {svc_id} exited immediately with code {subprocess_obj.returncode}")
+                     return False
+            except subprocess.TimeoutExpired:
+                # Still running, all good
+                pass
+
+            self.processes[svc_id] = subprocess_obj
+            
+            # Trigger metadata sync (web_port, etc)
             try:
                 STRUCTURE_MANAGER.sync_service_metadata(svc_id)
             except Exception as e:
-                LOGGER.error(f"Fallo al sincronizar metadatos del servicio: {e}")
+                LOGGER.error(f"Failed to sync service metadata: {e}")
 
             return True
+            
+        except OSError as e:
+             LOGGER.error(f"OS Error starting {svc_id}: {e}")
+             return False
         except Exception as e:
-            LOGGER.error(f"Fallo al iniciar servicio {svc_id}: {e}")
+            LOGGER.error(f"Unexpected failure starting service {svc_id}: {e}")
             return False
         finally:
             STRUCTURE_MANAGER.clear_busy(f"SERVICE_OP_{svc_id}")
@@ -197,36 +228,58 @@ class ServiceManager:
     def stop_service(self, svc_id: str, persist_state: bool = False) -> bool:
         proc = self.processes.get(svc_id)
         if not proc:
-            return False
+            # If not in map, assume stopped.
+            # Ensure state in StructureManager just in case
+            if not persist_state:
+                 STRUCTURE_MANAGER.update_service_state(svc_id, enabled=False)
+            return True
 
+        # Check if already dead
         if proc.poll() is not None:
             del self.processes[svc_id]
+            self.config_mode_services.discard(svc_id)
+            if not persist_state:
+                 STRUCTURE_MANAGER.update_service_state(svc_id, enabled=False)
             return True
 
         try:
-            STRUCTURE_MANAGER.set_busy(f"SERVICE_OP_{svc_id}", f"Deteniendo {svc_id}...")
-            LOGGER.info(f"Deteniendo servicio {svc_id} (PID {proc.pid})")
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            STRUCTURE_MANAGER.set_busy(f"SERVICE_OP_{svc_id}", f"Stopping {svc_id}...")
+            LOGGER.info(f"Stopping service {svc_id} (PID {proc.pid})")
+            
+            # Attempt to terminate process group gently
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except ProcessLookupError:
+                # No longer exists
+                pass
+                
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                LOGGER.warning(f"Service {svc_id} did not respond to SIGTERM, forcing SIGKILL...")
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             
             del self.processes[svc_id]
             self.config_mode_services.discard(svc_id)
             
-            # Actualizar Estado de Servicio Activo a None (STANDBY)
+            # Update Active Service State to None (STANDBY)
             if not self.processes and not persist_state:
                  STRUCTURE_MANAGER.update_service_state(svc_id, enabled=False)
             
             return True
         except Exception as e:
-            LOGGER.error(f"Fallo al detener servicio {svc_id}: {e}")
+            LOGGER.error(f"Failed to stop service {svc_id}: {e}")
+            # Force map cleanup to avoid zombie state
+            if svc_id in self.processes:
+                del self.processes[svc_id]
             return False
         finally:
             STRUCTURE_MANAGER.clear_busy(f"SERVICE_OP_{svc_id}")
 
-    # --- Gestión de Configuraciones (Multi-Config) ---
+    # --- Configuration Management (Multi-Config) ---
     def _get_service_dir(self, svc_id: str) -> Path:
         return BASE_DIR / "servicios" / svc_id
 
@@ -234,7 +287,7 @@ class ServiceManager:
         return self._get_service_dir(svc_id) / "configs"
 
     def _get_active_config_path(self, svc_id: str) -> Path:
-        """Devuelve la ruta al archivo JSON de configuración activo."""
+        """Returns the path to the active JSON configuration file."""
         service_dir = self._get_service_dir(svc_id)
         active_file = service_dir / "active_config.txt"
         configs_dir = self._get_configs_dir(svc_id)
@@ -249,29 +302,29 @@ class ServiceManager:
         return configs_dir / f"{config_name}.json"
 
     def get_configs(self, svc_id: str) -> list:
-        """Lista las configuraciones disponibles para un servicio y auto-crea Default si falta."""
+        """Lists available configurations for a service and auto-creates Default if missing."""
         configs_dir = self._get_configs_dir(svc_id)
         if not configs_dir.exists():
             configs_dir.mkdir(parents=True, exist_ok=True)
             
         files = list(configs_dir.glob("*.json"))
         if not files:
-            # Si no hay configs, crear Default basada en plantilla o mapa legacy
+            # If no configs, create Default based on template or legacy map
             import shutil
             
             default_config = configs_dir / "Default.json"
             template = configs_dir / "Base_config.json.template"
             
-            # Prioridad 1: Nueva plantilla Base_config.json.template
+            # Priority 1: New template Base_config.json.template
             if template.exists():
                 try:
                     shutil.copy(template, default_config)
-                    LOGGER.info(f"Creada configuración Default.json para {svc_id} desde plantilla BASE")
+                    LOGGER.info(f"Created Default.json config for {svc_id} from BASE template")
                     files = [default_config]
                 except Exception as e:
-                    LOGGER.error(f"Error creando Default.json desde plantilla: {e}")
+                    LOGGER.error(f"Error creating Default.json from template: {e}")
             else:
-                # Prioridad 2: Intentar localizar mapa legacy para migración
+                # Priority 2: Attempt to locate legacy map for migration
                 service_dir = self._get_service_dir(svc_id)
                 if svc_id == "MIDI":
                     legacy_map = service_dir / "OMIMIDI_map.json"
@@ -281,12 +334,12 @@ class ServiceManager:
                 if legacy_map.exists():
                     try:
                         shutil.copy(legacy_map, default_config)
-                        LOGGER.info(f"Creada configuración Default.json para {svc_id} desde mapa legacy")
+                        LOGGER.info(f"Created Default.json config for {svc_id} from legacy map")
                         files = [default_config]
                     except Exception as e:
-                        LOGGER.error(f"Error creando Default.json desde legacy: {e}")
+                        LOGGER.error(f"Error creating Default.json from legacy: {e}")
                 else:
-                    # Prioridad 3: Intentar buscar template legacy
+                    # Priority 3: Attempt to search legacy template
                     legacy_template = legacy_map.with_suffix(".json.template") if 'legacy_map' in locals() else None
                     if legacy_template and legacy_template.exists():
                         try:
@@ -298,26 +351,26 @@ class ServiceManager:
         return sorted([f.stem for f in files])
 
     def select_config(self, svc_id: str, config_name: str) -> bool:
-        """Selecciona una configuración como activa (guarda el nombre)."""
+        """Selects a configuration as active (saves the name)."""
         configs_dir = self._get_configs_dir(svc_id)
         target = configs_dir / f"{config_name}.json"
         
         if not target.exists():
-            LOGGER.error(f"Configuración {config_name} no encontrada para {svc_id}")
+            LOGGER.error(f"Configuration {config_name} not found for {svc_id}")
             return False
             
         try:
-            # Guardar el nombre de la config activa en un archivo de texto
+            # Save active config name in text file
             active_file = self._get_service_dir(svc_id) / "active_config.txt"
             active_file.write_text(config_name, encoding="utf-8")
-            LOGGER.info(f"Configuración activa para {svc_id} establecida a: {config_name}")
+            LOGGER.info(f"Active configuration for {svc_id} set to: {config_name}")
             return True
         except Exception as e:
-            LOGGER.error(f"Fallo al seleccionar configuración {config_name}: {e}")
+            LOGGER.error(f"Failed to select configuration {config_name}: {e}")
             return False
 
     def save_config_as(self, svc_id: str, config_name: str) -> bool:
-        """Guarda la configuración activa actual con un nombre."""
+        """Saves current active configuration with a name."""
         import shutil
         
         configs_dir = self._get_configs_dir(svc_id)
@@ -327,55 +380,55 @@ class ServiceManager:
         dst = configs_dir / f"{config_name}.json"
         
         if not src.exists():
-            LOGGER.error(f"No hay configuración activa para guardar en {svc_id}")
+            LOGGER.error(f"No active configuration to save in {svc_id}")
             return False
             
         try:
             shutil.copy(src, dst)
-            LOGGER.info(f"Configuración activa guardada como {config_name} para {svc_id}")
+            LOGGER.info(f"Active configuration saved as {config_name} for {svc_id}")
             return True
         except Exception as e:
-            LOGGER.error(f"Fallo al guardar configuración como {config_name}: {e}")
+            LOGGER.error(f"Failed to save configuration as {config_name}: {e}")
             return False
             
     def delete_config(self, svc_id: str, config_name: str) -> bool:
-        """Elimina un archivo de configuración específico."""
+        """Deletes a specific configuration file."""
         if config_name == "Default":
-            LOGGER.warning(f"Intento de eliminar configuración Default en {svc_id}")
+            LOGGER.warning(f"Attempt to delete Default configuration in {svc_id}")
             return False
 
         configs_dir = self._get_configs_dir(svc_id)
         target = configs_dir / f"{config_name}.json"
         
         if not target.exists():
-            LOGGER.warning(f"Configuración {config_name} no existe en {svc_id}")
+            LOGGER.warning(f"Configuration {config_name} does not exist in {svc_id}")
             return False
             
         try:
             target.unlink()
-            LOGGER.info(f"Configuración {config_name} eliminada de {svc_id}")
+            LOGGER.info(f"Configuration {config_name} deleted from {svc_id}")
             
-            # Si la activa era la eliminada, volver a Default
+            # If active was deleted, revert to Default
             active_file = self._get_service_dir(svc_id) / "active_config.txt"
             if active_file.exists():
                 current = active_file.read_text(encoding="utf-8").strip()
                 if current == config_name:
                     active_file.write_text("Default", encoding="utf-8")
-                    LOGGER.info(f"Configuración activa revertida a Default para {svc_id}")
+                    LOGGER.info(f"Active configuration reverted to Default for {svc_id}")
             
             return True
         except Exception as e:
-            LOGGER.error(f"Fallo al eliminar configuración {config_name}: {e}")
+            LOGGER.error(f"Failed to delete configuration {config_name}: {e}")
             return False
 
     def start_config_mode(self, svc_id: str) -> bool:
-        """Inicia el servicio en MODO CONFIGURACIÓN (Offline/Mock)."""
-        # Es similar a start_service pero inyectando la variable de entorno
+        """Starts service in CONFIGURATION MODE (Offline/Mock)."""
+        # Similar to start_service but injecting environment variable
         
         if svc_id not in self.services_config:
             return False
             
-        # Si ya corre, detenerlo (para cambiar de modo)
+        # If running, stop it (to change mode)
         if svc_id in self.processes and self.processes[svc_id].poll() is None:
             self.stop_service(svc_id)
             
@@ -385,13 +438,13 @@ class ServiceManager:
         cmd = [x.replace("${PYTHON}", "python3") for x in entry]
         
         env = os.environ.copy()
-        env["OMI_CONFIG_MODE"] = "1" # FLAG MÁGICA
+        env["OMI_CONFIG_MODE"] = "1" # MAGIC FLAG
         
-        # Inyectar ruta de configuración activa
+        # Inject active configuration path
         config_path = self._get_active_config_path(svc_id)
         env["OMI_CONFIG_PATH"] = str(config_path)
 
-        # Logs separados para config mode? O los mismos? Los mismos está bien.
+        # Separate logs for config mode? Or same? Same is fine.
         log_rel_path = config.get("logs", {}).get("stdout", f"logs/services/{svc_id}.log")
         log_path = BASE_DIR / log_rel_path
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -399,14 +452,14 @@ class ServiceManager:
         env["OMI_SERVICE_ID"] = svc_id
         
         try:
-            STRUCTURE_MANAGER.set_busy(f"CONFIG_MODE_{svc_id}", f"Iniciando {svc_id} (Config)...")
+            STRUCTURE_MANAGER.set_busy(f"CONFIG_MODE_{svc_id}", f"Starting {svc_id} (Config)...")
             
-            # MODO EXCLUSIVO TAMBIÉN AQUÍ
+            # EXCLUSIVE MODE HERE TOO
             for other_id in list(self.processes.keys()):
                 if other_id != svc_id:
                     self.stop_service(other_id)
 
-            LOGGER.info(f"Iniciando {svc_id} en MODO CONFIGURACIÓN")
+            LOGGER.info(f"Starting {svc_id} in CONFIGURATION MODE")
             proc = subprocess.Popen(
                 cmd,
                 cwd=cwd,
@@ -419,17 +472,17 @@ class ServiceManager:
             self.config_mode_services.add(svc_id)
             return True
         except Exception as e:
-            LOGGER.error(f"Fallo al iniciar modo configuración para {svc_id}: {e}")
+            LOGGER.error(f"Failed to start configuration mode for {svc_id}: {e}")
             return False
         finally:
             STRUCTURE_MANAGER.clear_busy(f"CONFIG_MODE_{svc_id}")
 
     def duplicate_config(self, svc_id: str, src_name: str, dst_name: str) -> bool:
-        """Duplica una configuración existente o una plantilla con un nuevo nombre."""
+        """Duplicates an existing configuration or template with a new name."""
         import shutil
         configs_dir = self._get_configs_dir(svc_id)
         
-        # Si src_name termina en .template, buscamos el archivo directamente
+        # If src_name ends with .template, find file directly
         if src_name.endswith(".template"):
             src = configs_dir / src_name
         else:
@@ -438,18 +491,18 @@ class ServiceManager:
         dst = configs_dir / f"{dst_name}.json"
 
         if not src.exists():
-            LOGGER.error(f"Configuración origen {src_name} no encontrada para {svc_id}")
+            LOGGER.error(f"Source configuration {src_name} not found for {svc_id}")
             return False
             
         if dst.exists():
-            LOGGER.warning(f"Configuración destino {dst_name} ya existe para {svc_id}")
-            # Podríamos sobrescribir o fallar. Fallamos para seguridad.
+            LOGGER.warning(f"Destination configuration {dst_name} already exists for {svc_id}")
+            # Could overwrite or fail. Fail for safety.
             return False
 
         try:
             shutil.copy(src, dst)
             
-            # Post-procesar para actualizar el nombre interno si existe (en file_info)
+            # Post-process to update internal name if exists (in file_info)
             if dst.suffix == ".json":
                 try:
                     import json
@@ -461,28 +514,28 @@ class ServiceManager:
                         with dst.open("w", encoding="utf-8") as f:
                             json.dump(data, f, indent=2, ensure_ascii=False)
                 except Exception as e:
-                    LOGGER.warning(f"No se pudo actualizar el metadato 'name' en {dst.name}: {e}")
+                    LOGGER.warning(f"Could not update 'name' metadata in {dst.name}: {e}")
 
-            LOGGER.info(f"Configuración {src_name} duplicada como {dst_name} para {svc_id}")
+            LOGGER.info(f"Configuration {src_name} duplicated as {dst_name} for {svc_id}")
             return True
         except Exception as e:
-            LOGGER.error(f"Fallo al duplicar configuración: {e}")
+            LOGGER.error(f"Failed to duplicate configuration: {e}")
             return False
 
     def clone_service(self, svc_id: str, new_display_name: str) -> bool:
         """
-        Clona un servicio: duplica su carpeta, asigna un nuevo puerto y actualiza servicios.json.
+        Clones a service: duplicates its folder, assigns new port and updates servicios.json.
         """
         if svc_id not in self.services_config:
-            LOGGER.error(f"Servicio origen {svc_id} no encontrado")
+            LOGGER.error(f"Source service {svc_id} not found")
             return False
 
-        # Generar ID único basado en el nombre
+        # Generate unique ID based on name
         new_id = new_display_name.replace(" ", "_").strip()
         if not new_id:
             new_id = f"{svc_id}_clone"
         
-        # Asegurar que el ID sea único en el mapa de configuración
+        # Ensure ID is unique in config map
         base_id = new_id
         counter = 1
         while new_id in self.services_config:
@@ -493,48 +546,48 @@ class ServiceManager:
         orig_cwd_rel = orig_config.get("cwd", ".")
         orig_dir = BASE_DIR / orig_cwd_rel
         
-        # La nueva carpeta irá en servicios/new_id
+        # New folder will go in servicios/new_id
         new_cwd_rel = f"servicios/{new_id}"
         new_dir = BASE_DIR / new_cwd_rel
 
-        # 1. Duplicar Carpeta del Servicio (si existe y es interna)
+        # 1. Duplicate Service Directory (if exists and is internal)
         import shutil
         try:
             if orig_dir.exists() and orig_cwd_rel != ".":
-                LOGGER.info(f"Clonando directorio {orig_dir} a {new_dir}")
+                LOGGER.info(f"Cloning directory {orig_dir} to {new_dir}")
                 
                 def ignore_heavy(path, names):
-                    # Ignorar carpetas pesadas para que el clon sea rápido y no duplique datos innecesarios
+                    # Ignore heavy folders for fast cloning and to avoid duplicating unnecessary data
                     return ['node_modules', '.git', 'logs', '__pycache__', 'bin', 'fnm_data', '.venv']
                 
                 shutil.copytree(orig_dir, new_dir, ignore=ignore_heavy)
                 
-                # Limpiar cualquier estado de ejecución en la copia
+                # Clean any execution state in copy
                 for cleanup in ["service_state.json", "active_config.txt", "runtime_config.json"]:
                     target = new_dir / cleanup
                     if target.exists():
                         target.unlink()
             else:
-                LOGGER.warning(f"El servicio {svc_id} no tiene una carpeta propia clonable clara ({orig_cwd_rel})")
-                # Procedemos igual, quizás use la misma carpeta (aunque arriesgado por colisión de configs)
+                LOGGER.warning(f"Service {svc_id} does not have a clear cloneable folder ({orig_cwd_rel})")
+                # Proceed anyway, maybe use same folder (risky due to config collision)
                 new_cwd_rel = orig_cwd_rel
         except Exception as e:
-            LOGGER.error(f"Fallo al duplicar directorio de servicio: {e}")
+            LOGGER.error(f"Failed to duplicate service directory: {e}")
             return False
 
-        # 2. Determinar nuevo puerto web único
-        # Buscar el puerto web más alto y sumarle 1
+        # 2. Determine new unique web port
+        # Find highest web port and add 1
         existing_ports = [s.get("web_port", 0) for s in self.services_config.values() if s.get("web_port")]
         new_port = max(existing_ports) + 1 if existing_ports else 9010
 
-        # 3. Crear nueva definición de configuración
+        # 3. Create new configuration definition
         new_config = orig_config.copy()
         new_config["id"] = new_id
         new_config["display_name"] = new_display_name
         new_config["cwd"] = new_cwd_rel
         new_config["web_port"] = new_port
         
-        # Ajustar rutas de logs para que sean independientes
+        # Adjust log paths to be independent
         if "logs" in new_config:
             logs = new_config["logs"].copy()
             for key, val in logs.items():
@@ -542,7 +595,7 @@ class ServiceManager:
                 logs[key] = f"logs/services/{new_id.lower()}{p.suffix}"
             new_config["logs"] = logs
 
-        # 4. Persistir en servicios.json
+        # 4. Persist in servicios.json
         services_json_path = BASE_DIR / "servicios" / "servicios.json"
         try:
             with services_json_path.open("r", encoding="utf-8") as f:
@@ -553,12 +606,12 @@ class ServiceManager:
             with services_json_path.open("w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             
-            # 5. Recargar Manager y Sincronizar Estructura
+            # 5. Reload Manager and Sync Structure
             self._load_config()
             STRUCTURE_MANAGER.sync_from_servicios_json()
             
-            LOGGER.info(f"Servicio {svc_id} clonado exitosamente como {new_id} en puerto {new_port}")
+            LOGGER.info(f"Service {svc_id} successfully cloned as {new_id} on port {new_port}")
             return True
         except Exception as e:
-            LOGGER.error(f"Fallo al actualizar servicios.json: {e}")
+            LOGGER.error(f"Failed to update servicios.json: {e}")
             return False

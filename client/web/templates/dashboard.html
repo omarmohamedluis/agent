@@ -56,6 +56,8 @@
             title="Emergency Unlock"></button>
     </div>
 
+    <div id="toast-container"></div>
+
     <header>
         <div class="brand">
             <img src="/assets/omarpi.png" alt="OMI Logo">
@@ -119,7 +121,7 @@
                         <option value="default">Loading...</option>
                     </select>
                     <button id="btn-config-{{ id }}" class="btn btn-config" onclick="showConfigMenu(event, '{{ id }}')"
-                        title="Opciones de Configuración">
+                        title="Configuration Options">
                         <i class="fas fa-cog"></i>
                     </button>
                 </div>
@@ -180,12 +182,12 @@
             try {
                 const response = await fetch(`/api/services/${id}/${action}`, { method: 'POST' });
                 if (!response.ok) {
-                    alert('Failed to ' + action + ' service');
+                    showToast('Failed to ' + action + ' service', 'error');
                 }
                 // We don't reload anymore, the poller will pick it up
             } catch (e) {
                 console.error(e);
-                alert('Error connecting to server');
+                showToast('Error connecting to Server', 'error');
             } finally {
                 isManualActionPending = false;
                 // We don't hide it immediately here, we let the poller decide based on system status
@@ -198,7 +200,27 @@
             const iframe = document.getElementById('serviceIframe');
             if (iframe) {
                 iframe.src = iframe.src;
+                showToast('Refreshing Iframe...', 'info');
             }
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+
+            let icon = 'info-circle';
+            if (type === 'success') icon = 'check-circle';
+            if (type === 'error') icon = 'exclamation-circle';
+
+            toast.innerHTML = `<i class="fas fa-${icon}"></i> <span>${message}</span>`;
+
+            container.appendChild(toast);
+
+            // Auto remove after animation
+            setTimeout(() => {
+                toast.remove();
+            }, 3000);
         }
 
         // --- Log Viewer Logic ---
@@ -357,7 +379,7 @@
                         contentArea.innerHTML = `
                             <div class="placeholder">
                                 <div class="spinner"></div>
-                                <p>Conectando con ${newActiveService.display_name}...</p>
+                                <p>Connecting to ${newActiveService.display_name}...</p>
                             </div>
                         `;
 
@@ -446,7 +468,7 @@
                 // Feedback visual?
             } catch (e) {
                 console.error("Failed to select config:", e);
-                alert("Error selecting config: " + e);
+                showToast("Error selecting config: " + e, 'error');
             }
         }
 
@@ -456,18 +478,10 @@
                     method: 'POST'
                 });
                 if (!response.ok) throw new Error("Failed to start config mode");
-                const data = await response.json();
-
-                // Si es Satellite, redirigir a pantalla completa (fuera de iframe)
-                if (svcId === 'satellite' && data.web_port) {
-                    const targetUrl = `http://${systemIp}:${data.web_port}`;
-                    console.log(`Redirecting to full-screen config: ${targetUrl}`);
-                    window.location.href = targetUrl;
-                }
-                // Para otros servicios, el poller de status actualizará el iframe normalmente
+                // The status poller will pick up the change
             } catch (e) {
                 console.error("Failed to start config mode:", e);
-                alert("Error starting config mode: " + e);
+                showToast("Error starting config mode: " + e, 'error');
             }
         }
 
@@ -518,8 +532,8 @@
             } else if (action === 'add' || action === 'add_base') {
                 const isBase = (action === 'add_base');
                 const promptMsg = isBase
-                    ? `Introduce el nombre para el nuevo preset (desde plantilla BASE):`
-                    : `Introduce el nombre para el nuevo preset (copia de "${selectedConfig}"):`;
+                    ? `Enter name for new preset (from BASE template):`
+                    : `Enter name for new preset (copy of "${selectedConfig}"):`;
                 const sourceConfig = isBase ? 'Base_config.json.template' : selectedConfig;
 
                 const newName = prompt(promptMsg);
@@ -533,21 +547,22 @@
 
                         if (resp.ok) {
                             await loadServiceConfigs(activeServiceId, newName.trim());
+                            showToast(`Preset "${newName.trim()}" created`, 'success');
                         } else {
                             const err = await resp.json();
-                            alert("Error al añadir preset: " + (err.detail || "Error desconocido"));
+                            showToast("Error adding preset: " + (err.detail || "Unknown Error"), 'error');
                         }
                     } catch (e) {
-                        alert("Error de red: " + e);
+                        showToast("Network Error: " + e, 'error');
                     }
                 }
             } else if (action === 'delete') {
                 if (selectedConfig === 'Default' || selectedConfig === 'default') {
-                    alert("No se puede borrar el preset Default.");
+                    showToast("Default preset cannot be deleted.", 'error');
                     return;
                 }
 
-                if (confirm(`¿ESTAS SEGURO que deseas borrar el preset "${selectedConfig}"?`)) {
+                if (confirm(`Are you sure you want to DELETE "${selectedConfig}"?`)) {
                     try {
                         const resp = await fetch(`/api/services/${activeServiceId}/config/${selectedConfig}`, {
                             method: 'DELETE'
@@ -556,13 +571,13 @@
                         if (resp.ok) {
                             // Reload config list
                             await loadServiceConfigs(activeServiceId, selectedConfig);
-                            // Dropdown logic in loadConfigs handles selection fallback
+                            showToast("Preset deleted", 'success');
                         } else {
                             const err = await resp.json();
-                            alert("Error al borrar: " + (err.detail || "Error desconocido"));
+                            showToast("Error deleting: " + (err.detail || "Unknown Error"), 'error');
                         }
                     } catch (e) {
-                        alert("Error de red al borrar: " + e);
+                        showToast("Network Error: " + e, 'error');
                     }
                 }
             }
@@ -594,10 +609,10 @@
 
     <!-- Config Menu Template -->
     <div id="configMenu" class="config-menu">
-        <button onclick="menuAction('configure')">Configurar Preset</button>
-        <button onclick="menuAction('add')">Duplicar Actual</button>
-        <button onclick="menuAction('add_base')">Nuevo Preset (Base)</button>
-        <button onclick="menuAction('delete')" class="danger">Borrar Preset</button>
+        <button onclick="menuAction('configure')">Configure Preset</button>
+        <button onclick="menuAction('add')">Duplicate Current</button>
+        <button onclick="menuAction('add_base')">New Preset (Base)</button>
+        <button onclick="menuAction('delete')" class="danger">Delete Preset</button>
     </div>
 </body>
 

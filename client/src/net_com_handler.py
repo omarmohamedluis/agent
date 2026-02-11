@@ -1,11 +1,12 @@
 """
-Manejador de Comunicaciones de Red (NetComHandler).
-Gestiona la comunicación con el servidor central, incluyendo el handshake,
-recepción de comandos y envío de estado.
+Network Communication Handler (NetComHandler).
+Manages communication with the Director (Server), listening for UDP beacons
+to initiate connection and maintaining the link.
 """
 import json
 import socket
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -18,20 +19,21 @@ SERVER_INFO_PATH = Path(__file__).resolve().parents[1] / "data" / "server.json"
 
 module_name = "omiclient.net_com_handler"
 
+# Configuration
 SERVER_TIMEOUT = 5.0
 BROADCAST_PORT = 39653
-HANDSHAKE_TIMEOUT = 10.0
+HANDSHAKE_TIMEOUT = 5.0
+RECONNECT_DELAY = 3.0  # Seconds to wait before rescanning broadcast if connection is lost
 
-# Estado de la comunicación persistente
+# Persistent communication state
 _comm_lock = threading.Lock()
 _comm_socket: Optional[socket.socket] = None
 _receiver_thread: Optional[threading.Thread] = None
 _receiver_stop = threading.Event()
 _session_active = threading.Event()
 
-
 # ---------------------------------------------------------------------------
-# Helpers de archivo/configuración
+# File/Config Helpers
 # ---------------------------------------------------------------------------
 
 def _load_server_endpoint() -> Tuple[Optional[str], Optional[int]]:
@@ -41,7 +43,7 @@ def _load_server_endpoint() -> Tuple[Optional[str], Optional[int]]:
         with SERVER_INFO_PATH.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
     except (OSError, json.JSONDecodeError):
-        log_event("error", module_name, "No se pudo leer la información del servidor almacenada.")
+        # log_event("debug", module_name, "Could not read server.json (normal at startup).")
         return None, None
     return data.get("ip"), data.get("port")
 
@@ -51,24 +53,47 @@ def _save_server_endpoint(ip: str, port: Optional[int]) -> None:
     if port is not None:
         data["port"] = port
     
-    SERVER_INFO_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with SERVER_INFO_PATH.open("w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2, sort_keys=True)
+    try:
+        SERVER_INFO_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with SERVER_INFO_PATH.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, sort_keys=True)
+    except Exception as e:
+        log_event("error", module_name, f"Failed to save server endpoint: {e}")
 
 
 def _parse_broadcast_message(message: str) -> Tuple[Optional[str], Optional[int]]:
+    """
+    Parses broadcast message.
+    Supported formats:
+    - "OMI_DIRECTOR|IP|PORT" (New standard)
+    - "ANY_STRING|IP|PORT"
+    - "ANY_STRING:IP" (Legacy)
+    """
+    message = message.strip()
+    
+    # Attempt 1: Pipe Separator |
     if "|" in message:
         parts = message.split("|")
-        if len(parts) >= 3:
-            ip = parts[1].strip()
-            try:
-                port = int(parts[2].strip())
-            except ValueError:
-                return ip, None
-            return ip, port
+        # Expect at least HEADER|IP|PORT
+        if len(parts) >= 2:
+            # Assume IP is second element if there are 3, or check position
+            # Standard format expected: HEADER|IP|PORT
+            if len(parts) >= 3:
+                ip = parts[1].strip()
+                try:
+                    port = int(parts[2].strip())
+                    return ip, port
+                except ValueError:
+                    return ip, None
+            # Simple fallback
+            return parts[1].strip(), None
+
+    # Attempt 2: Colon Separator : (Legacy)
     if ":" in message:
-        _, ip = message.split(":", 1)
-        return ip.strip(), None
+        parts = message.split(":", 1)
+        if len(parts) == 2:
+            return parts[1].strip(), None
+            
     return None, None
 
 
@@ -96,75 +121,109 @@ def _build_client_payload() -> Dict[str, Any]:
             "temp": heartbeat_snapshot.get("temp"),
         },
         "service_state": service_state,
+        "mode": "LAN_TRUSTED" # Explicit mode indicator
     }
 
 
 # ---------------------------------------------------------------------------
-# Helpers de sockets
+# Socket Helpers
 # ---------------------------------------------------------------------------
 
 def _send_json(conn: socket.socket, payload: Dict[str, Any]) -> None:
-    conn.sendall(json.dumps(payload).encode("utf-8") + b"\n")
-
+    try:
+        data = json.dumps(payload).encode("utf-8") + b"\n"
+        conn.sendall(data)
+    except (TypeError, ValueError) as e:
+        log_event("error", module_name, f"Error serializing JSON for sending: {e}")
+        raise
 
 def _receive_json(conn: socket.socket, buffer_size: int = 4096) -> Dict[str, Any]:
     data = bytearray()
     while True:
-        chunk = conn.recv(buffer_size)
-        if not chunk:
-            break
-        data.extend(chunk)
-        if b"\n" in chunk:
-            break
+        try:
+            chunk = conn.recv(buffer_size)
+            if not chunk:
+                break
+            data.extend(chunk)
+            if b"\n" in chunk:
+                break
+        except socket.timeout:
+            raise socket.timeout("Timeout receiving data")
+        except OSError as e:
+            raise OSError(f"Socket error in reception: {e}")
+            
     if not data:
-        raise ValueError("Conexión cerrada sin datos")
-    return json.loads(data.splitlines()[0].decode("utf-8"))
+        raise ValueError("Connection closed without data")
+    
+    try:
+        line = data.splitlines()[0].decode("utf-8")
+        return json.loads(line)
+    except (json.JSONDecodeError, IndexError) as e:
+        raise ValueError(f"Invalid JSON received: {e}")
 
 
 # ---------------------------------------------------------------------------
-# Escucha del broadcast
+# Broadcast Listener (Discovery)
 # ---------------------------------------------------------------------------
 
 def _listen_for_server_broadcast(port: int = BROADCAST_PORT, timeout: float = SERVER_TIMEOUT) -> bool:
+    """Passively listens for a Director UDP beacon."""
+    # log_print("debug", module_name, f"Listening for broadcasts on port {port}...")
+    
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("", port))
-        sock.settimeout(timeout)
         try:
-            message, _ = sock.recvfrom(1024)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # In Linux SO_REUSEPORT can also help if there are multiple instances,
+            # but SO_REUSEADDR is usually enough for multicast/broadcast.
+            if hasattr(socket, "SO_REUSEPORT"):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                
+            sock.bind(("", port))
+            sock.settimeout(timeout)
+            
+            message, addr = sock.recvfrom(1024)
+            sender_ip = addr[0]
+            
         except socket.timeout:
-            log_event("error", module_name, "No se recibió broadcast en el tiempo esperado.")
+            # Normal if no server is active
             return False
         except OSError as exc:
-            log_event("error", module_name, f"Error recibiendo broadcast: {exc}")
+            log_event("error", module_name, f"Error binding/receiving UDP broadcast: {exc}")
             return False
 
     message_text = message.decode("utf-8", errors="replace")
-    ip, server_port = _parse_broadcast_message(message_text)
-    if not ip:
-        log_event("error", module_name, f"Broadcast con formato inesperado: {message_text}")
+    # log_event("debug", module_name, f"Raw broadcast received from {sender_ip}: {message_text}")
+    
+    payload_ip, payload_port = _parse_broadcast_message(message_text)
+    
+    # If message doesn't have explicit IP, use sender's
+    final_ip = payload_ip if payload_ip else sender_ip
+    final_port = payload_port # Can be None
+    
+    if not final_ip:
+        log_event("warning", module_name, "Broadcast received but Director IP could not be determined.")
         return False
 
-    _save_server_endpoint(ip, server_port)
+    _save_server_endpoint(final_ip, final_port)
     log_event(
         "info",
         module_name,
-        f"broadcast recibido; endpoint actualizado a {ip}:{server_port or 'desconocido'}",
+        f"Director detected at {final_ip}:{final_port or 'Default'}"
     )
     return True
 
 
 # ---------------------------------------------------------------------------
-# Gestión de mensajes entrantes desde el servidor
+# Message Handlers (Protocol)
 # ---------------------------------------------------------------------------
 
 def _handle_handshake_response(message: Dict[str, Any]) -> bool:
     payload = message.get("cliente_payload")
     if not isinstance(payload, dict):
-        log_event("error", module_name, "Handshake: respuesta sin cliente_payload")
+        log_event("error", module_name, "Handshake without valid return payload")
         return False
 
-    # Actualizar Identidad
+    # Update Identity (If Director assigns/corrects data)
     structure = STRUCTURE_MANAGER.get_structure()
     identity = structure.setdefault("identity", {})
     updated = False
@@ -175,278 +234,220 @@ def _handle_handshake_response(message: Dict[str, Any]) -> bool:
     if payload.get("index") is not None and identity.get("index") != payload["index"]:
         identity["index"] = payload["index"]
         updated = True
-    
-    if updated:
-        # Necesitamos una forma de actualizar partes arbitrarias de la estructura vía manager?
-        # Por ahora, podemos actualizar manualmente el dict en el manager y guardar, 
-        # pero mejor añadir un método si esto se vuelve frecuente.
-        # Dado que get_structure retorna una copia, no podemos simplemente modificarla.
-        # Asumamos que podemos modificar los datos internos vía un nuevo método o simplemente confiar en actualizaciones específicas.
-        # Idealmente StructureManager debería tener métodos específicos.
-        # Por ahora, implementaremos un hack rápido: re-implementar save en manager o añadir un método.
-        # Añadiré 'update_identity' a StructureManager en el siguiente paso si es necesario, 
-        # pero por ahora usaré un enfoque de actualización directa si puedo.
-        # Espera, puedo simplemente actualizar el archivo y recargar? No, eso derrota el propósito.
-        # Debería añadir `update_identity` a StructureManager.
-        pass
+        
+    # TODO: If identity changed, ideally we save it.
+    # For now we trust StructureManager handles persistence if critical.
 
-    # Estado del Servicio
+    # State Synchronization (Director tells us what we should be doing)
     service_state = payload.get("service_state") or {}
-    active_svc = service_state.get("actual")
+    target_svc = service_state.get("actual")
     
-    # Actualizar servicio activo vía manager
-    STRUCTURE_MANAGER.update_service_state(
-        active_svc, 
-        enabled=True, # Si está activo, está habilitado
-        web_port=None # Usualmente no obtenemos web_port del servidor, ¿o sí?
-    )
-    
-    # También actualizar configuración si está presente
-    if active_svc and service_state.get("configuration"):
-        # Necesitamos actualizar el campo de configuración del servicio
-        # Esto falta en StructureManager.
-        pass
+    if target_svc:
+        current_svc = STRUCTURE_MANAGER.get_active_service()
+        current_id = current_svc.get("name") if current_svc else None
+        
+        if current_id != target_svc:
+            log_print("info", module_name, f"Director requests service change: {current_id} -> {target_svc}")
+            STRUCTURE_MANAGER.update_service_state(target_svc, enabled=True)
+            # Note: This doesn't start the process per-se, ServiceManager or Main Loop must react
+            # to structure.json change. (See client.py: on_structure_change)
 
-    log_print(
-        "info",
-        module_name,
-        f"Handshake completado; servicio activo: {active_svc}",
-    )
+    log_print("info", module_name, "Handshake ACCEPTED by Director.")
     return True
-
-
-def _handle_server_error(message: Dict[str, Any]) -> bool:
-    log_event("error", module_name, f"Error recibido del servidor: {message}")
-    return True
-
-
-def _handle_command(message: Dict[str, Any]) -> bool:
-    log_print("info", module_name, f"Comando recibido del servidor: {message}")
-    return True
-
-
-def _handle_close_notice(message: Dict[str, Any]) -> bool:
-    reason = message.get("reason") or "sin motivo"
-    log_print("warning", module_name, f"El servidor cerró la comunicación: {reason}")
-    _receiver_stop.set()
-    return False
-
-
-def _handle_close_ack(message: Dict[str, Any]) -> bool:
-    log_event("debug", module_name, f"Confirmación de cierre del servidor: {message}")
-    _receiver_stop.set()
-    return False
-
-
-MESSAGE_HANDLERS: Dict[str, Any] = {
-    "handshake_response": _handle_handshake_response,
-    "error": _handle_server_error,
-    "command": _handle_command,
-    "close": _handle_close_notice,
-    "close_ack": _handle_close_ack,
-}
 
 
 def _handle_server_message(message: Dict[str, Any]) -> bool:
     msg_type = message.get("type")
-    handler = MESSAGE_HANDLERS.get(msg_type)
-    if handler is None:
-        log_event("warning", module_name, f"Mensaje con tipo desconocido recibido: {msg_type}")
+    
+    if msg_type == "handshake_response":
+        return _handle_handshake_response(message)
+    elif msg_type == "ping":
+        # Simple keep-alive
         return True
-    try:
-        return bool(handler(message))
-    except Exception as exc:
-        log_event("error", module_name, f"Fallo procesando mensaje {msg_type}: {exc}")
+    elif msg_type == "command":
+        log_print("info", module_name, f"Command received: {message.get('command')}")
+        # Remote commands would be implemented here (reboot, restart_service, etc)
+        return True
+    elif msg_type == "error":
+        log_event("error", module_name, f"Remote error: {message.get('message')}")
+        return True
+    elif msg_type == "close":
+        log_print("warning", module_name, "Director closed request.")
         return False
+        
+    log_event("warning", module_name, f"Unknown message type: {msg_type}")
+    return True
 
 
 # ---------------------------------------------------------------------------
-# Gestión del canal persistente
+# Main Communication Loop (Receiver)
 # ---------------------------------------------------------------------------
 
 def _receiver_loop() -> None:
     global _comm_socket, _receiver_thread
+    
+    log_print("debug", module_name, "Starting receiver loop...")
+    
     while not _receiver_stop.is_set():
         with _comm_lock:
             conn = _comm_socket
+            
         if conn is None:
             break
+            
         try:
+            # Blocking with implicit socket timeout or infinite
             message = _receive_json(conn)
-        except ValueError:
-            log_event("warning", module_name, "El servidor cerró la conexión de forma inesperada")
+            
+            if not _handle_server_message(message):
+                break
+                
+        except (ValueError, OSError) as e:
+            if not _receiver_stop.is_set():
+                log_event("warning", module_name, f"Connection lost with Director: {e}")
             break
-        except (OSError, json.JSONDecodeError) as exc:
-            log_event("error", module_name, f"Error leyendo del servidor: {exc}")
+        except Exception as e:
+            log_event("error", module_name, f"Critical error in receiver: {e}")
             break
 
-        if not _handle_server_message(message):
-            break
-
+    # Cleanup on loop exit
     _session_active.clear()
     _receiver_stop.set()
+    
     with _comm_lock:
         if _comm_socket is not None:
             try:
                 _comm_socket.close()
-            except OSError:
+            except: 
                 pass
             _comm_socket = None
+            
     _receiver_thread = None
-    log_print("info", module_name, "Canal de comunicación con el servidor cerrado")
+    log_print("info", module_name, "Session with Director finished.")
 
 
 def _start_receiver_thread() -> None:
     global _receiver_thread
+    if _receiver_thread is not None and _receiver_thread.is_alive():
+        return
+
     _receiver_stop.clear()
     _session_active.set()
     _receiver_thread = threading.Thread(
         target=_receiver_loop,
-        name="ServerCommReceiver",
+        name="NetComReceiver",
         daemon=True,
     )
     _receiver_thread.start()
 
 
-def _open_comm_channel(cliente_payload: Dict[str, Any]) -> bool:
+def _connect_to_director(ip: str, port: int) -> bool:
     global _comm_socket
-
-    with _comm_lock:
-        if _comm_socket is not None:
-            log_event("warning", module_name, "Ya existe un canal de comunicación abierto")
-            return True
-
-    ip, port = _load_server_endpoint()
-    if not ip or not port:
-        log_print("error", module_name, "Endpoint del servidor no disponible")
-        return False
-
-    log_print("info", module_name, f"Estableciendo canal con el servidor {ip}:{port}")
-
-    conn: Optional[socket.socket] = None
+    
+    log_print("info", module_name, f"Connecting to Director at {ip}:{port}...")
+    
+    conn = None
     try:
         conn = socket.create_connection((ip, port), timeout=HANDSHAKE_TIMEOUT)
         conn.settimeout(HANDSHAKE_TIMEOUT)
-        _send_json(conn, {"type": "handshake", "cliente_payload": cliente_payload})
+        
+        # Send Handshake
+        payload = _build_client_payload()
+        _send_json(conn, {"type": "handshake", "cliente_payload": payload})
+        
+        # Wait for Response
         response = _receive_json(conn)
-    except socket.timeout:
-        log_event("error", module_name, "Timeout esperando respuesta del servidor")
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        return False
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
-        log_event("error", module_name, f"Handshake sin respuesta o inválido: {exc}")
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        return False
-
-    if response.get("type") != "handshake_response":
-        log_event("error", module_name, f"Respuesta inesperada del servidor: {response}")
-        try:
+        
+        if response.get("type") != "handshake_response":
+            log_event("error", module_name, f"Invalid handshake response: {response}")
             conn.close()
-        except Exception:
-            pass
-        return False
-
-    if not _handle_handshake_response(response):
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        return False
-
-    if conn is None:
-        return False
-
-    conn.settimeout(None)
-    with _comm_lock:
-        _comm_socket = conn
-    _start_receiver_thread()
-    log_print("info", module_name, "Canal de comunicación establecido con el servidor")
-    return True
-
-
-def close_comm_channel(reason: str = "client_shutdown") -> None:
-    global _comm_socket, _receiver_thread
-
-    with _comm_lock:
-        conn = _comm_socket
-    if conn is None:
-        return
-
-    log_print("info", module_name, "Cerrando canal de comunicación con el servidor")
-    notify_error = False
-    try:
-        _send_json(conn, {"type": "close", "reason": reason})
-    except OSError as exc:
-        log_event("warning", module_name, f"No se pudo notificar cierre al servidor: {exc}")
-        notify_error = True
-
-    if not notify_error:
-        _receiver_stop.wait(timeout=2.0)
-
-    _receiver_stop.set()
-    try:
-        conn.shutdown(socket.SHUT_RDWR)
-    except OSError:
-        pass
-    try:
-        conn.close()
-    except OSError:
-        pass
-
-    with _comm_lock:
-        _comm_socket = None
-
-    if _receiver_thread and _receiver_thread.is_alive():
-        _receiver_thread.join(timeout=2.0)
-    _receiver_thread = None
-    _session_active.clear()
-
-
-def send_message(message_type: str, body: Optional[Dict[str, Any]] = None) -> bool:
-    payload = {"type": message_type}
-    if body:
-        payload.update(body)
-
-    if not _session_active.is_set():
-        log_event("error", module_name, "Intento de enviar mensaje sin un canal activo")
-        return False
-
-    with _comm_lock:
-        conn = _comm_socket
-    if conn is None:
-        log_event("error", module_name, "No existe un canal de comunicación abierto")
-        return False
-
-    try:
-        _send_json(conn, payload)
+            return False
+            
+        if not _handle_handshake_response(response):
+            conn.close()
+            return False
+            
+        # Connection established
+        conn.settimeout(None) # Blocking mode for loop
+        
+        with _comm_lock:
+            _comm_socket = conn
+            
+        _start_receiver_thread()
         return True
-    except OSError as exc:
-        log_event("error", module_name, f"No se pudo enviar el mensaje al servidor: {exc}")
-        _receiver_stop.set()
+        
+    except (socket.timeout, OSError, ValueError) as e:
+        log_event("error", module_name, f"Failed to connect/handshake: {e}")
+        if conn:
+            try: conn.close()
+            except: pass
         return False
 
 
 # ---------------------------------------------------------------------------
-# API pública
+# Public API
 # ---------------------------------------------------------------------------
 
 def handshake() -> bool:
-    log_print("info", module_name, "iniciando handshake con el servidor")
+    """
+    Attempts to discover and connect to the Director.
+    Returns True if connection is established.
+    """
+    if _session_active.is_set():
+        return True
+
+    # 1. Listen for Broadcast to find IP
     if not _listen_for_server_broadcast():
         return False
 
-    payload = _build_client_payload()
-    return _open_comm_channel(payload)
+    # 2. Load discovered IP
+    ip, port = _load_server_endpoint()
+    if not ip:
+        return False
+        
+    # If no port in broadcast, assume default?
+    # Or Director should have sent it. Assume same as broadcast + N? 
+    # For now assume data/server.json has correct info or broadcast had it.
+    target_port = port if port else 9000 # Arbitrary default if missing
+    
+    # 3. Attempt TCP Connection
+    return _connect_to_director(ip, target_port)
 
 
 def check_server_status() -> bool:
     return _session_active.is_set()
+
+
+def send_message(message_type: str, body: Optional[Dict[str, Any]] = None) -> bool:
+    if not _session_active.is_set():
+        return False
+
+    payload = {"type": message_type}
+    if body:
+        payload.update(body)
+
+    with _comm_lock:
+        conn = _comm_socket
+        if not conn:
+            return False
+        
+        try:
+            _send_json(conn, payload)
+            return True
+        except OSError:
+            # Receiver will handle close
+            return False
+
+def close_comm_channel(reason: str = "client_shutdown") -> None:
+    send_message("close", {"reason": reason})
+    # Give it a moment to send
+    time.sleep(0.1)
+    
+    _receiver_stop.set()
+    with _comm_lock:
+        if _comm_socket:
+            try:
+                _comm_socket.shutdown(socket.SHUT_RDWR)
+                _comm_socket.close()
+            except: pass
+            _comm_socket = None
