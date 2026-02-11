@@ -27,13 +27,6 @@ class ServiceManager:
         self._load_config()
 
     def _load_config(self):
-        # Sync from servicios.json via manager to ensure structure.json is up to date
-        STRUCTURE_MANAGER.sync_from_servicios_json()
-        
-        # Load internal config map from structure (or keep using servicios.json for raw config?)
-        # Original code loaded servicios.json directly. Keeping that for now as it contains execution details (cmd, cwd)
-        # that might not be fully in structure.json service list (structure.json has metadata).
-        
         services_json_path = BASE_DIR / "servicios" / "servicios.json"
         
         # Auto-restore from template if missing (Auto-Repair)
@@ -46,6 +39,9 @@ class ServiceManager:
                     shutil.copy(template_path, services_json_path)
                 except Exception as e:
                     LOGGER.error(f"Failed to restore template: {e}")
+
+        # Sync from servicios.json via manager to ensure structure.json is up to date
+        STRUCTURE_MANAGER.sync_from_servicios_json()
 
         try:
             with services_json_path.open("r", encoding="utf-8") as f:

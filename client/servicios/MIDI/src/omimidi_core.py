@@ -57,6 +57,9 @@ from omimidi_logger import get_logger
 LOGGER = get_logger("omimidi.core")
 
 
+
+VERSION = "0.0.1"
+
 CLEANUP_FILES = [
     LEARN_REQ_FILE,
     STATE_FILE,

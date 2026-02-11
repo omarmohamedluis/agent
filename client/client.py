@@ -3,6 +3,7 @@ Punto de entrada principal del Cliente OMI Agent.
 Gestiona el servidor web, el ciclo de vida de los servicios y la comunicación básica.
 """
 import sys
+import subprocess # Added for terminal cleanup
 import asyncio
 import logging
 import uvicorn
@@ -595,6 +596,12 @@ def main():
         except Exception as e:
             LOGGER.error(f"Error cerrando canal de comunicación: {e}")
             
+        # Restaurar terminal (fix para freezing)
+        try:
+            subprocess.run(["stty", "sane"], stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
         LOGGER.info("Apagado completo.")
 
 if __name__ == "__main__":

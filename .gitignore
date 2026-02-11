@@ -16,10 +16,13 @@ __pycache__/
 Thumbs.db
 
 
-# jsons autogenerados (contenidos dentro de data/)
 *_TEMP.json
 
-active_confit.txt
+# Estado y Configuración activa
+active_config.txt
+client/data/active_service.txt
+client/servicios/MIDI/active_config.txt
+client/servicios/satellite/active_config.txt
 
 # generados
 client/data/structure.json
@@ -32,6 +35,10 @@ client/servicios/MIDI/OMIMIDI_learn_request.json
 client/servicios/MIDI/OMIMIDI_restart.flag
 client/servicios/MIDI/OMIMIDI_webui.pid
 
+# Configs generadas (no templates)
+client/servicios/MIDI/configs/*.json
+!client/servicios/MIDI/configs/*.template.json
+
 
 # Satellite Service
 client/servicios/satellite/satellite_code/
@@ -40,3 +47,12 @@ client/servicios/satellite/fnm_data/
 client/servicios/satellite/runtime_config.json
 client/servicios/satellite/logs/
 client/servicios/satellite/service_state.json
+client/servicios/satellite/install.flag
+client/servicios/satellite/restart_satellite.flag
+
+# Configs generadas (no templates)
+client/servicios/satellite/configs/*.json
+!client/servicios/satellite/configs/*.template.json
+
+# Logs generales
+client/logs/

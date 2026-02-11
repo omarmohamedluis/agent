@@ -31,7 +31,7 @@ from pythonosc.udp_client import SimpleUDPClient
 from datetime import datetime
 import mido
 
-from omimidi_core import push_map_to_server
+from omimidi_core import push_map_to_server, VERSION
 from omimidi_utils import load_json, save_json
 
 from omimidi_logger import get_logger
@@ -81,7 +81,8 @@ def get_map() -> Dict[str, Any]:
     return load_json(MAP_FILE, {
         "file_info": {
             "name": "default",
-            "ui_port": 9001
+            "ui_port": 9001,
+            "version": VERSION
         },
         "source": {
             "midi_input": ""
@@ -111,6 +112,7 @@ def persist_map(data: Dict[str, Any], restart_service: bool = True) -> None:
     
     data["file_info"]["name"] = str(data["file_info"].get("name") or "default").strip()
     data["file_info"]["ui_port"] = int(data["file_info"].get("ui_port", 9001))
+    data["file_info"]["version"] = VERSION
     data["net"]["vlan"] = int(data["net"].get("vlan", 100))
     data["net"]["vlan_active"] = bool(data["net"].get("vlan_active", False))
     data["net"]["ip_mode"] = str(data["net"].get("ip_mode", "dhcp")).strip()

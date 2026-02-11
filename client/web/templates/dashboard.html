@@ -167,8 +167,8 @@
     </div>
 
     <script>
-        let currentActiveServiceId = "{{ active_service.id if active_service else '' }}";
-        let systemIp = "{{ status.ip }}";
+        let currentActiveServiceId = ""; // Force refresh on load to ensure correct hostname usage
+        let systemIp = window.location.hostname;
         let isManualActionPending = false;
 
         async function controlService(id, action) {
@@ -387,8 +387,11 @@
                         setTimeout(() => {
                             // Verificar que sigue siendo el servicio activo
                             if (currentActiveServiceId === newActiveService.id) {
+                                const targetUrl = `http://${systemIp}:${newActiveService.web_port}`;
+                                console.log("🔍 Debug - Loading Iframe URL:", targetUrl);
+                                showToast(`Loading Iframe: ${targetUrl}`, 'info');
                                 contentArea.innerHTML = `
-                                    <iframe id="serviceIframe" src="http://${systemIp}:${newActiveService.web_port}"></iframe>
+                                    <iframe id="serviceIframe" src="${targetUrl}"></iframe>
                                 `;
                             }
                         }, 1500);

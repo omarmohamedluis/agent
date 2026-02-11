@@ -357,8 +357,16 @@ class StructureManager:
                                 map_port = file_info.get("ui_port")
                                 web_port = map_port if map_port else config.get("web_port")
                                 
+                                LOGGER.info(f"SYNC {svc_id}: map_port={map_port}, default_port={config.get('web_port')} -> Final web_port={web_port}")
+
                                 if web_port is not None and target_svc.get("web_port") != web_port:
                                     target_svc["web_port"] = web_port
+                                    updated = True
+                                
+                                # Sincronizar Versión
+                                version = file_info.get("version")
+                                if version and target_svc.get("version") != version:
+                                    target_svc["version"] = version
                                     updated = True
                                 
                                 # Sincronizar info VLAN (Estructura específica MIDI)
@@ -429,6 +437,8 @@ class StructureManager:
 
         except Exception as e:
             LOGGER.error(f"Error sincronizando servicio {svc_id}: {e}")
+            import traceback
+            LOGGER.error(traceback.format_exc())
 
 # Accesor Singleton
 _manager_instance = None

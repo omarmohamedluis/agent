@@ -10,6 +10,7 @@ import asyncio
 import threading
 import urllib.request
 import urllib.error
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -107,33 +108,69 @@ async def load_preset(preset: PresetModel):
     return {"status": "ok", "message": f"Preset {preset.name} cargado. Reiniciando..."}
 
 @app.post("/api/config/save")
-async def save_config(name: str = Body(...), content: dict = Body(...)):
-    """Guarda la configuración del formulario y sincroniza con el Agente."""
-    target = CONFIGS_DIR / f"{name}.json"
+async def save_config(name: str = Body(...), content: dict = Body(...), original_name: str = Body(None), restart: bool = Body(False)):
+    """Guarda la configuración, renombra si es necesario y detiene/reinicia el servicio."""
     try:
         # Asegurar estructura 'net'
         if "net" not in content:
             content["net"] = {"vlan": 60, "vlan_active": False, "ip_mode": "dhcp", "ip": "", "mask": "", "gateway": ""}
         
+        # 1. Renaming Logic
+        if original_name and original_name != name:
+            old_file = CONFIGS_DIR / f"{original_name}.json"
+            if old_file.exists():
+                old_file.unlink()
+                
+        target = CONFIGS_DIR / f"{name}.json"
+        
+        # Update name in file_info if present (or add it)
+        # Preserve ui_port and add version
+        if "file_info" not in content:
+             content["file_info"] = {}
+        
+        # Read existing config to preserve ui_port if not provided
+        existing_data = get_preset_data(name)
+        current_ui_port = existing_data.get("file_info", {}).get("ui_port", 9002)
+        
+        content["file_info"]["name"] = name
+        content["file_info"]["ui_port"] = content.get("file_info", {}).get("ui_port", current_ui_port)
+        content["file_info"]["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Add installed version
+        try:
+            package_json = BASE_DIR / "satellite_code" / "package.json"
+            if package_json.exists():
+                with open(package_json, 'r') as f:
+                    pkg = json.load(f)
+                    content["file_info"]["version"] = pkg.get("version", "0.0.0")
+        except:
+             pass
+
         with open(target, 'w') as f:
             json.dump(content, f, indent=4)
         
-        active = get_active_config_name()
-        if name == active:
-            # Notificar al Agente para recarga completa (Red + Servicio)
-            def _notify_agent():
-                try:
-                    url = "http://localhost:8000/api/services/satellite/reload_config"
-                    req = urllib.request.Request(url, method="POST")
-                    with urllib.request.urlopen(req, timeout=2) as r:
-                        pass
-                except Exception as e:
-                    print(f"Error notificando al agente: {e}")
-            
-            threading.Thread(target=_notify_agent, daemon=True).start()
-            return {"status": "ok", "message": "Configuración guardada. Sincronizando red y reiniciando..."}
-            
-        return {"status": "ok", "message": "Preset guardado."}
+        # 2. Update Active Config to the new name
+        ACTIVE_CONFIG_FILE.write_text(name)
+
+        # 3. STOP Service (Standby) instead of Reload
+        # We need to tell the agent to STOP the service.
+        # The user will manually start it again.
+        def _manage_agent_service():
+            try:
+                # Determine action
+                action = "reload_config" if restart else "stop"
+                url = f"http://127.0.0.1:8000/api/services/satellite/{action}"
+                req = urllib.request.Request(url, method="POST")
+                with urllib.request.urlopen(req, timeout=2) as r:
+                    pass
+            except Exception as e:
+                print(f"Error managing service on agent ({action}): {e}")
+        
+        threading.Thread(target=_manage_agent_service, daemon=True).start()
+        
+        msg = "Configuración guardada. Reiniciando..." if restart else "Configuración guardada. Deteniendo servicio (Standby)..."
+        return {"status": "ok", "message": msg}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {e}")
 
@@ -156,7 +193,9 @@ async def ping_request(ips: List[str] = Body(...)):
 async def restart_service():
     """Solicita reinicio completo al Agente."""
     try:
-        url = "http://localhost:8000/api/services/satellite/reload_config"
+        # Check if we are in config mode, if so, we might want to just stop?
+        # But this button is only shown in Running mode usually.
+        url = "http://127.0.0.1:8000/api/services/satellite/reload_config"
         req = urllib.request.Request(url, method="POST")
         with urllib.request.urlopen(req, timeout=1) as r:
             return {"status": "ok"}
@@ -167,7 +206,7 @@ async def restart_service():
 async def close_config():
     """Solicita cierre al Agente."""
     try:
-        url = "http://localhost:8000/api/services/satellite/stop"
+        url = "http://127.0.0.1:8000/api/services/satellite/stop"
         req = urllib.request.Request(url, method="POST")
         with urllib.request.urlopen(req, timeout=1) as r:
             return {"status": "ok"}
@@ -192,6 +231,43 @@ async def get_status():
                 return json.load(f)
         except: pass
     return {"state": "unknown", "message": "Esperando servicio..."}
+
+# --- Companion Manager Endpoints ---
+
+@app.get("/api/companion/status")
+async def get_companion_status():
+    """Returns local version if installed."""
+    package_json = BASE_DIR / "satellite_code" / "package.json"
+    version = None
+    if package_json.exists():
+        try:
+            with open(package_json, 'r') as f:
+                data = json.load(f)
+                version = data.get("version")
+        except: pass
+    
+    return {"installed": bool(version), "version": version}
+
+@app.get("/api/companion/check_update")
+async def check_update():
+    """Checks latest version on GitHub."""
+    try:
+        url = "https://api.github.com/repos/bitfocus/companion-satellite/releases/latest"
+        # User-Agent is required by GitHub API
+        req = urllib.request.Request(url, headers={'User-Agent': 'OMI-Agent'})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.load(r)
+            tag_name = data.get("tag_name", "").lstrip("v")
+            return {"latest_version": tag_name, "url": data.get("html_url")}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/api/companion/update")
+async def trigger_update():
+    """Triggers update process (git pull + build)."""
+    flag = BASE_DIR / "update.flag"
+    flag.touch()
+    return {"status": "ok", "message": "Actualización iniciada"}
 
 @app.post("/api/install")
 async def trigger_install():

@@ -30,7 +30,7 @@
         "stderr": "logs/services/satellitelog.err"
       },
       "web_port": 9002,
-      "description": "Servicio de integraci\u00f3n Companion Satellite."
+      "description": "Servicio de integración Companion Satellite."
     },
     {
       "id": "OSCnum",

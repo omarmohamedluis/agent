@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import os
+import socket # Added for hostname resolution
+
 import sys
 import json
 import time
@@ -173,7 +175,7 @@ def update_status(state, message=None, progress=None):
     except Exception as e:
         log_wrapper(f"Error guardando estado: {e}", "ERROR")
 
-def install_satellite_thread(node_bin, env):
+def install_satellite_thread(node_bin, env, is_update=False, config_mode=False):
     """Proceso de instalación/compilación en segundo plano."""
     try:
         update_status("installing", "Verificando herramientas...", 10)
@@ -181,25 +183,37 @@ def install_satellite_thread(node_bin, env):
         corepack_bin = bin_dir / "corepack"
         yarn_bin = bin_dir / "yarn"
 
+        if is_update:
+             update_status("installing", "Actualizando código fuente...", 20)
+             try:
+                 subprocess.run(["git", "pull"], cwd=CODE_DIR, check=True, capture_output=True)
+             except Exception as e:
+                 log_wrapper(f"Error en git pull: {e}", "WARNING")
+
         update_status("installing", "Habilitando Yarn (Corepack)...", 30)
         if corepack_bin.exists():
             try:
                 subprocess.run([str(corepack_bin), "enable"], cwd=CODE_DIR, env=env, check=True, capture_output=True)
             except: pass
 
-        if not (CODE_DIR / "node_modules").exists():
-            update_status("installing", "Descargando dependencias...", 40)
+        # Always install if update or missing
+        if is_update or not (CODE_DIR / "node_modules").exists():
+            update_status("installing", "Actualizando dependencias...", 40)
             cmd = [str(yarn_bin), "install"] if yarn_bin.exists() else [str(corepack_bin), "yarn", "install"]
             subprocess.run(cmd, cwd=CODE_DIR, env=env, check=True, capture_output=True)
 
+        # Always build if update or missing
         main_js = CODE_DIR / "satellite" / "dist" / "main.js"
-        if not main_js.exists():
+        if is_update or not main_js.exists():
             update_status("installing", "Compilando Satellite...", 70)
             cmd = [str(yarn_bin), "build"] if yarn_bin.exists() else [str(corepack_bin), "yarn", "build"]
             subprocess.run(cmd, cwd=CODE_DIR, env=env, check=True, capture_output=True)
         
-        update_status("starting", "¡Casi listo!", 100)
-        log_wrapper("Instalación/Compilación finalizada satisfactoriamente.")
+        if config_mode:
+            update_status("config", "Instalación/Actualización completada.", 100)
+        else:
+            update_status("starting", "¡Casi listo!", 100)
+        log_wrapper("Instalación/Actualización finalizada satisfactoriamente.")
     except Exception as e:
         log_wrapper(f"Fallo en hilo de instalación: {e}", "ERROR")
         update_status("error", f"Error de instalación: {str(e)}")
@@ -220,6 +234,11 @@ def setup_runtime_config():
     if not source.exists():
         log_wrapper(f"Creando preset por defecto: {active}")
         default_conf = {
+            "file_info": {
+                "name": active,
+                "ui_port": 9002,
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
+            },
             "remoteIp": "127.0.0.1", "remotePort": 16622, "restPort": 9999,
             "surfacePluginsEnabled": {"elgato-streamdeck": True, "loupedeck": True, "infinitton": True},
             "net": {
@@ -261,8 +280,18 @@ def run_satellite(node_bin, env):
 def run_web_wrapper():
     """Lanza el Wrapper. Redirige a logs."""
     # NOTA: Uvicorn es muy ruidoso, usamos --no-access-log
-    cmd = [sys.executable, "-m", "uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "9002", "--no-access-log"]
-    log_wrapper("Lanzando Servidor Web Wrapper (Puerto 9002)...")
+    host = "0.0.0.0"
+    port = 9002
+    cmd = [sys.executable, "-m", "uvicorn", "web.app:app", "--host", host, "--port", str(port), "--no-access-log"]
+    
+    display_host = host
+    if host == "0.0.0.0":
+        try:
+            display_host = socket.gethostname() or "localhost"
+        except:
+            display_host = "localhost"
+
+    log_wrapper(f"🌐 WebUI en http://{display_host}:{port}")
     
     proc = subprocess.Popen(
         cmd, 
@@ -339,16 +368,24 @@ def main():
     signal.signal(signal.SIGTERM, handle_stop)
     signal.signal(signal.SIGINT, handle_stop)
     
+    loop_count = 0
     while True:
+        loop_count += 1
         try:
-            # A. Instalacion Manual (Solo si NO es modo config)
-            if not config_mode and not installed and INSTALL_FLAG.exists():
-                log_wrapper("Trigger de instalación recibido.")
-                INSTALL_FLAG.unlink()
+            # A. Instalacion Manual / Actualización (Permitido en ambos modos)
+            if (INSTALL_FLAG.exists() or (SERVICE_DIR / "update.flag").exists()):
+                is_update = (SERVICE_DIR / "update.flag").exists()
+                action_name = "Actualización" if is_update else "Instalación"
+                
+                log_wrapper(f"Trigger de {action_name} recibido.")
+                
+                if INSTALL_FLAG.exists(): INSTALL_FLAG.unlink()
+                if (SERVICE_DIR / "update.flag").exists(): (SERVICE_DIR / "update.flag").unlink()
+                
                 try:
-                    update_status("installing", "Iniciando descarga...", 5)
+                    update_status("installing", f"Iniciando {action_name}...", 5)
                     node_bin, env = setup_fnm()
-                    threading.Thread(target=install_satellite_thread, args=(node_bin, env)).start()
+                    threading.Thread(target=install_satellite_thread, args=(node_bin, env, is_update, config_mode)).start()
                 except Exception as e:
                     update_status("error", f"Fallo al iniciar setup: {e}")
 

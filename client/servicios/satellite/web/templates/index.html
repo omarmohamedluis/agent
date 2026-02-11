@@ -174,6 +174,11 @@
             color: white;
         }
 
+        .btn-warning {
+            background: #f59e0b;
+            color: white;
+        }
+
         .btn-danger {
             background: var(--danger);
             color: white;
@@ -316,6 +321,17 @@
             visibility: visible;
             transform: translateY(0);
         }
+
+        /* Version Checking UI */
+        .version-check {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.85rem;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--border-color);
+        }
     </style>
 </head>
 
@@ -324,15 +340,18 @@
         <div class="panel-left">
             <header style="display: flex; justify-content: space-between; align-items: center;">
                 <h1>📡 Satellite Manager</h1>
-                <div id="activePresetLabel"
-                    style="font-size: 0.8rem; color: #64748b; background: #0f172a; padding: 4px 10px; border-radius: 20px;">
-                    Preset: <span id="currentPresetName">-</span>
-                </div>
             </header>
 
             <!-- Satellite Config -->
             <div class="form-section stack">
-                <h3>Servicio Satellite</h3>
+                <h3>Configuración del Servicio</h3>
+                <div class="form-group">
+                    <label>Nombre del Preset (Configuración)</label>
+                    <input type="text" id="configName" placeholder="default">
+                </div>
+
+                <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 15px 0;">
+
                 <div class="form-group">
                     <label>IP de Companion (Remote)</label>
                     <input type="text" id="remoteIp" placeholder="127.0.0.1">
@@ -352,6 +371,32 @@
                     <label class="checkbox-group"><input type="checkbox" id="plugin_streamdeck"> StreamDeck</label>
                     <label class="checkbox-group"><input type="checkbox" id="plugin_loupedeck"> Loupedeck</label>
                     <label class="checkbox-group"><input type="checkbox" id="plugin_infinitton"> Infinitton</label>
+                </div>
+            </div>
+
+            <!-- Companion Manager -->
+            <div class="form-section">
+                <h3>Gestión de Software</h3>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-size: 0.9rem; font-weight: bold;">Satellite Companion</div>
+                        <div id="localVersion" style="font-size: 0.8rem; color: #94a3b8;">Verificando...</div>
+                    </div>
+                    <button class="btn-secondary" onclick="checkCompanionOnline()"
+                        style="padding: 6px 12px; font-size: 0.8rem;">
+                        🔍 Comprobar
+                    </button>
+                </div>
+
+                <div id="updateArea"
+                    style="display: none; margin-top: 15px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px;">
+                    <div id="updateMsg" style="font-size: 0.85rem; margin-bottom: 8px;"></div>
+                    <div style="display: flex; gap: 10px;">
+                        <button id="btnUpdate" class="btn-success" onclick="triggerUpdate()"
+                            style="display:none; width: 100%;">Actualizar</button>
+                        <button id="btnInstall" class="btn-primary" onclick="triggerInstall()"
+                            style="display:none; width: 100%;">Instalar</button>
+                    </div>
                 </div>
             </div>
 
@@ -396,13 +441,13 @@
 
             <!-- Actions -->
             <div class="actions">
-                <button class="btn-success" id="saveBtn" onclick="saveConfig()">💾 Guardar Todo</button>
+                <button class="btn-success" id="saveBtn" onclick="saveConfig()">💾 Guardar y Salir</button>
                 <button class="btn-primary" id="pingBtn" onclick="openPingModal()" style="display: none;">🌐
                     Ping</button>
                 <button class="btn-secondary" id="restartBtn" onclick="restartService()" style="display: none;">🔄
                     Reiniciar</button>
                 <button class="btn-danger" id="closeConfigBtn" onclick="closeConfig()" style="display: none;">🚪
-                    Cerrar</button>
+                    Cancelar</button>
             </div>
 
             <div class="status-bar" id="statusBar">
@@ -443,19 +488,23 @@
             <div id="progressBar"
                 style="width: 0%; height: 100%; background: var(--accent-color); transition: width 0.4s;"></div>
         </div>
-        <button id="installBtn" class="btn-success" style="margin-top:20px; display:none;"
-            onclick="triggerInstall()">INICIAR INSTALACIÓN</button>
+        <button id="cancelInstallBtn" class="btn-danger" style="margin-top:20px; display:none;"
+            onclick="cancelInstall()">CANCELAR</button>
     </div>
 
     <script>
         let ws;
         let activePreset = '';
+        let originalPresetName = '';
         let isConfigMode = false;
+        let currentLocalVersion = null;
+        let wasInstalling = false;
 
         async function init() {
             connectWS();
             await checkStatus(); // Primero checking de estado para saber si es config
             await loadActivePresetData();
+            checkCompanionLocal();
             // checkStatus ya fue llamado, pero mantenemos el intervalo
             setInterval(checkStatus, 3000);
         }
@@ -476,7 +525,9 @@
                 const data = await res.json();
 
                 activePreset = data._preset_name || 'default';
-                document.getElementById('currentPresetName').innerText = activePreset;
+                originalPresetName = activePreset;
+
+                document.getElementById('configName').value = activePreset;
 
                 // Satellite
                 document.getElementById('remoteIp').value = data.remoteIp || '127.0.0.1';
@@ -515,7 +566,9 @@
         }
 
         async function saveConfig() {
-            const name = activePreset;
+            const name = document.getElementById('configName').value.trim() || 'default';
+            const restart = !isConfigMode; // In real mode, we restart. In config mode, we stop.
+
             const content = {
                 remoteIp: document.getElementById('remoteIp').value,
                 remotePort: parseInt(document.getElementById('remotePort').value),
@@ -543,20 +596,111 @@
                 const res = await fetch('/api/config/save', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, content })
+                    body: JSON.stringify({
+                        name,
+                        content,
+                        original_name: originalPresetName,
+                        restart
+                    })
                 });
-                const data = await res.json();
-                showToast(data.message);
 
-                // Si el preset guardado es el activo (que siempre lo será ahora desde aquí),
-                // el agente reiniciará.
-                setTimeout(() => location.reload(), 2500);
+                if (!res.ok) {
+                    const errData = await res.json();
+                    throw new Error(errData.detail || "Error desconocido");
+                }
+
+                const data = await res.json();
+                showToast(restart ? "Guardado con éxito. Reiniciando..." : "Guardado con éxito. Cerrando...");
+
+                // Just wait a bit and let the service die, which will cause the iframe to gap out
+                if (!restart) {
+                    setTimeout(() => {
+                        document.body.innerHTML =
+                            `<div style="display:flex; justify-content:center; align-items:center; height:100vh; background:#0f111a; color:#94a3b8; font-family:sans-serif;">
+                                <p>Servicio en Standby</p>
+                            </div>`;
+                    }, 1000);
+                } else {
+                    // If restarting, give it a moment then reload UI to see it running
+                    setTimeout(() => window.location.reload(), 2000);
+                }
+
             } catch (e) {
                 showToast("Error guardando");
-            } finally {
                 btn.disabled = false;
-                btn.innerText = "💾 Guardar Todo";
+                btn.innerText = "💾 Guardar y Salir";
             }
+        }
+
+        // --- Companion Manager Logic ---
+        async function checkCompanionLocal() {
+            const el = document.getElementById('localVersion');
+            try {
+                const res = await fetch('/api/companion/status');
+                const data = await res.json();
+                if (data.installed) {
+                    currentLocalVersion = data.version;
+                    el.innerText = `Instalado: v${data.version}`;
+                    el.style.color = '#10b981';
+                } else {
+                    currentLocalVersion = null;
+                    el.innerText = 'No instalado';
+                    el.style.color = '#ef4444';
+                }
+            } catch (e) {
+                el.innerText = 'Error verificando';
+            }
+        }
+
+        async function checkCompanionOnline() {
+            const area = document.getElementById('updateArea');
+            const msg = document.getElementById('updateMsg');
+            const btnUp = document.getElementById('btnUpdate');
+            const btnIn = document.getElementById('btnInstall');
+
+            area.style.display = 'block';
+            msg.innerText = "Consultando GitHub...";
+            btnUp.style.display = 'none';
+            btnIn.style.display = 'none';
+
+            try {
+                const res = await fetch('/api/companion/check_update');
+                const data = await res.json();
+
+                if (data.error) {
+                    msg.innerText = "Error consultando: " + data.error;
+                    return;
+                }
+
+                const remoteVer = data.latest_version;
+                msg.innerHTML = `Última versión online: <b>v${remoteVer}</b>`;
+
+                if (!currentLocalVersion) {
+                    // Not installed
+                    btnIn.style.display = 'block';
+                } else if (currentLocalVersion !== remoteVer) {
+                    // Update available (string comparison is naive but usually works for simple tagging)
+                    btnUp.style.display = 'block';
+                    // Optional: Semantic version check could be better
+                } else {
+                    msg.innerHTML += " <span style='color:#10b981; margin-left:10px;'>✓ Actualizado</span>";
+                }
+
+            } catch (e) {
+                msg.innerText = "Error de conexión.";
+            }
+        }
+
+        async function triggerInstall() {
+            if (!confirm("¿Instalar Satellite Companion? Esto puede tardar unos minutos.")) return;
+            await fetch('/api/install', { method: 'POST' });
+            showToast("Instalación solicitada");
+        }
+
+        async function triggerUpdate() {
+            if (!confirm("¿Actualizar Satellite Companion? El servicio se reiniciará.")) return;
+            await fetch('/api/companion/update', { method: 'POST' });
+            showToast("Actualización solicitada");
         }
 
         function openPingModal() {
@@ -600,7 +744,7 @@
         }
 
         async function closeConfig() {
-            if (!confirm("¿Cerrar modo configuración?")) return;
+            if (!confirm("¿Cerrar modo configuración? Los cambios no guardados se perderán.")) return;
             try {
                 const res = await fetch('/api/close_config', { method: 'POST' });
                 // En modo iframe, el dashboard recargará automáticamente al detectar el cambio de estado
@@ -611,6 +755,12 @@
             }
         }
 
+        async function cancelInstall() {
+            if (!confirm("¿Detener el proceso? ESTO PUEDE DEJAR LA INSTALACIÓN CORRUPTA.")) return;
+            // Call stop endpoint which kills the process
+            await fetch('/api/close_config', { method: 'POST' });
+        }
+
         async function checkStatus() {
             try {
                 const res = await fetch('/api/status');
@@ -619,9 +769,10 @@
                 const overlay = document.getElementById('loadingOverlay');
                 const bar = document.getElementById('progressBar');
                 const msg = document.getElementById('loadingMessage');
-                const instBtn = document.getElementById('installBtn');
+                const cancelBtn = document.getElementById('cancelInstallBtn');
 
                 if (data.state === 'running') {
+                    isConfigMode = false;
                     overlay.style.display = 'none';
                     document.getElementById('statusBar').classList.remove('status-config');
                     document.getElementById('statusBar').classList.add('status-active');
@@ -630,21 +781,41 @@
                     // Show standard elements
                     document.getElementById('pingBtn').style.display = 'flex';
                     document.getElementById('restartBtn').style.display = 'flex';
-                    document.getElementById('closeConfigBtn').style.display = 'none';
+
+                    // Buttons Refinement
+                    document.getElementById('saveBtn').innerText = "💾 Guardar y Reiniciar";
+                    document.getElementById('closeConfigBtn').style.display = 'flex';
+                    document.getElementById('closeConfigBtn').innerText = "🚪 Cerrar Servicio";
 
                 } else if (data.state === 'not_installed') {
-                    overlay.style.display = 'flex';
-                    document.getElementById('loadingTitle').innerText = 'Satellite no instalado';
-                    msg.innerText = 'Se requiere instalación manual.';
-                    instBtn.style.display = 'block';
-                    bar.parentElement.style.display = 'none';
+                    // Logic handled in main UI now via Companion Manager
+                    // But we can check if we want to force overlay. User said: 
+                    // "si me dice, hay que instalarlo, que me de la opcion de cancelar"
+                    if (isConfigMode) {
+                        // In config mode, we don't block. We show the manager.
+                        overlay.style.display = 'none';
+                    } else {
+                        // In normal mode, if not installed, maybe block? 
+                        // But user typically enters config mode to install.
+                    }
                 } else if (data.state === 'installing' || data.state === 'starting') {
+                    if (data.state === 'installing') wasInstalling = true;
+
                     overlay.style.display = 'flex';
-                    document.getElementById('loadingTitle').innerText = data.state === 'installing' ? 'Instalando...' : 'Iniciando...';
-                    instBtn.style.display = 'none';
+                    document.getElementById('loadingTitle').innerText = data.state === 'installing' ? 'Procesando...' : 'Iniciando...';
                     bar.parentElement.style.display = 'block';
                     msg.innerText = data.message || 'Procesando...';
                     bar.style.width = (data.progress || 0) + '%';
+
+                    // Show cancel button if installing
+                    if (data.state === 'installing') {
+                        cancelBtn.style.display = 'block';
+                    } else {
+                        cancelBtn.style.display = 'none';
+                    }
+                } else if (wasInstalling && (data.state === 'config' || data.state === 'running')) {
+                    // Transition finished!
+                    window.location.reload();
                 }
 
                 // Detectar Modo Configuración desde el mensaje o el estado
@@ -653,7 +824,9 @@
                     (data.state === 'starting' && data.message && data.message.includes("Config"))) {
 
                     isConfigMode = true;
+                    document.getElementById('saveBtn').innerText = "💾 Guardar y Salir";
                     document.getElementById('closeConfigBtn').style.display = 'flex';
+                    document.getElementById('closeConfigBtn').innerText = "🚪 Cancelar";
 
                     // Update Status to Orange
                     document.getElementById('statusText').innerText = 'Configurando...';
@@ -665,7 +838,7 @@
                     document.getElementById('restartBtn').style.display = 'none';
 
                     // Layout Full Screen para Config
-                    overlay.style.display = 'none'; // Siempre ocultar overlay en config
+                    overlay.style.display = 'none';
 
                     const panelLeft = document.querySelector('.panel-left');
                     const panelRight = document.querySelector('.panel-right');
@@ -687,11 +860,7 @@
             }
         }
 
-        async function triggerInstall() {
-            await fetch('/api/install', { method: 'POST' });
-            showToast("Instalación solicitada");
-        }
-
+        // function showToast(msg)... (Already exists)
         function showToast(msg) {
             const t = document.getElementById('toast');
             t.innerText = msg; t.classList.add('show');

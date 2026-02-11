@@ -1,14 +1,14 @@
 {
   "file_info": {
-    "name": "Default",
+    "name": "Base Config",
     "ui_port": 9001,
     "updated_at": ""
   },
   "source": {
-    "midi_input": "Midi Through:Midi Through Port-0 14:0"
+    "midi_input": "None"
   },
   "net": {
-    "vlan": 90,
+    "vlan": null,
     "vlan_active": false,
     "ip_mode": "dhcp",
     "ip": "",

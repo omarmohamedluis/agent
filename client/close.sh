@@ -39,3 +39,7 @@ sudo pkill -f "satellite/dist/main.js" 2>/dev/null
 sudo pkill -9 -f "client.py" 2>/dev/null
 
 echo "✅ Todos los procesos detenidos."
+
+# Restaurar configuración de terminal por si acaso
+stty sane
+

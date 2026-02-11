@@ -13,3 +13,43 @@ Configuración a Pantalla Completa (Satellite): Ahora, al darle a "Configurar Pr
 Corrección de Nombres: Al crear un nuevo preset desde la base, ahora se actualiza correctamente el nombre interno en el archivo para que aparezca bien al guardar.
 Auto-Default: Si borras todas las configuraciones de un servicio, al arrancar se creará de nuevo un Default.json limpio basado en la plantilla.
 Puedes ver todos los des
+
+cunado le doy a guyardar al wraper de companio en offline, no cierra el servicio. deberia cerrarlo y quedarse sin ningun servicio iniciado
+
+
+
+
+
+vamos a empear con el servidor:
+
+quiero que el servidor tenga una web tambien, en vez de en .db guarde en .json de momento, para poder ver yo lo que esta guardado
+como parte del handshake, el agente le va a mandar al servidor todas la configuracion de sus configuraciones de servicios, o presets. este va a guardar mirando que no tenga uplicados
+y despues va a enviarle de vuelta toda las configuraciones que tiene el servidor, el agente reemplazara sus configuraciones locales por las que le de el server, pàra que ambos tengan la misma
+
+desde el servidor quiero poder editar las configuraciones, así que hara falta una pestaña de servicios y una lista de sus configuraciones para poder editarlas desde el servidor, y que cunado se guarde, esta ser propage a los clientes
+
+la web del servidor tendra tres apartados:
+
+el primero, creara un cuadradito por cada cliente y su estado (online, offline cargando... cosas así) esos cuadrads se tiene que poder ordenar con un dragg
+un menu de agentes, un listado de todos los agentes, que me va a permitir borrar o añadir agentes
+
+y un menu de servicios que me permita crear, editar los servicios a todos los clientes
+
+el servidor, tiene que estar al dia de la movida, si un cliente se conecta en el primer handshake, el servidor le va a indicar, que servicio iniciar, y todas las configuraciones y terminal
+si un cliente se conecta en un punto que no sea el hadnshake inicial, en el servidor pondra out of sync, y sy le digo sincronizar, cierre los proce3sos que esta haciendo y haga como si iniciase desde el hadnshake inicial, 
+
+desde el servidor, en la pantalla home, quier poder decir a cada raspberry pi, que servicio tiene que ejecutar y que configuracion del mismo, 
+
+quiero ver las estadisticas del hartbeat así como que servicio está corrinedo, su hostname, su ip...
+
+si el agente o cliente lleva más de 10 segundos o asi sin servidor, quiero que se active su propia pagina web,
+
+desde el servidor, en el menu de clientes, quiero un boton para apagar todas, reiniciar todas o hacer un WAKE on LAN de todas
+
+tengo un comit antiguo de otra rama (f5283c59a659a5fecea7d91ab1a8ba465c03488d) que se llama "es todo muy enrevesado ¿refactorizar a mano?"
+donde tenia una especie de prueba para el interface del servidor, y una funcionalidad básica no se si puedes revisar ese comit.
+
+
+
+alguna duda? 
+

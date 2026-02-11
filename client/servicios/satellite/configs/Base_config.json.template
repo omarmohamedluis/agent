@@ -1,4 +1,10 @@
 {
+    "file_info": {
+        "name": "Default",
+        "ui_port": 9002,
+        "updated_at": ""
+    },
+
     "remoteIp": "127.0.0.1",
     "remotePort": 16622,
     "restPort": 9999,
