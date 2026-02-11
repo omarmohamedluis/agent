@@ -1,0 +1,349 @@
+:root {
+    --bg-color: #0d0f14;
+    --panel-bg: #1a1d24;
+    --text-color: #e0e0e0;
+    --accent-color: #4a90e2;
+    --success-color: #4caf50;
+    --warning-color: #ff9800;
+    --danger-color: #f44336;
+    --shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    --border-radius: 12px;
+    --font-main: 'Outfit', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: var(--font-main);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+}
+
+header {
+    background: var(--panel-bg);
+    padding: 1rem 2rem;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #2d323e;
+    box-shadow: var(--shadow);
+    z-index: 100;
+}
+
+.logo {
+    display: flex;
+    flex-direction: column;
+    margin-right: 3rem;
+}
+
+.brand {
+    font-weight: 600;
+    font-size: 1.5rem;
+    letter-spacing: 2px;
+}
+
+.subbrand {
+    font-size: 0.7rem;
+    color: var(--accent-color);
+    text-transform: uppercase;
+}
+
+nav {
+    flex-grow: 1;
+    display: flex;
+    gap: 1rem;
+}
+
+.nav-btn {
+    background: transparent;
+    border: none;
+    color: #888;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    font-size: 1rem;
+    position: relative;
+    transition: color 0.3s;
+}
+
+.nav-btn.active {
+    color: var(--accent-color);
+}
+
+.nav-btn.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1rem;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background: var(--accent-color);
+}
+
+.global-actions {
+    display: flex;
+    gap: 1rem;
+}
+
+/* --- Buttons --- */
+.btn {
+    padding: 0.6rem 1.2rem;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+    transition: filter 0.2s, transform 0.1s;
+}
+
+.btn:hover {
+    filter: brightness(1.2);
+}
+
+.btn:active {
+    transform: scale(0.98);
+}
+
+.btn-primary {
+    background: var(--accent-color);
+    color: white;
+}
+
+.btn-success {
+    background: var(--success-color);
+    color: white;
+}
+
+.btn-warning {
+    background: var(--warning-color);
+    color: white;
+}
+
+.btn-danger {
+    background: var(--danger-color);
+    color: white;
+}
+
+.btn-secondary {
+    background: #333;
+    color: white;
+}
+
+/* --- Views --- */
+.view {
+    flex-grow: 1;
+    padding: 2rem;
+    overflow-y: auto;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* --- Dashboard Grid --- */
+.agent-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1.5rem;
+}
+
+.agent-card {
+    background: var(--panel-bg);
+    border-radius: var(--border-radius);
+    padding: 1.5rem;
+    border: 1px solid #2d323e;
+    box-shadow: var(--shadow);
+    cursor: grab;
+    transition: transform 0.2s, box-shadow 0.2s;
+    position: relative;
+    overflow: hidden;
+}
+
+.agent-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.agent-card .status-indicator {
+    position: absolute;
+    top: 1rem;
+    right: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+}
+
+.dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+
+.status-online .dot {
+    background: var(--success-color);
+    box-shadow: 0 0 10px var(--success-color);
+}
+
+.status-offline .dot {
+    background: var(--danger-color);
+}
+
+.status-away .dot {
+    background: var(--warning-color);
+}
+
+.agent-card h3 {
+    font-size: 1.2rem;
+    margin-bottom: 0.5rem;
+}
+
+.agent-card .info {
+    font-size: 0.9rem;
+    color: #999;
+}
+
+.agent-card .stats {
+    margin-top: 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+}
+
+.agent-card .controls {
+    margin-top: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+}
+
+.selector-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.selector-group label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: #666;
+}
+
+select {
+    background: #111;
+    color: white;
+    border: 1px solid #444;
+    padding: 0.4rem;
+    border-radius: 4px;
+}
+
+/* --- Tables --- */
+.table-container {
+    background: var(--panel-bg);
+    border-radius: var(--border-radius);
+    overflow: hidden;
+    margin-top: 1rem;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th,
+td {
+    padding: 1rem;
+    text-align: left;
+    border-bottom: 1px solid #2d323e;
+}
+
+th {
+    background: #242831;
+    font-weight: 600;
+    color: #888;
+}
+
+/* --- Services View --- */
+.services-container {
+    display: flex;
+    gap: 2rem;
+    height: calc(100vh - 200px);
+}
+
+.services-sidebar {
+    width: 200px;
+    border-right: 1px solid #2d323e;
+}
+
+.services-sidebar ul {
+    list-style: none;
+}
+
+.services-sidebar li {
+    padding: 1rem;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: background 0.2s;
+}
+
+.services-sidebar li:hover {
+    background: #242831;
+}
+
+.services-sidebar li.active {
+    background: var(--accent-color);
+    color: white;
+}
+
+.config-editor {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+#config-list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+#config-list {
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+#config-list li {
+    background: #242831;
+    padding: 1rem;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+}
+
+#config-json {
+    width: 100%;
+    background: #050505;
+    color: #4CAF50;
+    font-family: var(--font-mono);
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid #333;
+}
+
+.editor-actions {
+    margin-top: 1rem;
+    display: flex;
+    gap: 1rem;
+}

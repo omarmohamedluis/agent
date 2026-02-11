@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OMI | Control Server</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=JetBrains+Mono&display=swap"
+        rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+</head>
+
+<body class="dark-mode">
+    <header>
+        <div class="logo">
+            <span class="brand">OMI</span>
+            <span class="subbrand">Control Server</span>
+        </div>
+        <nav>
+            <button class="nav-btn active" data-view="home">Home</button>
+            <button class="nav-btn" data-view="agents">Agentes</button>
+            <button class="nav-btn" data-view="services">Servicios</button>
+        </nav>
+        <div class="global-actions">
+            <button id="btn-restart-all" class="btn btn-warning">Reiniciar Todos</button>
+            <button id="btn-shutdown-all" class="btn btn-danger">Apagar Todos</button>
+        </div>
+    </header>
+
+    <main id="app">
+        <!-- Home View: Draggable Cards -->
+        <section id="view-home" class="view">
+            <div id="agent-grid" class="agent-grid">
+                <!-- Cards injected here -->
+            </div>
+        </section>
+
+        <!-- Agents View: List of agents -->
+        <section id="view-agents" class="view hidden">
+            <div class="view-header">
+                <h2>Gestión de Agentes</h2>
+                <button id="btn-add-agent" class="btn btn-primary">Añadir Agente</button>
+            </div>
+            <div class="table-container">
+                <table id="agents-table">
+                    <thead>
+                        <tr>
+                            <th>Serial</th>
+                            <th>Host</th>
+                            <th>IP</th>
+                            <th>Estado</th>
+                            <th>Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody id="agents-list"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Services View: Presets/Config editor -->
+        <section id="view-services" class="view hidden">
+            <div class="view-header">
+                <h2>Configuración de Servicios</h2>
+            </div>
+            <div class="services-container">
+                <div class="services-sidebar">
+                    <ul id="service-selector">
+                        <li data-service="MIDI">MIDI</li>
+                        <li data-service="satellite">Satellite</li>
+                    </ul>
+                </div>
+                <div class="config-editor">
+                    <div id="config-list-header">
+                        <h3 id="current-service-title">Selecciona un servicio</h3>
+                        <button id="btn-new-config" class="btn btn-sm btn-primary hidden">Nuevo</button>
+                    </div>
+                    <ul id="config-list"></ul>
+                    <div id="editor-pane" class="hidden">
+                        <!-- JSON Editor or specialized UI -->
+                        <textarea id="config-json" rows="20"></textarea>
+                        <div class="editor-actions">
+                            <button id="btn-save-config" class="btn btn-success">Guardar</button>
+                            <button id="btn-cancel-config" class="btn btn-secondary">Cancelar</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <div id="overlay" class="hidden">
+        <div class="modal">
+            <h2 id="modal-title"></h2>
+            <div id="modal-content"></div>
+            <div class="modal-actions">
+                <button id="modal-confirm" class="btn btn-primary">Aceptar</button>
+                <button id="modal-cancel" class="btn btn-secondary">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>

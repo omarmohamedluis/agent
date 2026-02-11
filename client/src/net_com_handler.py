@@ -1,12 +1,13 @@
 """
-Network Communication Handler (NetComHandler).
-Manages communication with the Director (Server), listening for UDP beacons
-to initiate connection and maintaining the link.
+Network Communication Handler (NetComHandler) - HTTP Version.
+Manages communication with the OMI Central Server using HTTP.
+Handles discovery via UDP broadcast and subsequent API calls.
 """
 import json
 import socket
 import threading
 import time
+import requests
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -20,17 +21,14 @@ SERVER_INFO_PATH = Path(__file__).resolve().parents[1] / "data" / "server.json"
 module_name = "omiclient.net_com_handler"
 
 # Configuration
-SERVER_TIMEOUT = 5.0
 BROADCAST_PORT = 39653
-HANDSHAKE_TIMEOUT = 5.0
-RECONNECT_DELAY = 3.0  # Seconds to wait before rescanning broadcast if connection is lost
+SERVER_TIMEOUT = 5.0
 
 # Persistent communication state
-_comm_lock = threading.Lock()
-_comm_socket: Optional[socket.socket] = None
-_receiver_thread: Optional[threading.Thread] = None
-_receiver_stop = threading.Event()
 _session_active = threading.Event()
+_last_contact_time: float = 0.0
+_sender_thread: Optional[threading.Thread] = None
+_sender_stop = threading.Event()
 
 # ---------------------------------------------------------------------------
 # File/Config Helpers
@@ -43,7 +41,6 @@ def _load_server_endpoint() -> Tuple[Optional[str], Optional[int]]:
         with SERVER_INFO_PATH.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
     except (OSError, json.JSONDecodeError):
-        # log_event("debug", module_name, "Could not read server.json (normal at startup).")
         return None, None
     return data.get("ip"), data.get("port")
 
@@ -62,38 +59,18 @@ def _save_server_endpoint(ip: str, port: Optional[int]) -> None:
 
 
 def _parse_broadcast_message(message: str) -> Tuple[Optional[str], Optional[int]]:
-    """
-    Parses broadcast message.
-    Supported formats:
-    - "OMI_DIRECTOR|IP|PORT" (New standard)
-    - "ANY_STRING|IP|PORT"
-    - "ANY_STRING:IP" (Legacy)
-    """
     message = message.strip()
-    
-    # Attempt 1: Pipe Separator |
     if "|" in message:
         parts = message.split("|")
-        # Expect at least HEADER|IP|PORT
-        if len(parts) >= 2:
-            # Assume IP is second element if there are 3, or check position
-            # Standard format expected: HEADER|IP|PORT
-            if len(parts) >= 3:
-                ip = parts[1].strip()
-                try:
-                    port = int(parts[2].strip())
-                    return ip, port
-                except ValueError:
-                    return ip, None
-            # Simple fallback
+        if len(parts) >= 3:
+            ip = parts[1].strip()
+            try:
+                port = int(parts[2].strip())
+                return ip, port
+            except ValueError:
+                return ip, None
+        elif len(parts) >= 2:
             return parts[1].strip(), None
-
-    # Attempt 2: Colon Separator : (Legacy)
-    if ":" in message:
-        parts = message.split(":", 1)
-        if len(parts) == 2:
-            return parts[1].strip(), None
-            
     return None, None
 
 
@@ -103,351 +80,206 @@ def _build_client_payload() -> Dict[str, Any]:
     version_info = structure.get("version", {}).get("version")
 
     active_service = STRUCTURE_MANAGER.get_active_service() or {}
+    status = active_service.get("running") and not active_service.get("config_mode")
+    
     service_state = {
         "actual": active_service.get("name"),
-        "configuration": active_service.get("configuration"),
+        "configuration": active_service.get("active_config") or active_service.get("configuration"),
         "web_port": active_service.get("web_port"),
+        "running": bool(status)
     }
 
     heartbeat_snapshot = get_heartbeat_snapshot()
+    presets = _collect_local_presets()
 
     return {
-        "version": version_info,
         "serial": identity.get("serial"),
         "host": identity.get("host") or identity.get("name"),
-        "index": identity.get("index"),
-        "heartbeat": {
-            "cpu": heartbeat_snapshot.get("cpu"),
-            "temp": heartbeat_snapshot.get("temp"),
-        },
-        "service_state": service_state,
-        "mode": "LAN_TRUSTED" # Explicit mode indicator
+        "hostname": identity.get("host") or identity.get("name"),
+        "cpu": heartbeat_snapshot.get("cpu"),
+        "temp": heartbeat_snapshot.get("temp"),
+        "ip": heartbeat_snapshot.get("main_nic_ip"),
+        "active_service": service_state.get("actual"),
+        "active_config": service_state.get("configuration"),
+        "presets": presets,
+        "version": version_info,
+        "index": identity.get("index")
     }
 
 
-# ---------------------------------------------------------------------------
-# Socket Helpers
-# ---------------------------------------------------------------------------
-
-def _send_json(conn: socket.socket, payload: Dict[str, Any]) -> None:
-    try:
-        data = json.dumps(payload).encode("utf-8") + b"\n"
-        conn.sendall(data)
-    except (TypeError, ValueError) as e:
-        log_event("error", module_name, f"Error serializing JSON for sending: {e}")
-        raise
-
-def _receive_json(conn: socket.socket, buffer_size: int = 4096) -> Dict[str, Any]:
-    data = bytearray()
-    while True:
-        try:
-            chunk = conn.recv(buffer_size)
-            if not chunk:
-                break
-            data.extend(chunk)
-            if b"\n" in chunk:
-                break
-        except socket.timeout:
-            raise socket.timeout("Timeout receiving data")
-        except OSError as e:
-            raise OSError(f"Socket error in reception: {e}")
+def _collect_local_presets() -> Dict[str, Any]:
+    presets = {}
+    servicios_dir = Path(__file__).resolve().parents[1] / "servicios"
+    if not servicios_dir.exists():
+        return presets
+        
+    for svc_dir in servicios_dir.iterdir():
+        if not svc_dir.is_dir():
+            continue
+        configs_dir = svc_dir / "configs"
+        if not configs_dir.exists():
+            continue
             
-    if not data:
-        raise ValueError("Connection closed without data")
-    
-    try:
-        line = data.splitlines()[0].decode("utf-8")
-        return json.loads(line)
-    except (json.JSONDecodeError, IndexError) as e:
-        raise ValueError(f"Invalid JSON received: {e}")
-
+        svc_presets = {}
+        for cfg_file in configs_dir.glob("*.json"):
+            try:
+                with cfg_file.open("r", encoding="utf-8") as f:
+                    svc_presets[cfg_file.stem] = {"data": json.load(f)}
+            except Exception:
+                continue
+        if svc_presets:
+            presets[svc_dir.name] = svc_presets
+    return presets
 
 # ---------------------------------------------------------------------------
-# Broadcast Listener (Discovery)
+# HTTP Helpers
+# ---------------------------------------------------------------------------
+
+def _get_server_url(path: str) -> Optional[str]:
+    ip, port = _load_server_endpoint()
+    if not ip:
+        return None
+    target_port = port if port else 9000
+    return f"http://{ip}:{target_port}{path}"
+
+def _post_json(path: str, payload: Dict[str, Any], timeout: float = 5.0) -> Optional[Dict[str, Any]]:
+    url = _get_server_url(path)
+    if not url:
+        return None
+    try:
+        response = requests.post(url, json=payload, timeout=timeout)
+        if response.status_code == 200:
+            return response.json()
+        # log_event("debug", module_name, f"HTTP Error {response.status_code} on {path}")
+    except Exception as e:
+        log_event("debug", module_name, f"HTTP Request failed on {path}: {e}")
+    return None
+
+# ---------------------------------------------------------------------------
+# Discovery
 # ---------------------------------------------------------------------------
 
 def _listen_for_server_broadcast(port: int = BROADCAST_PORT, timeout: float = SERVER_TIMEOUT) -> bool:
-    """Passively listens for a Director UDP beacon."""
-    # log_print("debug", module_name, f"Listening for broadcasts on port {port}...")
-    
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            # In Linux SO_REUSEPORT can also help if there are multiple instances,
-            # but SO_REUSEADDR is usually enough for multicast/broadcast.
             if hasattr(socket, "SO_REUSEPORT"):
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-                
             sock.bind(("", port))
             sock.settimeout(timeout)
-            
             message, addr = sock.recvfrom(1024)
             sender_ip = addr[0]
-            
         except socket.timeout:
-            # Normal if no server is active
             return False
-        except OSError as exc:
-            log_event("error", module_name, f"Error binding/receiving UDP broadcast: {exc}")
+        except OSError:
             return False
 
     message_text = message.decode("utf-8", errors="replace")
-    # log_event("debug", module_name, f"Raw broadcast received from {sender_ip}: {message_text}")
-    
     payload_ip, payload_port = _parse_broadcast_message(message_text)
-    
-    # If message doesn't have explicit IP, use sender's
     final_ip = payload_ip if payload_ip else sender_ip
-    final_port = payload_port # Can be None
     
     if not final_ip:
-        log_event("warning", module_name, "Broadcast received but Director IP could not be determined.")
         return False
 
-    _save_server_endpoint(final_ip, final_port)
-    log_event(
-        "info",
-        module_name,
-        f"Director detected at {final_ip}:{final_port or 'Default'}"
-    )
+    _save_server_endpoint(final_ip, payload_port)
+    log_event("debug", module_name, f"Director detected at {final_ip}:{payload_port or 9000}")
     return True
 
-
 # ---------------------------------------------------------------------------
-# Message Handlers (Protocol)
-# ---------------------------------------------------------------------------
-
-def _handle_handshake_response(message: Dict[str, Any]) -> bool:
-    payload = message.get("cliente_payload")
-    if not isinstance(payload, dict):
-        log_event("error", module_name, "Handshake without valid return payload")
-        return False
-
-    # Update Identity (If Director assigns/corrects data)
-    structure = STRUCTURE_MANAGER.get_structure()
-    identity = structure.setdefault("identity", {})
-    updated = False
-    
-    if payload.get("host") and identity.get("host") != payload["host"]:
-        identity["host"] = payload["host"]
-        updated = True
-    if payload.get("index") is not None and identity.get("index") != payload["index"]:
-        identity["index"] = payload["index"]
-        updated = True
-        
-    # TODO: If identity changed, ideally we save it.
-    # For now we trust StructureManager handles persistence if critical.
-
-    # State Synchronization (Director tells us what we should be doing)
-    service_state = payload.get("service_state") or {}
-    target_svc = service_state.get("actual")
-    
-    if target_svc:
-        current_svc = STRUCTURE_MANAGER.get_active_service()
-        current_id = current_svc.get("name") if current_svc else None
-        
-        if current_id != target_svc:
-            log_print("info", module_name, f"Director requests service change: {current_id} -> {target_svc}")
-            STRUCTURE_MANAGER.update_service_state(target_svc, enabled=True)
-            # Note: This doesn't start the process per-se, ServiceManager or Main Loop must react
-            # to structure.json change. (See client.py: on_structure_change)
-
-    log_print("info", module_name, "Handshake ACCEPTED by Director.")
-    return True
-
-
-def _handle_server_message(message: Dict[str, Any]) -> bool:
-    msg_type = message.get("type")
-    
-    if msg_type == "handshake_response":
-        return _handle_handshake_response(message)
-    elif msg_type == "ping":
-        # Simple keep-alive
-        return True
-    elif msg_type == "command":
-        log_print("info", module_name, f"Command received: {message.get('command')}")
-        # Remote commands would be implemented here (reboot, restart_service, etc)
-        return True
-    elif msg_type == "error":
-        log_event("error", module_name, f"Remote error: {message.get('message')}")
-        return True
-    elif msg_type == "close":
-        log_print("warning", module_name, "Director closed request.")
-        return False
-        
-    log_event("warning", module_name, f"Unknown message type: {msg_type}")
-    return True
-
-
-# ---------------------------------------------------------------------------
-# Main Communication Loop (Receiver)
+# Handlers
 # ---------------------------------------------------------------------------
 
-def _receiver_loop() -> None:
-    global _comm_socket, _receiver_thread
-    
-    log_print("debug", module_name, "Starting receiver loop...")
-    
-    while not _receiver_stop.is_set():
-        with _comm_lock:
-            conn = _comm_socket
-            
-        if conn is None:
-            break
-            
-        try:
-            # Blocking with implicit socket timeout or infinite
-            message = _receive_json(conn)
-            
-            if not _handle_server_message(message):
-                break
-                
-        except (ValueError, OSError) as e:
-            if not _receiver_stop.is_set():
-                log_event("warning", module_name, f"Connection lost with Director: {e}")
-            break
-        except Exception as e:
-            log_event("error", module_name, f"Critical error in receiver: {e}")
-            break
+def _apply_server_configs(configs: Dict[str, Any]):
+    servicios_dir = Path(__file__).resolve().parents[1] / "servicios"
+    for svc_id, svc_configs in configs.items():
+        configs_dir = servicios_dir / svc_id / "configs"
+        configs_dir.mkdir(parents=True, exist_ok=True)
+        for name, cfg_info in svc_configs.items():
+            data = cfg_info.get("data")
+            if data:
+                cfg_file = configs_dir / f"{name}.json"
+                try:
+                    with cfg_file.open("w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2, ensure_ascii=False)
+                except Exception:
+                    pass
 
-    # Cleanup on loop exit
-    _session_active.clear()
-    _receiver_stop.set()
-    
-    with _comm_lock:
-        if _comm_socket is not None:
-            try:
-                _comm_socket.close()
-            except: 
-                pass
-            _comm_socket = None
-            
-    _receiver_thread = None
-    log_print("info", module_name, "Session with Director finished.")
-
-
-def _start_receiver_thread() -> None:
-    global _receiver_thread
-    if _receiver_thread is not None and _receiver_thread.is_alive():
+def _handle_command(cmd_data: Dict[str, Any]):
+    cmd = cmd_data.get("command")
+    if not cmd:
         return
+    log_print("info", module_name, f"Command received: {cmd}")
+    if cmd == "shutdown":
+        import subprocess
+        subprocess.run(["sudo", "shutdown", "now"])
+    elif cmd == "reboot":
+        import subprocess
+        subprocess.run(["sudo", "reboot"])
 
-    _receiver_stop.clear()
-    _session_active.set()
-    _receiver_thread = threading.Thread(
-        target=_receiver_loop,
-        name="NetComReceiver",
-        daemon=True,
-    )
-    _receiver_thread.start()
+# ---------------------------------------------------------------------------
+# Loops
+# ---------------------------------------------------------------------------
 
-
-def _connect_to_director(ip: str, port: int) -> bool:
-    global _comm_socket
-    
-    log_print("info", module_name, f"Connecting to Director at {ip}:{port}...")
-    
-    conn = None
-    try:
-        conn = socket.create_connection((ip, port), timeout=HANDSHAKE_TIMEOUT)
-        conn.settimeout(HANDSHAKE_TIMEOUT)
-        
-        # Send Handshake
+def _sender_loop() -> None:
+    log_print("debug", module_name, "Starting heartbeat sender loop...")
+    while not _sender_stop.is_set():
+        if not _session_active.is_set():
+            break
+            
         payload = _build_client_payload()
-        _send_json(conn, {"type": "handshake", "cliente_payload": payload})
+        res = _post_json("/api/heartbeat", payload)
+        if res:
+            global _last_contact_time
+            _last_contact_time = time.time()
+            if res.get("command"):
+                _handle_command(res)
         
-        # Wait for Response
-        response = _receive_json(conn)
-        
-        if response.get("type") != "handshake_response":
-            log_event("error", module_name, f"Invalid handshake response: {response}")
-            conn.close()
-            return False
-            
-        if not _handle_handshake_response(response):
-            conn.close()
-            return False
-            
-        # Connection established
-        conn.settimeout(None) # Blocking mode for loop
-        
-        with _comm_lock:
-            _comm_socket = conn
-            
-        _start_receiver_thread()
-        return True
-        
-    except (socket.timeout, OSError, ValueError) as e:
-        log_event("error", module_name, f"Failed to connect/handshake: {e}")
-        if conn:
-            try: conn.close()
-            except: pass
-        return False
-
+        if _sender_stop.wait(5.0):
+            break
+    log_print("debug", module_name, "Heartbeat sender loop finished.")
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 def handshake() -> bool:
-    """
-    Attempts to discover and connect to the Director.
-    Returns True if connection is established.
-    """
     if _session_active.is_set():
         return True
 
-    # 1. Listen for Broadcast to find IP
     if not _listen_for_server_broadcast():
         return False
 
-    # 2. Load discovered IP
-    ip, port = _load_server_endpoint()
-    if not ip:
-        return False
+    payload = _build_client_payload()
+    res = _post_json("/api/handshake", payload)
+    if res and res.get("status") == "ok":
+        server_configs = res.get("configs")
+        if isinstance(server_configs, dict):
+            _apply_server_configs(server_configs)
+
+        global _last_contact_time
+        _last_contact_time = time.time()
+        log_print("info", module_name, "Handshake ACCEPTED by Director (HTTP).")
         
-    # If no port in broadcast, assume default?
-    # Or Director should have sent it. Assume same as broadcast + N? 
-    # For now assume data/server.json has correct info or broadcast had it.
-    target_port = port if port else 9000 # Arbitrary default if missing
+        _session_active.set()
+        global _sender_thread, _sender_stop
+        _sender_stop.clear()
+        _sender_thread = threading.Thread(target=_sender_loop, name="NetComSender", daemon=True)
+        _sender_thread.start()
+        return True
     
-    # 3. Attempt TCP Connection
-    return _connect_to_director(ip, target_port)
+    return False
 
 
 def check_server_status() -> bool:
     return _session_active.is_set()
 
 
-def send_message(message_type: str, body: Optional[Dict[str, Any]] = None) -> bool:
-    if not _session_active.is_set():
-        return False
+def get_last_contact_time() -> float:
+    return _last_contact_time
 
-    payload = {"type": message_type}
-    if body:
-        payload.update(body)
-
-    with _comm_lock:
-        conn = _comm_socket
-        if not conn:
-            return False
-        
-        try:
-            _send_json(conn, payload)
-            return True
-        except OSError:
-            # Receiver will handle close
-            return False
 
 def close_comm_channel(reason: str = "client_shutdown") -> None:
-    send_message("close", {"reason": reason})
-    # Give it a moment to send
-    time.sleep(0.1)
-    
-    _receiver_stop.set()
-    with _comm_lock:
-        if _comm_socket:
-            try:
-                _comm_socket.shutdown(socket.SHUT_RDWR)
-                _comm_socket.close()
-            except: pass
-            _comm_socket = None
+    # We could send a 'close' event via POST, but for HTTP it's less critical
+    _session_active.clear()
+    _sender_stop.set()
+    log_print("info", module_name, f"Session finished: {reason}")

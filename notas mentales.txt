@@ -53,3 +53,9 @@ donde tenia una especie de prueba para el interface del servidor, y una funciona
 
 alguna duda? 
 
+
+
+
+
+
+mucho log, no hace falta que haga un logcada vez que haga un beacon 

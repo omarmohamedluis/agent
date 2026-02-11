@@ -1,0 +1,13 @@
+{
+  "4f30ea9e2b4bbfbc": {
+    "host": "omipitest",
+    "last_seen": 1770840394.281333,
+    "cpu": 2.5,
+    "temp": 58.4,
+    "ifaces": [],
+    "hostname": "omipitest",
+    "ip": null,
+    "active_service": null,
+    "active_config": null
+  }
+}

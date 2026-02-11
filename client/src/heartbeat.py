@@ -178,6 +178,8 @@ def _set_metrics(snapshot: Dict[str, Any]) -> None:
             "cpu": _metrics_snapshot["cpu"],
             "temp": _metrics_snapshot["temp"],
             "ifaces": list(_metrics_snapshot["ifaces"]),
+            "main_nic": snapshot.get("main_nic"),
+            "main_nic_ip": snapshot.get("main_nic_ip"),
         }
 
     _notify_listeners(published)
@@ -223,11 +225,17 @@ def _compute_network_metrics() -> Dict[str, Any]:
     # Determinar Main NIC
     main_nic = _determine_main_nic(enriched_ifaces)
     
+    main_nic_ip = None
+    if main_nic:
+        for iface in enriched_ifaces:
+            if iface.get("name") == main_nic:
+                main_nic_ip = iface.get("ip")
+                break
+    
     # Actualizar StructureManager
-    # El manager maneja la verificación internamente para evitar escrituras en disco si es idéntico
     STRUCTURE_MANAGER.update_network_interfaces(enriched_ifaces, main_nic=main_nic)
     
-    return {"ifaces": enriched_ifaces, "main_nic": main_nic}
+    return {"ifaces": enriched_ifaces, "main_nic": main_nic, "main_nic_ip": main_nic_ip}
 
 
 def _heartbeat_loop() -> None:
@@ -364,11 +372,12 @@ def unregister_heartbeat_listener(callback: Callable[[Dict[str, Any]], None]) ->
             _listeners.remove(callback)
 
 def get_heartbeat_snapshot() -> Dict[str, Any]:
-    with _metrics_lock:
         return {
-            "cpu": _metrics_snapshot["cpu"],
-            "temp": _metrics_snapshot["temp"],
-            "ifaces": list(_metrics_snapshot["ifaces"]),
+            "cpu": _metrics_snapshot.get("cpu"),
+            "temp": _metrics_snapshot.get("temp"),
+            "ifaces": list(_metrics_snapshot.get("ifaces", [])),
+            "main_nic": _metrics_snapshot.get("main_nic"),
+            "main_nic_ip": _metrics_snapshot.get("main_nic_ip"),
         }
 
 def force_update_interfaces() -> None:

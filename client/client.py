@@ -12,6 +12,7 @@ import signal
 import threading
 import time
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, HTTPException
@@ -45,9 +46,9 @@ LOGGER = get_logger("omiclient.core")
 from service_manager import ServiceManager
 from system import get_system_status
 import ui
-from net_com_handler import handshake, close_comm_channel
+from net_com_handler import handshake, close_comm_channel, get_last_contact_time, check_server_status
 from structure_manager import get_structure_manager
-from heartbeat import start_heartbeat
+from heartbeat import start_heartbeat, get_heartbeat_snapshot
 
 # Gestores
 STRUCTURE_MANAGER = get_structure_manager()
@@ -85,6 +86,35 @@ app.mount("/assets", StaticFiles(directory=UTILITIES_DIR), name="assets")
 
 # Plantillas
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+# --- SERVER MANAGEMENT ---
+class StandaloneServer(uvicorn.Server):
+    def install_setup(self):
+        super().install_setup()
+        # Avoid uvicorn swallowing signals
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        signal.signal(signal.SIGTERM, signal.default_int_handler)
+
+_standalone_server: Optional[StandaloneServer] = None
+_standalone_thread: Optional[threading.Thread] = None
+
+def start_standalone_ui():
+    global _standalone_server, _standalone_thread
+    if _standalone_server and _standalone_server.started:
+        return
+
+    LOGGER.info("Starting local Standalone UI (Fallback mode)...")
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="warning")
+    _standalone_server = StandaloneServer(config)
+    
+    _standalone_thread = threading.Thread(target=_standalone_server.run, name="StandaloneUI", daemon=True)
+    _standalone_thread.start()
+
+def stop_standalone_ui():
+    global _standalone_server
+    if _standalone_server and _standalone_server.started:
+        LOGGER.info("Stopping local Standalone UI...")
+        _standalone_server.should_exit = True
 
 # --- RUTAS ---
 @app.get("/", response_class=HTMLResponse)
@@ -551,26 +581,35 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
 
     try:
-        if connected:
-            # Modo Conectado: Sin Servidor Web, solo esperar y escuchar
-            LOGGER.info("Corriendo en Modo Conectado (Servidor Web DESHABILITADO)")
-            while not stop_event.is_set():
-                time.sleep(1)
-        else:
-            # Modo Standalone: Iniciar Servidor Web
-            LOGGER.info("Corriendo en Modo Standalone (Servidor Web HABILITADO)")
+        last_check = 0
+        standalone_active = False
+        
+        # Inicializar el estado del servidor web basado en la conexión inicial
+        if not connected:
+            start_standalone_ui()
+            standalone_active = True
+        
+        while not stop_event.is_set():
+            now = time.time()
             
-            try:
-                hostname = socket.gethostname()
-                LOGGER.info(f"🌐 Interfaz Web disponible en http://{hostname}:8000")
-            except Exception:
-                pass
-
-            # Correr uvicorn
-            try:
-                uvicorn.run(app, host="0.0.0.0", port=8000)
-            except SystemExit:
-                LOGGER.info("Uvicorn salió")
+            # Connectivity check (every 2 seconds)
+            if now - last_check > 2.0:
+                from net_com_handler import get_last_contact_time # Importar aquí para evitar circular
+                last_contact = get_last_contact_time()
+                is_server_alive = (now - last_contact < 10.0)
+                
+                if not is_server_alive and not standalone_active:
+                    LOGGER.warning("Server lost for > 10s. Activating local UI.")
+                    start_standalone_ui()
+                    standalone_active = True
+                elif is_server_alive and standalone_active:
+                    LOGGER.info("Server recovered. Deactivating local UI.")
+                    stop_standalone_ui()
+                    standalone_active = False
+                
+                last_check = now
+            
+            time.sleep(1)
             
     except KeyboardInterrupt:
         LOGGER.info("Interrumpido por usuario (KeyboardInterrupt)")

@@ -1,0 +1,61 @@
+{
+  "MIDI": {
+    "Default": {
+      "data": {
+        "file_info": {
+          "name": "Base Config",
+          "ui_port": 9001,
+          "updated_at": ""
+        },
+        "source": {
+          "midi_input": "None"
+        },
+        "net": {
+          "vlan": null,
+          "vlan_active": false,
+          "ip_mode": "dhcp",
+          "ip": "",
+          "mask": "",
+          "gateway": ""
+        },
+        "osc": {
+          "ips": [
+            "127.0.0.1"
+          ],
+          "port": 7001
+        },
+        "routes": []
+      },
+      "serial": "4f30ea9e2b4bbfbc"
+    }
+  },
+  "satellite": {
+    "Default": {
+      "data": {
+        "remoteIp": "30.0.30.69",
+        "remotePort": 16622,
+        "restPort": 9999,
+        "surfacePluginsEnabled": {
+          "elgato-streamdeck": true,
+          "loupedeck": false,
+          "infinitton": false
+        },
+        "net": {
+          "vlan": 30,
+          "vlan_active": true,
+          "ip_mode": "dhcp",
+          "ip": "",
+          "mask": "",
+          "gateway": ""
+        },
+        "file_info": {
+          "name": "Default",
+          "ui_port": 9002,
+          "updated_at": "2026-02-11 19:47:49",
+          "version": "2.7.0"
+        }
+      },
+      "serial": "4f30ea9e2b4bbfbc"
+    }
+  }
+}
