@@ -249,41 +249,51 @@ class ServiceManager:
         return configs_dir / f"{config_name}.json"
 
     def get_configs(self, svc_id: str) -> list:
-        """Lista las configuraciones disponibles para un servicio."""
+        """Lista las configuraciones disponibles para un servicio y auto-crea Default si falta."""
         configs_dir = self._get_configs_dir(svc_id)
         if not configs_dir.exists():
             configs_dir.mkdir(parents=True, exist_ok=True)
             
         files = list(configs_dir.glob("*.json"))
         if not files:
-            # Si no hay configs, crear Default basada en el mapa actual o template
+            # Si no hay configs, crear Default basada en plantilla o mapa legacy
             import shutil
             
-            # Intentar localizar mapa legacy para migración
-            service_dir = self._get_service_dir(svc_id)
-            if svc_id == "MIDI":
-                legacy_map = service_dir / "OMIMIDI_map.json"
-            else:
-                legacy_map = service_dir / f"{svc_id}_map.json"
-                
             default_config = configs_dir / "Default.json"
+            template = configs_dir / "Base_config.json.template"
             
-            if legacy_map.exists():
+            # Prioridad 1: Nueva plantilla Base_config.json.template
+            if template.exists():
                 try:
-                    shutil.copy(legacy_map, default_config)
-                    LOGGER.info(f"Creada configuración Default.json para {svc_id} desde mapa legacy")
+                    shutil.copy(template, default_config)
+                    LOGGER.info(f"Creada configuración Default.json para {svc_id} desde plantilla BASE")
                     files = [default_config]
                 except Exception as e:
-                    LOGGER.error(f"Error creando Default.json: {e}")
+                    LOGGER.error(f"Error creando Default.json desde plantilla: {e}")
             else:
-                # Intentar buscar template
-                template = legacy_map.with_suffix(".json.template")
-                if template.exists():
+                # Prioridad 2: Intentar localizar mapa legacy para migración
+                service_dir = self._get_service_dir(svc_id)
+                if svc_id == "MIDI":
+                    legacy_map = service_dir / "OMIMIDI_map.json"
+                else:
+                    legacy_map = service_dir / f"{svc_id}_map.json"
+                    
+                if legacy_map.exists():
                     try:
-                        shutil.copy(template, default_config)
+                        shutil.copy(legacy_map, default_config)
+                        LOGGER.info(f"Creada configuración Default.json para {svc_id} desde mapa legacy")
                         files = [default_config]
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        LOGGER.error(f"Error creando Default.json desde legacy: {e}")
+                else:
+                    # Prioridad 3: Intentar buscar template legacy
+                    legacy_template = legacy_map.with_suffix(".json.template") if 'legacy_map' in locals() else None
+                    if legacy_template and legacy_template.exists():
+                        try:
+                            shutil.copy(legacy_template, default_config)
+                            files = [default_config]
+                        except Exception:
+                            pass
 
         return sorted([f.stem for f in files])
 
@@ -313,7 +323,7 @@ class ServiceManager:
         configs_dir = self._get_configs_dir(svc_id)
         configs_dir.mkdir(parents=True, exist_ok=True)
         
-        src = self._get_active_map_path(svc_id)
+        src = self._get_active_config_path(svc_id)
         dst = configs_dir / f"{config_name}.json"
         
         if not src.exists():
@@ -326,6 +336,36 @@ class ServiceManager:
             return True
         except Exception as e:
             LOGGER.error(f"Fallo al guardar configuración como {config_name}: {e}")
+            return False
+            
+    def delete_config(self, svc_id: str, config_name: str) -> bool:
+        """Elimina un archivo de configuración específico."""
+        if config_name == "Default":
+            LOGGER.warning(f"Intento de eliminar configuración Default en {svc_id}")
+            return False
+
+        configs_dir = self._get_configs_dir(svc_id)
+        target = configs_dir / f"{config_name}.json"
+        
+        if not target.exists():
+            LOGGER.warning(f"Configuración {config_name} no existe en {svc_id}")
+            return False
+            
+        try:
+            target.unlink()
+            LOGGER.info(f"Configuración {config_name} eliminada de {svc_id}")
+            
+            # Si la activa era la eliminada, volver a Default
+            active_file = self._get_service_dir(svc_id) / "active_config.txt"
+            if active_file.exists():
+                current = active_file.read_text(encoding="utf-8").strip()
+                if current == config_name:
+                    active_file.write_text("Default", encoding="utf-8")
+                    LOGGER.info(f"Configuración activa revertida a Default para {svc_id}")
+            
+            return True
+        except Exception as e:
+            LOGGER.error(f"Fallo al eliminar configuración {config_name}: {e}")
             return False
 
     def start_config_mode(self, svc_id: str) -> bool:
@@ -383,3 +423,142 @@ class ServiceManager:
             return False
         finally:
             STRUCTURE_MANAGER.clear_busy(f"CONFIG_MODE_{svc_id}")
+
+    def duplicate_config(self, svc_id: str, src_name: str, dst_name: str) -> bool:
+        """Duplica una configuración existente o una plantilla con un nuevo nombre."""
+        import shutil
+        configs_dir = self._get_configs_dir(svc_id)
+        
+        # Si src_name termina en .template, buscamos el archivo directamente
+        if src_name.endswith(".template"):
+            src = configs_dir / src_name
+        else:
+            src = configs_dir / f"{src_name}.json"
+            
+        dst = configs_dir / f"{dst_name}.json"
+
+        if not src.exists():
+            LOGGER.error(f"Configuración origen {src_name} no encontrada para {svc_id}")
+            return False
+            
+        if dst.exists():
+            LOGGER.warning(f"Configuración destino {dst_name} ya existe para {svc_id}")
+            # Podríamos sobrescribir o fallar. Fallamos para seguridad.
+            return False
+
+        try:
+            shutil.copy(src, dst)
+            
+            # Post-procesar para actualizar el nombre interno si existe (en file_info)
+            if dst.suffix == ".json":
+                try:
+                    import json
+                    with dst.open("r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    
+                    if "file_info" in data and isinstance(data["file_info"], dict):
+                        data["file_info"]["name"] = dst_name
+                        with dst.open("w", encoding="utf-8") as f:
+                            json.dump(data, f, indent=2, ensure_ascii=False)
+                except Exception as e:
+                    LOGGER.warning(f"No se pudo actualizar el metadato 'name' en {dst.name}: {e}")
+
+            LOGGER.info(f"Configuración {src_name} duplicada como {dst_name} para {svc_id}")
+            return True
+        except Exception as e:
+            LOGGER.error(f"Fallo al duplicar configuración: {e}")
+            return False
+
+    def clone_service(self, svc_id: str, new_display_name: str) -> bool:
+        """
+        Clona un servicio: duplica su carpeta, asigna un nuevo puerto y actualiza servicios.json.
+        """
+        if svc_id not in self.services_config:
+            LOGGER.error(f"Servicio origen {svc_id} no encontrado")
+            return False
+
+        # Generar ID único basado en el nombre
+        new_id = new_display_name.replace(" ", "_").strip()
+        if not new_id:
+            new_id = f"{svc_id}_clone"
+        
+        # Asegurar que el ID sea único en el mapa de configuración
+        base_id = new_id
+        counter = 1
+        while new_id in self.services_config:
+            new_id = f"{base_id}_{counter}"
+            counter += 1
+
+        orig_config = self.services_config[svc_id]
+        orig_cwd_rel = orig_config.get("cwd", ".")
+        orig_dir = BASE_DIR / orig_cwd_rel
+        
+        # La nueva carpeta irá en servicios/new_id
+        new_cwd_rel = f"servicios/{new_id}"
+        new_dir = BASE_DIR / new_cwd_rel
+
+        # 1. Duplicar Carpeta del Servicio (si existe y es interna)
+        import shutil
+        try:
+            if orig_dir.exists() and orig_cwd_rel != ".":
+                LOGGER.info(f"Clonando directorio {orig_dir} a {new_dir}")
+                
+                def ignore_heavy(path, names):
+                    # Ignorar carpetas pesadas para que el clon sea rápido y no duplique datos innecesarios
+                    return ['node_modules', '.git', 'logs', '__pycache__', 'bin', 'fnm_data', '.venv']
+                
+                shutil.copytree(orig_dir, new_dir, ignore=ignore_heavy)
+                
+                # Limpiar cualquier estado de ejecución en la copia
+                for cleanup in ["service_state.json", "active_config.txt", "runtime_config.json"]:
+                    target = new_dir / cleanup
+                    if target.exists():
+                        target.unlink()
+            else:
+                LOGGER.warning(f"El servicio {svc_id} no tiene una carpeta propia clonable clara ({orig_cwd_rel})")
+                # Procedemos igual, quizás use la misma carpeta (aunque arriesgado por colisión de configs)
+                new_cwd_rel = orig_cwd_rel
+        except Exception as e:
+            LOGGER.error(f"Fallo al duplicar directorio de servicio: {e}")
+            return False
+
+        # 2. Determinar nuevo puerto web único
+        # Buscar el puerto web más alto y sumarle 1
+        existing_ports = [s.get("web_port", 0) for s in self.services_config.values() if s.get("web_port")]
+        new_port = max(existing_ports) + 1 if existing_ports else 9010
+
+        # 3. Crear nueva definición de configuración
+        new_config = orig_config.copy()
+        new_config["id"] = new_id
+        new_config["display_name"] = new_display_name
+        new_config["cwd"] = new_cwd_rel
+        new_config["web_port"] = new_port
+        
+        # Ajustar rutas de logs para que sean independientes
+        if "logs" in new_config:
+            logs = new_config["logs"].copy()
+            for key, val in logs.items():
+                p = Path(val)
+                logs[key] = f"logs/services/{new_id.lower()}{p.suffix}"
+            new_config["logs"] = logs
+
+        # 4. Persistir en servicios.json
+        services_json_path = BASE_DIR / "servicios" / "servicios.json"
+        try:
+            with services_json_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            data["services"].append(new_config)
+            
+            with services_json_path.open("w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            
+            # 5. Recargar Manager y Sincronizar Estructura
+            self._load_config()
+            STRUCTURE_MANAGER.sync_from_servicios_json()
+            
+            LOGGER.info(f"Servicio {svc_id} clonado exitosamente como {new_id} en puerto {new_port}")
+            return True
+        except Exception as e:
+            LOGGER.error(f"Fallo al actualizar servicios.json: {e}")
+            return False

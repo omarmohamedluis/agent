@@ -35,6 +35,7 @@ echo "🧹 Asegurando cierre de procesos restantes..."
 sudo pkill -f "service.py" 2>/dev/null
 sudo pkill -f "midiwebui.py" 2>/dev/null
 sudo pkill -f "uvicorn" 2>/dev/null
+sudo pkill -f "satellite/dist/main.js" 2>/dev/null
 sudo pkill -9 -f "client.py" 2>/dev/null
 
 echo "✅ Todos los procesos detenidos."

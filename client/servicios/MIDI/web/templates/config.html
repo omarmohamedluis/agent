@@ -124,18 +124,13 @@
         });
 
         if (resp.ok) {
-          // Si estamos en modo config, cerramos el servicio también
+          // Si estamos en modo config, solo notificamos
           {% if is_config_mode %}
-          btn.innerText = "Cerrando servicio...";
-          try {
-            await fetch('/api/close_config', { method: 'POST' });
-          } catch (e) {
-            console.error("Error stopping service:", e);
-          }
-
-          window.close();
-          document.body.innerHTML = "<div style='display:flex;justify-content:center;align-items:center;height:100vh;background:#222;color:#fff'><h1>Guardado. Cerrando...</h1></div>";
-          setTimeout(() => window.close(), 1000);
+          btn.innerText = "Guardado (Offline)";
+          await new Promise(r => setTimeout(r, 1000));
+          btn.disabled = false;
+          btn.innerText = "Guardar Configuración";
+          alert("Configuración guardada correctamente.");
           {% else %}
           // Si no, recargamos (comportamiento normal)
           const text = await resp.text();

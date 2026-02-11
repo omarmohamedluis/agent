@@ -52,6 +52,7 @@ mido.set_backend("mido.backends.rtmidi")
 
 # MODO CONFIGURACIÓN (OFFLINE)
 IS_CONFIG_MODE = os.environ.get("OMI_CONFIG_MODE") == "1"
+
 if IS_CONFIG_MODE:
     LOGGER.info("⚠️ EJECUTANDO EN MODO CONFIGURACIÓN (OFFLINE) ⚠️")
     # En modo config, no abrimos puertos MIDI reales ni OSC
@@ -724,6 +725,7 @@ def restart_service_endpoint(request: Request):
 
 @app.post("/api/config/save")
 async def save_config(
+    req: Request,
     midi_input: str = Form(""), 
     osc_port: str = Form(""),
     osc_ips: str = Form(""), 
@@ -829,7 +831,7 @@ async def save_config(
             from fastapi.responses import JSONResponse
             return JSONResponse({"success": True, "message": "Configuración guardada. Cerrando..."})
 
-        return restart_page(request, "Reiniciando servicio con nueva configuración...")
+        return restart_page(req, "Reiniciando servicio con nueva configuración...")
     except Exception as e:
         LOGGER.error(f"Error crítico al guardar configuración: {e}")
         from fastapi.responses import JSONResponse

@@ -7,6 +7,45 @@
     <title>OMI Agent Dashboard</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .config-menu {
+            display: none;
+            position: absolute;
+            background-color: #333;
+            min-width: 160px;
+            box-shadow: 0px 8px 16px 0px rgba(0, 0, 0, 0.2);
+            z-index: 1000;
+            border-radius: 4px;
+            overflow: hidden;
+            border: 1px solid #444;
+        }
+
+        .config-menu button {
+            color: #eee;
+            padding: 12px 16px;
+            text-decoration: none;
+            display: block;
+            width: 100%;
+            text-align: left;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .config-menu button:hover {
+            background-color: #555;
+        }
+
+        .config-menu button.danger {
+            color: #ff6b6b;
+            border-top: 1px solid #444;
+        }
+
+        .config-menu button.danger:hover {
+            background-color: #4a2020;
+        }
+    </style>
 </head>
 
 <body>
@@ -42,7 +81,7 @@
                 <i class="fas fa-file-alt"></i>
             </button>
             <button id="headerRefreshBtn" class="btn btn-nav" onclick="refreshIframe()"
-                style="display: {{ 'inline-flex' if active_service else 'none' }};" title="Refresh Iframe">
+                style="display: {% if active_service %}inline-flex{% else %}none{% endif %};" title="Refresh Iframe">
                 <i class="fas fa-sync-alt"></i>
             </button>
         </div>
@@ -79,8 +118,8 @@
                         onchange="selectConfig('{{ id }}', this.value)" disabled>
                         <option value="default">Loading...</option>
                     </select>
-                    <button id="btn-config-{{ id }}" class="btn btn-config" onclick="startConfigMode('{{ id }}')"
-                        title="Configure (Offline)">
+                    <button id="btn-config-{{ id }}" class="btn btn-config" onclick="showConfigMenu(event, '{{ id }}')"
+                        title="Opciones de Configuración">
                         <i class="fas fa-cog"></i>
                     </button>
                 </div>
@@ -258,6 +297,9 @@
                     window.serviceStates = {};
                 }
 
+                // Check if ANY service is running
+                const isAnyServiceRunning = Object.values(services).some(s => s.running);
+
                 for (const [id, svc] of Object.entries(services)) {
                     const card = document.querySelector(`.service-card[data-id="${id}"]`);
                     if (!card) continue;
@@ -293,15 +335,13 @@
                         } else {
                             actionArea.innerHTML = `<button class="btn btn-stop" onclick="controlService('${id}', 'stop')"><i class="fas fa-stop"></i> Stop</button>`;
                         }
-                        // Deshabilitar config mientras corre
-                        if (configSelect) configSelect.disabled = true;
-                        if (configBtn) configBtn.disabled = true;
                     } else {
                         actionArea.innerHTML = `<button class="btn btn-start" onclick="controlService('${id}', 'start')"><i class="fas fa-play"></i> Start</button>`;
-                        // Habilitar config si está parado
-                        if (configSelect) configSelect.disabled = false;
-                        if (configBtn) configBtn.disabled = false;
                     }
+
+                    // Global disable logic: Disable config controls if ANY service is running
+                    if (configSelect) configSelect.disabled = isAnyServiceRunning;
+                    if (configBtn) configBtn.disabled = isAnyServiceRunning;
                 }
 
                 // Update Content Area (Iframe)
@@ -405,41 +445,160 @@
                 if (!response.ok) throw new Error("Failed to select config");
                 // Feedback visual?
             } catch (e) {
-                alert("Error selecting config: " + e.message);
+                console.error("Failed to select config:", e);
+                alert("Error selecting config: " + e);
             }
         }
 
         async function startConfigMode(svcId) {
-            if (!confirm(`Enter Configuration Mode for ${svcId}?\nThis will stop other services.`)) return;
-
-            isManualActionPending = true;
-            const overlay = document.getElementById('loadingOverlay');
-            const msg = document.getElementById('loadingMessage');
-            overlay.style.display = 'flex';
-            msg.textContent = "Starting Config Mode...";
-
             try {
-                const response = await fetch(`/api/services/${svcId}/configure`, { method: 'POST' });
+                const response = await fetch(`/api/services/${svcId}/configure`, {
+                    method: 'POST'
+                });
                 if (!response.ok) throw new Error("Failed to start config mode");
+                const data = await response.json();
+
+                // Si es Satellite, redirigir a pantalla completa (fuera de iframe)
+                if (svcId === 'satellite' && data.web_port) {
+                    const targetUrl = `http://${systemIp}:${data.web_port}`;
+                    console.log(`Redirecting to full-screen config: ${targetUrl}`);
+                    window.location.href = targetUrl;
+                }
+                // Para otros servicios, el poller de status actualizará el iframe normalmente
             } catch (e) {
-                alert("Error: " + e.message);
-            } finally {
-                isManualActionPending = false;
+                console.error("Failed to start config mode:", e);
+                alert("Error starting config mode: " + e);
             }
         }
 
-        // Cargar configs al inicio
-        document.addEventListener('DOMContentLoaded', () => {
-            document.querySelectorAll('.service-card').forEach(card => {
-                const id = card.dataset.id;
-                const activeConfig = card.dataset.activeConfig || "Default";
-                loadServiceConfigs(id, activeConfig);
-            });
-        });
+        // --- Config Menu Logic ---
+        let customContextMenu = null;
+        let activeServiceId = null;
 
-        // Start Polling
-        setInterval(updateStatus, 2000);
+        function showConfigMenu(event, svcId) {
+            event.stopPropagation();
+            event.preventDefault();
+
+            activeServiceId = svcId;
+            const menu = document.getElementById('configMenu');
+
+            // Position near the button
+            const rect = event.target.getBoundingClientRect();
+            menu.style.left = (window.scrollX + rect.left) + "px";
+            menu.style.top = (window.scrollY + rect.bottom + 5) + "px";
+            menu.style.display = "block";
+
+            customContextMenu = menu;
+        }
+
+        function hideConfigMenu() {
+            if (customContextMenu) {
+                customContextMenu.style.display = "none";
+                customContextMenu = null;
+            }
+        }
+
+        // Close menu on click elsewhere
+        window.onclick = function (e) {
+            // Si el click no fue en el botón de config, cerrar menú
+            if (!e.target.closest('.btn-config')) {
+                hideConfigMenu();
+            }
+        };
+
+        async function menuAction(action) {
+            hideConfigMenu();
+            if (!activeServiceId) return;
+
+            const dropdown = document.getElementById(`config-select-${activeServiceId}`);
+            const selectedConfig = dropdown ? dropdown.value : "Default";
+
+            if (action === 'configure') {
+                startConfigMode(activeServiceId);
+            } else if (action === 'add' || action === 'add_base') {
+                const isBase = (action === 'add_base');
+                const promptMsg = isBase
+                    ? `Introduce el nombre para el nuevo preset (desde plantilla BASE):`
+                    : `Introduce el nombre para el nuevo preset (copia de "${selectedConfig}"):`;
+                const sourceConfig = isBase ? 'Base_config.json.template' : selectedConfig;
+
+                const newName = prompt(promptMsg);
+                if (newName && newName.trim()) {
+                    try {
+                        const resp = await fetch(`/api/services/${activeServiceId}/config/duplicate`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ source: sourceConfig, name: newName.trim() })
+                        });
+
+                        if (resp.ok) {
+                            await loadServiceConfigs(activeServiceId, newName.trim());
+                        } else {
+                            const err = await resp.json();
+                            alert("Error al añadir preset: " + (err.detail || "Error desconocido"));
+                        }
+                    } catch (e) {
+                        alert("Error de red: " + e);
+                    }
+                }
+            } else if (action === 'delete') {
+                if (selectedConfig === 'Default' || selectedConfig === 'default') {
+                    alert("No se puede borrar el preset Default.");
+                    return;
+                }
+
+                if (confirm(`¿ESTAS SEGURO que deseas borrar el preset "${selectedConfig}"?`)) {
+                    try {
+                        const resp = await fetch(`/api/services/${activeServiceId}/config/${selectedConfig}`, {
+                            method: 'DELETE'
+                        });
+
+                        if (resp.ok) {
+                            // Reload config list
+                            await loadServiceConfigs(activeServiceId, selectedConfig);
+                            // Dropdown logic in loadConfigs handles selection fallback
+                        } else {
+                            const err = await resp.json();
+                            alert("Error al borrar: " + (err.detail || "Error desconocido"));
+                        }
+                    } catch (e) {
+                        alert("Error de red al borrar: " + e);
+                    }
+                }
+            }
+        }
+
+        // --- Initialization ---
+        document.addEventListener('DOMContentLoaded', async () => {
+            // 1. Start Polling
+            updateStatus();
+            setInterval(updateStatus, 1000);
+
+            // 2. Initial Config Load for Stopped Services
+            // We need to get the initial status to know which services are stopped
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                const services = data.services;
+
+                for (const [id, svc] of Object.entries(services)) {
+                    if (!svc.running) {
+                        loadServiceConfigs(id, svc.active_config);
+                    }
+                }
+            } catch (e) {
+                console.error("Error during initialization:", e);
+            }
+        });
     </script>
+
+    <!-- Config Menu Template -->
+    <div id="configMenu" class="config-menu">
+        <button onclick="menuAction('configure')">Configurar Preset</button>
+        <button onclick="menuAction('add')">Duplicar Actual</button>
+        <button onclick="menuAction('add_base')">Nuevo Preset (Base)</button>
+        <button onclick="menuAction('delete')" class="danger">Borrar Preset</button>
+    </div>
 </body>
 
 </html>

@@ -1,0 +1,18 @@
+{
+    "remoteIp": "30.0.30.69",
+    "remotePort": 16622,
+    "restPort": 9998,
+    "surfacePluginsEnabled": {
+        "elgato-streamdeck": true,
+        "loupedeck": false,
+        "infinitton": false
+    },
+    "net": {
+        "vlan": 30,
+        "vlan_active": true,
+        "ip_mode": "dhcp",
+        "ip": "",
+        "mask": "",
+        "gateway": ""
+    }
+}

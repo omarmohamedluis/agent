@@ -245,6 +245,26 @@ async def select_service_config(svc_id: str, payload: dict):
         return {"status": "selected", "config": config_name}
     raise HTTPException(status_code=500, detail="Fallo al seleccionar configuración")
 
+@app.post("/api/services/{svc_id}/config/duplicate")
+async def duplicate_service_config(svc_id: str, payload: dict):
+    src_name = payload.get("source")
+    dst_name = payload.get("name")
+    if not src_name or not dst_name:
+         raise HTTPException(status_code=400, detail="Nombre de origen y destino requeridos")
+
+    if service_manager.duplicate_config(svc_id, src_name, dst_name):
+        return {"status": "duplicated", "config": dst_name}
+    raise HTTPException(status_code=500, detail="Fallo al duplicar configuración")
+
+@app.delete("/api/services/{svc_id}/config/{name}")
+async def delete_service_config(svc_id: str, name: str):
+    if name == "Default":
+        raise HTTPException(status_code=400, detail="No se puede eliminar la configuración Default")
+        
+    if service_manager.delete_config(svc_id, name):
+        return {"status": "deleted", "config": name}
+    raise HTTPException(status_code=500, detail="Fallo al eliminar configuración")
+
 @app.post("/api/services/{svc_id}/config/save")
 async def save_service_config(svc_id: str, payload: dict):
     config_name = payload.get("name")
@@ -255,12 +275,16 @@ async def save_service_config(svc_id: str, payload: dict):
         return {"status": "saved", "config": config_name}
     raise HTTPException(status_code=500, detail="Fallo al guardar configuración")
 
+
 @app.post("/api/services/{svc_id}/configure")
-async def configure_service(svc_id: str):
+async def start_service_config_mode(svc_id: str):
     """Inicia el servicio en modo configuración (Offline)."""
     # Verificar que no haya otros servicios corriendo (el manager ya lo hace, pero bueno)
-    if service_manager.start_config_mode(svc_id):
-        return {"status": "config_mode_started", "id": svc_id}
+    if await asyncio.to_thread(service_manager.start_config_mode, svc_id):
+        # Obtener el puerto para que el frontend pueda redirigir si es necesario
+        svc_info = service_manager.get_services().get(svc_id, {})
+        port = svc_info.get("web_port", 8000)
+        return {"status": "config_mode_started", "id": svc_id, "web_port": port}
     raise HTTPException(status_code=500, detail="Fallo al iniciar modo configuración")
 
 # --- ENDPOINTS VISOR DE LOGS ---
@@ -336,6 +360,8 @@ async def system_control(action: str):
         STRUCTURE_MANAGER.set_busy("SYSTEM_SHUTDOWN", "SHUTTING DOWN...")
         # Dar tiempo a la UI para actualizarse
         await asyncio.sleep(3)
+        # Apagar la pantalla explícitamente antes de cortar energía
+        ui.turn_ui_off()
         subprocess.run(["sudo", "shutdown", "now"])
         return {"status": "shutting_down"}
     raise HTTPException(status_code=400, detail="Acción inválida")

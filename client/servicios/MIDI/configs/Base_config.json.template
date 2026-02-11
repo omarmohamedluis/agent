@@ -1,0 +1,25 @@
+{
+  "file_info": {
+    "name": "Base Config",
+    "ui_port": 9001,
+    "updated_at": ""
+  },
+  "source": {
+    "midi_input": "None"
+  },
+  "net": {
+    "vlan": null,
+    "vlan_active": false,
+    "ip_mode": "dhcp",
+    "ip": "",
+    "mask": "",
+    "gateway": ""
+  },
+  "osc": {
+    "ips": [
+      "127.0.0.1"
+    ],
+    "port": 7001
+  },
+  "routes": []
+}

@@ -26,9 +26,10 @@
         "service.py"
       ],
       "logs": {
-        "stdout": "logs/services/satellitelog.out",
+        "stdout": "logs/services/satellitelog.log",
         "stderr": "logs/services/satellitelog.err"
       },
+      "web_port": 9002,
       "description": "Servicio de integraci\u00f3n Companion Satellite."
     },
     {

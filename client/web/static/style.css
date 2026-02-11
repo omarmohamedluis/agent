@@ -205,6 +205,24 @@ main {
     color: var(--text-primary);
 }
 
+.btn-config {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-secondary);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.btn-config:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+}
+
+.btn-config:disabled {
+    background: transparent;
+    color: rgba(255, 255, 255, 0.05);
+    border-color: transparent;
+    cursor: not-allowed;
+}
+
 /* Content Area */
 .content-area {
     flex: 1;

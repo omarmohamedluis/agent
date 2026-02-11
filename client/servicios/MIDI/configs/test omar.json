@@ -2,10 +2,10 @@
   "file_info": {
     "name": "test omar",
     "ui_port": 9001,
-    "updated_at": "2026-02-10T16:54:34.778047+00:00"
+    "updated_at": "2026-02-10T20:40:20.450840+00:00"
   },
   "source": {
-    "midi_input": "Midi Through:Midi Through Port-0 14:0"
+    "midi_input": "Grid:Grid MIDI 1 24:0"
   },
   "net": {
     "vlan": 60,
@@ -17,24 +17,38 @@
   },
   "osc": {
     "ips": [
-      "30.0.10.255"
+      "30.0.60.255"
     ],
-    "port": 7401
+    "port": 9988
   },
   "routes": [
     {
       "type": "cc",
       "osc": "/test/1",
       "vtype": "float",
-      "cc": 7,
+      "cc": 36,
       "channel": 0
     },
     {
       "type": "cc",
       "osc": "/test/2",
       "vtype": "float",
-      "cc": 7,
-      "channel": 1
+      "cc": 37,
+      "channel": 0
+    },
+    {
+      "type": "note",
+      "osc": "/d3/cosas/1",
+      "vtype": "float",
+      "note": 40,
+      "channel": 0
+    },
+    {
+      "type": "cc",
+      "osc": "/test/",
+      "vtype": "float",
+      "cc": 32,
+      "channel": 0
     }
   ]
 }

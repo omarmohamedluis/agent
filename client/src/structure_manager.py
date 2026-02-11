@@ -340,6 +340,7 @@ class StructureManager:
                 # Prioridad 2: Archivos por defecto (Legacy)
                 map_files.extend([
                     cwd / "configs" / "Default.json",
+                    cwd / "configs" / "default.json",
                     cwd / "OMIMIDI_map.json", 
                     cwd / "map.json", 
                     cwd / "config.json"
@@ -378,19 +379,38 @@ class StructureManager:
                                     target_svc["vlan_active"] = vlan_active
                                     updated = True
                                     
-                                # Sincronizar campos IP (Nomenclatura estandarizada)
-                                if ip_mode and target_svc.get("ip_mode") != ip_mode:
-                                    target_svc["ip_mode"] = ip_mode
-                                    updated = True
-                                if ip is not None and target_svc.get("ip") != ip:
-                                    target_svc["ip"] = ip
-                                    updated = True
-                                if mask is not None and target_svc.get("mask") != mask:
-                                    target_svc["mask"] = mask
-                                    updated = True
-                                if gateway is not None and target_svc.get("gateway") != gateway:
-                                    target_svc["gateway"] = gateway
-                                    updated = True
+                                # Sincronizar campos IP (Nomenclatura estandarizada y compatible con NetManager)
+                                if ip_mode:
+                                    if target_svc.get("ip_mode") != ip_mode:
+                                        target_svc["ip_mode"] = ip_mode
+                                        updated = True
+                                    if target_svc.get("vlan_mode") != ip_mode:
+                                        target_svc["vlan_mode"] = ip_mode
+                                        updated = True
+                                        
+                                if ip is not None:
+                                    if target_svc.get("ip") != ip:
+                                        target_svc["ip"] = ip
+                                        updated = True
+                                    if target_svc.get("vlan_ip") != ip:
+                                        target_svc["vlan_ip"] = ip
+                                        updated = True
+                                        
+                                if mask is not None:
+                                    if target_svc.get("mask") != mask:
+                                        target_svc["mask"] = mask
+                                        updated = True
+                                    if target_svc.get("vlan_mask") != mask:
+                                        target_svc["vlan_mask"] = mask
+                                        updated = True
+                                        
+                                if gateway is not None:
+                                    if target_svc.get("gateway") != gateway:
+                                        target_svc["gateway"] = gateway
+                                        updated = True
+                                    if target_svc.get("vlan_gateway") != gateway:
+                                        target_svc["vlan_gateway"] = gateway
+                                        updated = True
 
                                 # Sincronizar Nombre de Configuración
                                 file_info = mdata.get("file_info", {})

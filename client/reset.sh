@@ -58,6 +58,18 @@ rm -f servicios/MIDI/OMIMIDI_state.json
 rm -f servicios/MIDI/OMIMIDI_learn_request.json
 rm -f servicios/MIDI/OMIMIDI_restart.flag
 
+# 6. Limpiar Satellite Service (basurita y binarios)
+echo "🛰️  Limpiando archivos de Satellite (binarios, código y estados)..."
+rm -rf servicios/satellite/satellite_code
+rm -rf servicios/satellite/fnm_data
+rm -rf servicios/satellite/bin
+rm -rf servicios/satellite/logs
+rm -f servicios/satellite/runtime_config.json
+rm -f servicios/satellite/service_state.json
+rm -f servicios/satellite/install.flag
+rm -f servicios/satellite/restart_satellite.flag
+rm -f servicios/satellite/active_config.txt
+
 
 echo "✨ ¡Listo! El estado de la aplicación está completamente limpio."
 echo "💡 Nota: Las configuraciones críticas (servicios.json, OMIMIDI_map.json) han sido respaldadas como archivos .template."

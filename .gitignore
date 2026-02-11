@@ -15,8 +15,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# VS Code
-.vscode/
 
 # jsons autogenerados (contenidos dentro de data/)
 *_TEMP.json
@@ -34,3 +32,11 @@ client/servicios/MIDI/OMIMIDI_learn_request.json
 client/servicios/MIDI/OMIMIDI_restart.flag
 client/servicios/MIDI/OMIMIDI_webui.pid
 
+
+# Satellite Service
+client/servicios/satellite/satellite_code/
+client/servicios/satellite/bin/
+client/servicios/satellite/fnm_data/
+client/servicios/satellite/runtime_config.json
+client/servicios/satellite/logs/
+client/servicios/satellite/service_state.json

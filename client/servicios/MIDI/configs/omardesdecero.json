@@ -1,25 +1,25 @@
 {
   "file_info": {
-    "name": "test 2",
+    "name": "omardesdecero",
     "ui_port": 9001,
-    "updated_at": "2026-01-19T17:55:40.581471+00:00"
+    "updated_at": "2026-02-10T23:57:16.929328+00:00"
   },
   "source": {
     "midi_input": "Midi Through:Midi Through Port-0 14:0"
   },
   "net": {
-    "vlan": 104,
+    "vlan": 100,
     "vlan_active": false,
     "ip_mode": "dhcp",
-    "ip": "192.168.100.10",
-    "mask": "255.255.255.0",
+    "ip": "",
+    "mask": "",
     "gateway": ""
   },
   "osc": {
     "ips": [
       "127.0.0.1"
     ],
-    "port": 1024
+    "port": 7001
   },
   "routes": []
 }

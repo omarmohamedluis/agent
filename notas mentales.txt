@@ -1,4 +1,15 @@
-en el reboot  o el shutown no apaga pantalla, o que ponga rebooting y que apague la pantalla, ¿significa esto que cuando hago shutdown desde el web interface, no hace el proceso de apagado del software normal?
 
 el binding del servicio no hace falta (esta relacionado con las VLAN)
 
+mejorar el log en la pagina 
+
+
+active_confit.txt en el ignore que lo meti yo a mano, por si lo borra
+
+revisar todo lo de satellite.
+
+lo ultimo que he hecho:
+Configuración a Pantalla Completa (Satellite): Ahora, al darle a "Configurar Preset" en el Satellite, se abrirá a pantalla completa (saliendo del Dashboard). El botón "Cerrar" ahora siempre está visible y te devuelve automáticamente al Dashboard principal.
+Corrección de Nombres: Al crear un nuevo preset desde la base, ahora se actualiza correctamente el nombre interno en el archivo para que aparezca bien al guardar.
+Auto-Default: Si borras todas las configuraciones de un servicio, al arrancar se creará de nuevo un Default.json limpio basado en la plantilla.
+Puedes ver todos los des

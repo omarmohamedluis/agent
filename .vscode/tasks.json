@@ -1,0 +1,17 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "wait-for-server",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "-c",
+                "import time; time.sleep(3)"
+            ],
+            "presentation": {
+                "reveal": "never"
+            }
+        }
+    ]
+}
