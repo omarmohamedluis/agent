@@ -135,6 +135,20 @@ nav {
     color: white;
 }
 
+.btn-icon {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 0.2rem;
+    transition: transform 0.1s;
+    line-height: 1;
+}
+
+.btn-icon:hover {
+    transform: scale(1.2);
+}
+
 /* --- Views --- */
 .view {
     flex-grow: 1;
@@ -166,8 +180,14 @@ nav {
 }
 
 .agent-card:hover {
-    transform: translateY(-5px);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.agent-card.is-locked {
+    filter: grayscale(0.8) brightness(0.7);
+    opacity: 0.6;
+    pointer-events: none;
+    cursor: wait !important;
 }
 
 .agent-card .status-indicator {
@@ -196,8 +216,36 @@ nav {
     background: var(--danger-color);
 }
 
+.status-stalled .dot {
+    background: #7f8c8d;
+    box-shadow: 0 0 10px #7f8c8d;
+}
+
 .status-away .dot {
     background: var(--warning-color);
+}
+
+.status-loading .dot {
+    background: var(--warning-color);
+    box-shadow: 0 0 10px var(--warning-color);
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    50% {
+        transform: scale(1.2);
+        opacity: 0.7;
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
 }
 
 .agent-card h3 {
@@ -223,6 +271,18 @@ nav {
     display: flex;
     flex-direction: column;
     gap: 0.8rem;
+}
+
+.button-group-row {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.button-group-row .btn {
+    flex: 1;
+    font-size: 0.8rem;
+    padding: 0.6rem 0.2rem;
+    white-space: nowrap;
 }
 
 .selector-group {
@@ -346,4 +406,94 @@ th {
     margin-top: 1rem;
     display: flex;
     gap: 1rem;
+}
+
+/* --- Communication Pills --- */
+#pill-container {
+    position: fixed;
+    bottom: 2rem;
+    left: 2rem;
+    display: flex;
+    flex-direction: column-reverse;
+    /* To make new pills appear at the bottom */
+    gap: 0.8rem;
+    z-index: 1000;
+    pointer-events: none;
+}
+
+.pill {
+    background: rgba(26, 29, 36, 0.8);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: white;
+    padding: 0.8rem 1.2rem;
+    border-radius: 30px;
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    animation: pill-slide-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    min-width: 200px;
+}
+
+.pill.fade-out {
+    animation: pill-fade-out 0.5s forwards;
+}
+
+.pill-content {
+    display: flex;
+    flex-direction: column;
+}
+
+.pill-serial {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    color: var(--accent-color);
+    font-family: var(--font-mono);
+    line-height: 1;
+}
+
+.pill-msg {
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.pill-icon {
+    font-size: 1.2rem;
+}
+
+/* Specific types */
+.pill-heartbeat {
+    border-left: 4px solid var(--accent-color);
+}
+
+.pill-command {
+    border-left: 4px solid #9b59b6;
+}
+
+.pill-sync {
+    border-left: 4px solid var(--success-color);
+}
+
+.pill-discovery {
+    border-left: 4px solid var(--warning-color);
+}
+
+@keyframes pill-slide-in {
+    from {
+        transform: translateX(-100%) scale(0.8);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0) scale(1);
+        opacity: 1;
+    }
+}
+
+@keyframes pill-fade-out {
+    to {
+        transform: translateY(20px) scale(0.9);
+        opacity: 0;
+    }
 }

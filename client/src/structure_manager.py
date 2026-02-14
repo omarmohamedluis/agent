@@ -203,8 +203,8 @@ class StructureManager:
                 return True
             return False
 
-    def update_service_state(self, svc_id: Optional[str], enabled: bool, web_port: Optional[int] = None) -> bool:
-        """Actualiza el estado habilitado y puerto web de un servicio. Impone exclusividad si enabled=True."""
+    def update_service_state(self, svc_id: Optional[str], enabled: Optional[bool] = None, web_port: Optional[int] = None, running: Optional[bool] = None) -> bool:
+        """Actualiza el estado habilitado, puerto web y estado de ejecución de un servicio."""
         updated = False
         with self._data_lock:
             services = self._data.get("services", [])
@@ -214,19 +214,27 @@ class StructureManager:
                 
                 if is_target:
                     # Servicio objetivo: establecer estado deseado
-                    if svc.get("enabled") != enabled:
+                    if enabled is not None and svc.get("enabled") != enabled:
                         svc["enabled"] = enabled
                         updated = True
                     
                     if web_port is not None and svc.get("web_port") != web_port:
                         svc["web_port"] = web_port
                         updated = True
+                    
+                    if running is not None and svc.get("running") != running:
+                        svc["running"] = running
+                        updated = True
                 else:
                     # Otros servicios:
-                    # Si estamos habilitando un nuevo servicio, deshabilitar los otros (Exclusivo)
-                    if enabled and svc.get("enabled"):
-                        svc["enabled"] = False
-                        updated = True
+                    # Si estamos habilitando un nuevo servicio, deshabilitar los otros e informar que no corren
+                    if enabled is True:
+                        if svc.get("enabled"):
+                            svc["enabled"] = False
+                            updated = True
+                        if svc.get("running"):
+                            svc["running"] = False
+                            updated = True
             
             if updated:
                 self.save_structure()

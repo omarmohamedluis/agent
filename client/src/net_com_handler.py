@@ -26,6 +26,7 @@ SERVER_TIMEOUT = 5.0
 
 # Persistent communication state
 _session_active = threading.Event()
+_reporting_paused = False # New: blocks the heartbeat sender
 _last_contact_time: float = 0.0
 _sender_thread: Optional[threading.Thread] = None
 _sender_stop = threading.Event()
@@ -103,7 +104,8 @@ def _build_client_payload() -> Dict[str, Any]:
         "active_config": service_state.get("configuration"),
         "presets": presets,
         "version": version_info,
-        "index": identity.get("index")
+        "id": identity.get("index"),
+        "system_status": structure.get("system_status")
     }
 
 
@@ -205,16 +207,85 @@ def _apply_server_configs(configs: Dict[str, Any]):
                     pass
 
 def _handle_command(cmd_data: Dict[str, Any]):
-    cmd = cmd_data.get("command")
-    if not cmd:
+    global _reporting_paused
+    cmd_info = cmd_data.get("command")
+    if not cmd_info:
         return
-    log_print("info", module_name, f"Command received: {cmd}")
-    if cmd == "shutdown":
+    
+    if isinstance(cmd_info, str):
+        action = cmd_info
+        params = {}
+    else:
+        action = cmd_info.get("action")
+        params = cmd_info
+
+    log_print("info", module_name, f"Command received: {action}")
+    
+    if action == "shutdown":
         import subprocess
         subprocess.run(["sudo", "shutdown", "now"])
-    elif cmd == "reboot":
+    elif action == "reboot":
         import subprocess
         subprocess.run(["sudo", "reboot"])
+    elif action == "start_service":
+        svc_id = params.get("service_id")
+        config_name = params.get("config_name")
+        serial = _build_client_payload().get("serial")
+        if svc_id:
+            try:
+                log_print("info", module_name, f">>> STARTING RITUAL: {action} (Thread: {threading.get_ident()})")
+                # 1. Total Silence
+                _reporting_paused = True
+                
+                # 2. Configure & Start
+                if config_name:
+                    requests.post(f"http://localhost:8000/api/services/{svc_id}/config/select", json={"name": config_name}, timeout=5)
+                requests.post(f"http://localhost:8000/api/services/{svc_id}/start", timeout=5)
+                
+                # 3. Wait for settlement (OS Network, VLAN, Service Process)
+                time.sleep(3)
+                
+                # 4. Final Sync
+                if serial:
+                    from heartbeat import force_update_interfaces
+                    force_update_interfaces()
+                    full_payload = _build_client_payload()
+                    _post_json(f"/api/agents/{serial}/ready", full_payload)
+                
+                # 5. Resume
+                _reporting_paused = False
+                log_print("info", module_name, f"<<< RITUAL COMPLETED: {action}")
+            except Exception as e:
+                log_print("error", module_name, f"Failed to start service via command: {e}")
+                _reporting_paused = False
+    elif action == "stop_service":
+        svc_id = params.get("service_id")
+        serial = _build_client_payload().get("serial")
+        if svc_id:
+            try:
+                log_print("info", module_name, f">>> STARTING RITUAL: {action} (Thread: {threading.get_ident()})")
+                # 1. Total Silence
+                _reporting_paused = True
+                
+                # 2. Stop
+                requests.post(f"http://localhost:8000/api/services/{svc_id}/stop", timeout=5)
+                
+                # 3. Wait for settlement
+                time.sleep(3)
+                
+                # 4. Final Sync (now in Standby)
+                if serial:
+                    from heartbeat import force_update_interfaces
+                    force_update_interfaces()
+                    full_payload = _build_client_payload()
+                    _post_json(f"/api/agents/{serial}/ready", full_payload)
+                
+                # 5. Resume
+                _reporting_paused = False
+                log_print("info", module_name, f"<<< RITUAL COMPLETED: {action}")
+            except Exception as e:
+                log_print("error", module_name, f"Failed to stop service via command: {e}")
+                _reporting_paused = False
 
 # ---------------------------------------------------------------------------
 # Loops
@@ -226,6 +297,15 @@ def _sender_loop() -> None:
         if not _session_active.is_set():
             break
             
+        if _reporting_paused:
+            # Skip this iteration if we are in the middle of a command ritual
+            log_print("debug", module_name, f"--- Heartbeat suppressed (Ritual Active, Thread: {threading.get_ident()}) ---")
+            if _sender_stop.wait(1.0):
+                break
+            continue
+
+        log_print("debug", module_name, f"Sending heartbeat (Thread: {threading.get_ident()})")
+
         payload = _build_client_payload()
         res = _post_json("/api/heartbeat", payload)
         if res:
@@ -249,6 +329,13 @@ def handshake() -> bool:
     if not _listen_for_server_broadcast():
         return False
 
+    # Force fresh metrics before reporting state to Director
+    try:
+        from heartbeat import force_update_interfaces
+        force_update_interfaces()
+    except Exception:
+        pass
+
     payload = _build_client_payload()
     res = _post_json("/api/handshake", payload)
     if res and res.get("status") == "ok":
@@ -259,6 +346,10 @@ def handshake() -> bool:
         global _last_contact_time
         _last_contact_time = time.time()
         log_print("info", module_name, "Handshake ACCEPTED by Director (HTTP).")
+        
+        # Check for immediate command returned in handshake
+        if res.get("command"):
+            threading.Thread(target=_handle_command, args=(res,), name="ImmediateCommandHandler", daemon=True).start()
         
         _session_active.set()
         global _sender_thread, _sender_stop

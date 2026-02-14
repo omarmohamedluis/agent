@@ -7,7 +7,7 @@
             "command": "python",
             "args": [
                 "-c",
-                "import time; time.sleep(3)"
+                "import time; time.sleep(10)"
             ],
             "presentation": {
                 "reveal": "never"

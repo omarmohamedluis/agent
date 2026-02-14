@@ -5,7 +5,9 @@
         configs: {},
         currentService: null,
         editingConfig: null,
-        selections: {} // {serial: {service: '', preset: ''}}
+        selections: {}, // {serial: {service: '', preset: ''}}
+        lastEventId: 0,
+        pillCount: 0
     };
 
     // --- DOM Elements ---
@@ -31,12 +33,70 @@
 
     async function loadAgents() {
         const data = await apiFetch('/api/agents');
-        if (data) {
-            state.agents = data.agents;
+        if (data && data.agents) {
+            // Handle Agents (Merge with optimistic state)
+            for (const serial in data.agents) {
+                const remote = data.agents[serial];
+                const local = state.agents[serial];
+
+                if (local && local.is_optimistic && remote.status !== 'loading' && remote.status !== 'stalled') {
+                    continue;
+                }
+                remote.is_optimistic = false;
+                state.agents[serial] = remote;
+            }
+
+            // Handle Events (Pills)
+            if (data.events) {
+                data.events.forEach(event => {
+                    if (event.id > state.lastEventId) {
+                        spawnPill(event);
+                        state.lastEventId = event.id;
+                    }
+                });
+            }
+
             renderAgents();
             renderHome();
         }
     }
+
+    const spawnPill = (event) => {
+        const container = document.getElementById('pill-container');
+        if (!container) return;
+
+        state.pillCount++;
+        const pill = document.createElement('div');
+        pill.className = `pill pill-${event.type}`;
+
+        let icon = '🔔';
+        if (event.type === 'heartbeat') icon = '💓';
+        if (event.type === 'command') icon = '⚡';
+        if (event.type === 'sync') icon = '✅';
+        if (event.type === 'discovery') {
+            icon = '🔍';
+            // Immediate config refresh on discovery
+            loadConfigs();
+        }
+
+        pill.innerHTML = `
+            <span class="pill-icon">${icon}</span>
+            <div class="pill-content">
+                <span class="pill-serial">${event.serial} | #${state.pillCount}</span>
+                <span class="pill-msg">${event.message}</span>
+            </div>
+        `;
+
+        container.appendChild(pill);
+
+        // Auto remove
+        setTimeout(() => {
+            pill.classList.add('fade-out');
+            setTimeout(() => pill.remove(), 500);
+        }, 4000);
+    };
+
+    const poll = loadAgents; // Alias for compatibility with command handlers
 
     async function loadConfigs() {
         const data = await apiFetch('/api/configs');
@@ -48,65 +108,168 @@
 
     // --- Rendering ---
     function renderHome() {
-        const html = Object.entries(state.agents).map(([serial, agent]) => {
+        const currentSerials = Object.keys(state.agents);
+
+        // 1. Remove cards for agents that are no longer present
+        Array.from(agentGrid.querySelectorAll('.agent-card')).forEach(card => {
+            const serial = card.dataset.serial;
+            if (!currentSerials.includes(serial)) {
+                card.remove();
+            }
+        });
+
+        // 2. Add or Update cards
+        currentSerials.forEach(serial => {
+            const agent = state.agents[serial];
+            let card = agentGrid.querySelector(`.agent-card[data-serial="${serial}"]`);
+
             const currentSelection = state.selections[serial] || {
                 service: agent.active_service || '',
                 preset: agent.active_config || ''
             };
 
-            // Available services (could be dynamic from configs later)
             const availableServices = Object.keys(state.configs);
             const availablePresets = state.configs[currentSelection.service] ? Object.keys(state.configs[currentSelection.service]) : [];
-
             const isDifferent = currentSelection.service !== agent.active_service || currentSelection.preset !== agent.active_config;
+            const hasActive = !!agent.active_service;
+            const isLocked = agent.status === 'loading' || agent.status === 'stalled';
+            const statusText = agent.status === 'loading' ? (agent.busy_message || 'loading...') : agent.status;
 
-            return `
-                <div class="agent-card status-${agent.status}" data-serial="${serial}">
-                    <div class="status-indicator">
-                        <span class="dot"></span>
-                        <span>${agent.status}</span>
-                    </div>
-                    <h3>${agent.host || serial}</h3>
-                    <div class="info">
-                        <p><strong>IP:</strong> ${agent.ip || '---'}</p>
-                        <p><strong>Serial:</strong> <span class="serial-text">${serial}</span></p>
-                    </div>
-                    <div class="stats">
-                        <span>CPU: ${agent.cpu ? agent.cpu.toFixed(1) + '%' : '---'}</span>
-                        <span>🌡️ ${agent.temp ? agent.temp.toFixed(1) + '°C' : '---'}</span>
-                    </div>
-                    <div class="current-state ${agent.active_service ? 'active' : ''}">
-                        <p><strong>Activo:</strong> ${agent.active_service ? `${agent.active_service} (${agent.active_config || 'Default'})` : 'Standby'}</p>
-                    </div>
-                    <div class="controls">
-                        <div class="selector-group">
-                            <label>Srv:</label>
-                            <select onchange="updateSelection('${serial}', 'service', this.value)">
-                                <option value="">---</option>
-                                ${availableServices.map(s => `<option value="${s}" ${currentSelection.service === s ? 'selected' : ''}>${s}</option>`).join('')}
-                            </select>
+            if (!card) {
+                // Initial creation
+                const cardHtml = `
+                    <div class="agent-card status-${agent.status} ${isLocked ? 'is-locked' : ''}" data-serial="${serial}">
+                        <div class="status-indicator">
+                            <span class="dot"></span>
+                            <span class="status-label">${statusText}</span>
                         </div>
-                        <div class="selector-group">
-                            <label>Cfg:</label>
-                            <select onchange="updateSelection('${serial}', 'preset', this.value)">
-                                <option value="">---</option>
-                                ${availablePresets.map(p => `<option value="${p}" ${currentSelection.preset === p ? 'selected' : ''}>${p}</option>`).join('')}
-                            </select>
+                        <h3 class="agent-title">#${agent.id || '?'} - ${agent.host || serial}</h3>
+                        <div class="info">
+                            <p><strong>IP:</strong> <span class="ip-text">${agent.ip || '---'}</span></p>
+                            <p><strong>Serial:</strong> <span class="serial-text">${serial}</span></p>
                         </div>
-                        <button class="btn btn-primary btn-block ${isDifferent ? '' : 'disabled'}" 
-                                onclick="startService('${serial}')" ${isDifferent ? '' : 'disabled'}>
-                            🚀 INICIAR
+                        <div class="stats">
+                            <span class="cpu-text">CPU: ${agent.cpu ? agent.cpu.toFixed(1) + '%' : '---'}</span>
+                            <span class="temp-text">🌡️ ${agent.temp ? agent.temp.toFixed(1) + '°C' : '---'}</span>
+                        </div>
+                        <div class="current-state ${agent.active_service ? 'active' : ''}">
+                            <p class="state-text"><strong>Activo:</strong> ${agent.active_service ? `${agent.active_service} (${agent.active_config || 'Default'})` : 'Standby'}</p>
+                        </div>
+                        <div class="controls">
+                            <div class="selector-group">
+                                <label>Srv:</label>
+                                <select class="srv-select" onchange="updateSelection('${serial}', 'service', this.value)" ${isLocked ? 'disabled' : ''}>
+                                    <option value="">---</option>
+                                    ${availableServices.map(s => `<option value="${s}" ${currentSelection.service === s ? 'selected' : ''}>${s}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div class="selector-group">
+                                <label>Cfg:</label>
+                                <select class="cfg-select" onchange="updateSelection('${serial}', 'preset', this.value)" ${isLocked ? 'disabled' : ''}>
+                                    <option value="">---</option>
+                                    ${availablePresets.map(p => `<option value="${p}" ${currentSelection.preset === p ? 'selected' : ''}>${p}</option>`).join('')}
+                                </select>
+                            </div>
+                             <div class="button-group-row">
+                                <div class="start-button-container">
+                                    ${(!hasActive || isDifferent) ? `
+                                        <button class="btn btn-primary btn-start ${isLocked ? 'disabled' : ''}" 
+                                                onclick="startService('${serial}')" ${isLocked ? 'disabled' : ''}>
+                                            ${agent.status === 'offline' ? '📝 PROGRAMAR ARRANQUE' : (hasActive && isDifferent ? '🔄 ACTUALIZAR' : '🚀 INICIAR')}
+                                        </button>
+                                    ` : ''}
+                                </div>
+                                <div class="stop-button-container">
+                                    ${hasActive && agent.status !== 'offline' ? `
+                                        <button class="btn btn-danger btn-stop ${isLocked ? 'disabled' : ''}" 
+                                                onclick="stopService('${serial}')" ${isLocked ? 'disabled' : ''}>
+                                            ⏹️ PARAR
+                                        </button>
+                                    ` : ''}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                agentGrid.insertAdjacentHTML('beforeend', cardHtml);
+                return;
+            }
+
+            // Update existing card
+            card.className = `agent-card status-${agent.status} ${isLocked ? 'is-locked' : ''}`;
+            card.querySelector('.status-label').textContent = statusText;
+            card.querySelector('.agent-title').textContent = `#${agent.id || '?'} - ${agent.host || serial}`;
+            card.querySelector('.ip-text').textContent = agent.ip || '---';
+            card.querySelector('.cpu-text').textContent = `CPU: ${agent.cpu ? agent.cpu.toFixed(1) + '%' : '---'}`;
+            card.querySelector('.temp-text').textContent = `🌡️ ${agent.temp ? agent.temp.toFixed(1) + '°C' : '---'}`;
+
+            const stateTextEl = card.querySelector('.state-text');
+            stateTextEl.innerHTML = `<strong>Activo:</strong> ${agent.active_service ? `${agent.active_service} (${agent.active_config || 'Default'})` : 'Standby'}`;
+            card.querySelector('.current-state').classList.toggle('active', !!agent.active_service);
+
+            // Update Selectors (ONLY if not focused and options changed)
+            const srvSelect = card.querySelector('.srv-select');
+            const cfgSelect = card.querySelector('.cfg-select');
+
+            if (document.activeElement !== srvSelect) {
+                const srvHtml = `<option value="">---</option>${availableServices.map(s => `<option value="${s}" ${currentSelection.service === s ? 'selected' : ''}>${s}</option>`).join('')}`;
+                if (srvSelect.innerHTML !== srvHtml) srvSelect.innerHTML = srvHtml;
+                srvSelect.disabled = isLocked;
+            }
+
+            if (document.activeElement !== cfgSelect) {
+                const cfgHtml = `<option value="">---</option>${availablePresets.map(p => `<option value="${p}" ${currentSelection.preset === p ? 'selected' : ''}>${p}</option>`).join('')}`;
+                if (cfgSelect.innerHTML !== cfgHtml) cfgSelect.innerHTML = cfgHtml;
+                cfgSelect.disabled = isLocked;
+            }
+
+            // Update Start/Update Button
+            const startContainer = card.querySelector('.start-button-container');
+            const shouldHaveStart = !hasActive || isDifferent;
+            if (shouldHaveStart) {
+                const label = agent.status === 'offline' ? '📝 PROGRAMAR ARRANQUE' : (hasActive && isDifferent ? '🔄 ACTUALIZAR' : '🚀 INICIAR');
+                if (!startContainer.querySelector('.btn-start')) {
+                    startContainer.innerHTML = `
+                        <button class="btn btn-primary btn-start ${isLocked ? 'disabled' : ''}" 
+                                onclick="startService('${serial}')" ${isLocked ? 'disabled' : ''}>
+                            ${label}
                         </button>
-                    </div>
-                </div>
-            `;
-        }).join('');
-        agentGrid.innerHTML = html;
+                    `;
+                } else {
+                    const btnStart = startContainer.querySelector('.btn-start');
+                    btnStart.textContent = label;
+                    btnStart.disabled = isLocked;
+                    btnStart.classList.toggle('disabled', isLocked);
+                }
+            } else {
+                startContainer.innerHTML = '';
+            }
+
+            const stopContainer = card.querySelector('.stop-button-container');
+            const shouldHaveStop = hasActive && agent.status !== 'offline';
+            if (shouldHaveStop) {
+                if (!stopContainer.querySelector('.btn-stop')) {
+                    stopContainer.innerHTML = `
+                        <button class="btn btn-danger btn-stop ${isLocked ? 'disabled' : ''}" 
+                                onclick="stopService('${serial}')" ${isLocked ? 'disabled' : ''}>
+                            ⏹️ PARAR
+                        </button>
+                    `;
+                } else {
+                    const btnStop = stopContainer.querySelector('.btn-stop');
+                    btnStop.disabled = isLocked;
+                    btnStop.classList.toggle('disabled', isLocked);
+                }
+            } else {
+                stopContainer.innerHTML = '';
+            }
+        });
     }
 
     function renderAgents() {
         const html = Object.entries(state.agents).map(([serial, agent]) => `
             <tr>
+                <td>${agent.id || '--'} <button class="btn-icon" onclick="updateAgentId('${serial}', ${agent.id})">✏️</button></td>
                 <td>${serial}</td>
                 <td>${agent.host}</td>
                 <td>${agent.ip}</td>
@@ -124,6 +287,18 @@
         `).join('');
         agentsList.innerHTML = html;
     }
+
+    window.updateAgentId = async (serial, currentId) => {
+        const newId = prompt(`Asignar nuevo ID numérico para ${serial}:`, currentId);
+        if (newId === null || newId === "" || isNaN(newId)) return;
+
+        await apiFetch(`/api/agents/${serial}/id`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: parseInt(newId) })
+        });
+        loadAgents();
+    };
 
     function switchView(view) {
         state.view = view;
@@ -184,6 +359,14 @@
         const sel = state.selections[serial];
         if (!sel || !sel.service) return;
 
+        // Optimistic update
+        if (state.agents[serial]) {
+            state.agents[serial].status = 'loading';
+            state.agents[serial].busy_message = 'Launching...';
+            state.agents[serial].is_optimistic = true; // Mark as local update
+            renderHome();
+        }
+
         await apiFetch(`/api/agents/${serial}/command`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -194,8 +377,32 @@
             })
         });
 
-        // Optimistic update or just wait for poll
-        renderHome();
+        // Force immediate poll to sync with server's receipt of command
+        setTimeout(poll, 200);
+    };
+
+    window.stopService = async (serial) => {
+        if (!confirm(`¿Detener servicio en ${serial}?`)) return;
+
+        // Optimistic update
+        if (state.agents[serial]) {
+            state.agents[serial].status = 'loading';
+            state.agents[serial].busy_message = 'Stopping...';
+            state.agents[serial].is_optimistic = true; // Mark as local update
+            renderHome();
+        }
+
+        await apiFetch(`/api/agents/${serial}/command`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'stop_service',
+                service_id: state.agents[serial].active_service
+            })
+        });
+
+        // Force immediate poll
+        setTimeout(poll, 200);
     };
 
     window.editConfig = function (name) {

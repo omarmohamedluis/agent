@@ -47,6 +47,10 @@ class ServiceManager:
             with services_json_path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
                 self.services_config = {s["id"]: s for s in data.get("services", [])}
+                
+                # Auto-initialize configs for all services (Template -> Default.json)
+                for svc_id in self.services_config:
+                    self.get_configs(svc_id)
         except Exception as e:
             LOGGER.error(f"Failed to load service configuration: {e}")
             self.services_config = {}
@@ -204,6 +208,9 @@ class ServiceManager:
 
             self.processes[svc_id] = subprocess_obj
             
+            # Update Running State
+            STRUCTURE_MANAGER.update_service_state(svc_id, running=True)
+            
             # Trigger metadata sync (web_port, etc)
             try:
                 STRUCTURE_MANAGER.sync_service_metadata(svc_id)
@@ -253,17 +260,21 @@ class ServiceManager:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 LOGGER.warning(f"Service {svc_id} did not respond to SIGTERM, forcing SIGKILL...")
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                if proc.poll() is None: # Check if still running before sending SIGKILL
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                STRUCTURE_MANAGER.update_service_state(svc_id, enabled=not persist_state, running=False)
             
             del self.processes[svc_id]
             self.config_mode_services.discard(svc_id)
             
             # Update Active Service State to None (STANDBY)
             if not self.processes and not persist_state:
-                 STRUCTURE_MANAGER.update_service_state(svc_id, enabled=False)
+                 STRUCTURE_MANAGER.update_service_state(svc_id, enabled=False, running=False)
+            else:
+                 STRUCTURE_MANAGER.update_service_state(svc_id, running=False)
             
             return True
         except Exception as e:

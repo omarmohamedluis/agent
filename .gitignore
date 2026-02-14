@@ -10,6 +10,14 @@ __pycache__/
 *.log
 *.tmp
 *.out
+*.flag
+*.lock
+*.pid
+*_TEMP.json
+
+# Servidor
+server/logs/
+server/data/
 
 # Archivos del sistema
 .DS_Store
@@ -26,14 +34,10 @@ client/servicios/satellite/active_config.txt
 
 # generados
 client/data/structure.json
-client/data/structure.json.lock
 client/data/server.json
 client/servicios/servicios.json
 client/servicios/MIDI/OMIMIDI_map.json
-client/servicios/MIDI/OMIMIDI_state.json
 client/servicios/MIDI/OMIMIDI_learn_request.json
-client/servicios/MIDI/OMIMIDI_restart.flag
-client/servicios/MIDI/OMIMIDI_webui.pid
 
 # Configs generadas (no templates)
 client/servicios/MIDI/configs/*.json
@@ -48,7 +52,6 @@ client/servicios/satellite/runtime_config.json
 client/servicios/satellite/logs/
 client/servicios/satellite/service_state.json
 client/servicios/satellite/install.flag
-client/servicios/satellite/restart_satellite.flag
 
 # Configs generadas (no templates)
 client/servicios/satellite/configs/*.json

@@ -103,7 +103,7 @@ def start_standalone_ui():
     if _standalone_server and _standalone_server.started:
         return
 
-    LOGGER.info("Starting local Standalone UI (Fallback mode)...")
+    LOGGER.info("Starting Client API Server...")
     config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="warning")
     _standalone_server = StandaloneServer(config)
     
@@ -147,50 +147,58 @@ async def api_status():
 
 @app.post("/api/services/{svc_id}/start")
 async def start_service(svc_id: str):
-    # 1. Habilitar Servicio en Estructura (para que net_manager lo vea)
-    STRUCTURE_MANAGER.update_service_state(svc_id, enabled=True)
-    
-    # 2. Sincronizar Metadatos (CRÍTICO: Hacerlo ANTES de configurar red)
-    # Esto asegura que structure.json tenga la VLAN/IP correcta de la config activa
+    global suppress_network_listener, last_network_sig
+    suppress_network_listener = True
     try:
-        await asyncio.to_thread(STRUCTURE_MANAGER.sync_service_metadata, svc_id)
-    except Exception as e:
-        LOGGER.error(f"Fallo al sincronizar metadatos previos al inicio para {svc_id}: {e}")
+        # 1. Habilitar Servicio en Estructura (para que net_manager lo vea)
+        STRUCTURE_MANAGER.update_service_state(svc_id, enabled=True)
+        
+        # 2. Sincronizar Metadatos (CRÍTICO: Hacerlo ANTES de configurar red)
+        try:
+            await asyncio.to_thread(STRUCTURE_MANAGER.sync_service_metadata, svc_id)
+        except Exception as e:
+            LOGGER.error(f"Fallo al sincronizar metadatos previos al inicio para {svc_id}: {e}")
 
-    # 3. Configurar Red
-    try:
-        from net_manager import update_nics
-        update_nics()
-    except Exception as e:
-        LOGGER.error(f"Fallo al actualizar red antes de iniciar servicio {svc_id}: {e}")
-        # Procedemos de todas formas, intentando iniciar el proceso
-    
-    # 3. Iniciar Proceso
-    if service_manager.start_service(svc_id):
-        return {"status": "started", "id": svc_id}
-    raise HTTPException(status_code=500, detail="Fallo al iniciar servicio")
+        # Actualizar firma para evitar que el listener se dispare
+        last_network_sig = get_network_signature(STRUCTURE_MANAGER.get_structure())
+
+        # 3. Configurar Red
+        try:
+            from net_manager import update_nics
+            await asyncio.to_thread(update_nics)
+        except Exception as e:
+            LOGGER.error(f"Fallo al actualizar red antes de iniciar servicio {svc_id}: {e}")
+        
+        # 3. Iniciar Proceso (ahora persiste 'running'=True)
+        if await asyncio.to_thread(service_manager.start_service, svc_id):
+            return {"status": "started", "id": svc_id}
+        raise HTTPException(status_code=500, detail="Fallo al iniciar servicio")
+    finally:
+        suppress_network_listener = False
 
 @app.post("/api/services/{svc_id}/stop")
 async def stop_service(svc_id: str):
-    # Verificar si está en modo configuración ANTES de detenerlo (porque stop limpia el flag)
-    is_config_mode = svc_id in service_manager.config_mode_services
+    global suppress_network_listener, last_network_sig
+    suppress_network_listener = True
+    try:
+        # Verificar si está en modo configuración ANTES de detenerlo
+        is_config_mode = svc_id in service_manager.config_mode_services
 
-    # 1. Detener Proceso
-    if service_manager.stop_service(svc_id):
-        # 2. Actualizar Red (Limpieza)
-        # Si estaba en modo config, NO tocamos la red (ya que no se aplicó nada)
-        if is_config_mode:
-            LOGGER.info(f"Servicio {svc_id} detenido (Modo Config). Saltando actualización de red.")
-        else:
-            # El gestor de servicios ya lo deshabilitó en la estructura si se detuvo
-            try:
-                from net_manager import update_nics
-                update_nics()
-            except Exception as e:
-                LOGGER.error(f"Fallo al actualizar red tras detener servicio {svc_id}: {e}")
-            
-        return {"status": "stopped", "id": svc_id}
-    raise HTTPException(status_code=500, detail="Fallo al detener servicio")
+        # 1. Detener Proceso (ahora persiste 'running'=False)
+        if await asyncio.to_thread(service_manager.stop_service, svc_id):
+            # 2. Actualizar Red (Limpieza)
+            if not is_config_mode:
+                last_network_sig = get_network_signature(STRUCTURE_MANAGER.get_structure())
+                try:
+                    from net_manager import update_nics
+                    await asyncio.to_thread(update_nics)
+                except Exception as e:
+                    LOGGER.error(f"Fallo al actualizar red tras detener servicio {svc_id}: {e}")
+                
+            return {"status": "stopped", "id": svc_id}
+        raise HTTPException(status_code=500, detail="Fallo al detener servicio")
+    finally:
+        suppress_network_listener = False
 
 @app.post("/api/services/{svc_id}/reload_config")
 async def reload_service_config(svc_id: str):
@@ -532,7 +540,11 @@ def main():
     
     # 0. Inicializar Structure JSON (Manejado por instanciación del Manager)
     
-    # 0.1 Iniciar Heartbeat
+    # 0.1 Iniciar Servidor API Local (Fundamental para comandos internos)
+    # Lo iniciamos una vez y se mantiene activo siempre.
+    start_standalone_ui()
+    
+    # 0.2 Iniciar Heartbeat
     start_heartbeat()
     
     # 1. Init UI
@@ -582,12 +594,7 @@ def main():
 
     try:
         last_check = 0
-        standalone_active = False
-        
-        # Inicializar el estado del servidor web basado en la conexión inicial
-        if not connected:
-            start_standalone_ui()
-            standalone_active = True
+        is_server_alive = connected
         
         while not stop_event.is_set():
             now = time.time()
@@ -596,16 +603,14 @@ def main():
             if now - last_check > 2.0:
                 from net_com_handler import get_last_contact_time # Importar aquí para evitar circular
                 last_contact = get_last_contact_time()
-                is_server_alive = (now - last_contact < 10.0)
+                current_server_alive = (now - last_contact < 10.0)
                 
-                if not is_server_alive and not standalone_active:
-                    LOGGER.warning("Server lost for > 10s. Activating local UI.")
-                    start_standalone_ui()
-                    standalone_active = True
-                elif is_server_alive and standalone_active:
-                    LOGGER.info("Server recovered. Deactivating local UI.")
-                    stop_standalone_ui()
-                    standalone_active = False
+                if not current_server_alive and is_server_alive:
+                    LOGGER.warning("Servidor perdido (> 10s).")
+                    is_server_alive = False
+                elif current_server_alive and not is_server_alive:
+                    LOGGER.info("Servidor recuperado.")
+                    is_server_alive = True
                 
                 last_check = now
             

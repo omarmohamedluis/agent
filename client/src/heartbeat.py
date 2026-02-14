@@ -170,6 +170,8 @@ def _set_metrics(snapshot: Dict[str, Any]) -> None:
         _metrics_snapshot["temp"] = snapshot.get("temp")
         ifaces = snapshot.get("ifaces") or []
         _metrics_snapshot["ifaces"] = list(ifaces)
+        _metrics_snapshot["main_nic"] = snapshot.get("main_nic")
+        _metrics_snapshot["main_nic_ip"] = snapshot.get("main_nic_ip")
 
         CpuUsage = _metrics_snapshot["cpu"]
         TEMP = _metrics_snapshot["temp"]
@@ -178,8 +180,8 @@ def _set_metrics(snapshot: Dict[str, Any]) -> None:
             "cpu": _metrics_snapshot["cpu"],
             "temp": _metrics_snapshot["temp"],
             "ifaces": list(_metrics_snapshot["ifaces"]),
-            "main_nic": snapshot.get("main_nic"),
-            "main_nic_ip": snapshot.get("main_nic_ip"),
+            "main_nic": _metrics_snapshot["main_nic"],
+            "main_nic_ip": _metrics_snapshot["main_nic_ip"],
         }
 
     _notify_listeners(published)
@@ -262,10 +264,10 @@ def _heartbeat_loop() -> None:
                     last_network_check = now
                 else:
                     # Reutilizar últimas ifaces conocidas de memoria si es posible
-                    # Idealmente queremos que el snapshot siempre tenga datos completos.
-                    # Tomemos de _metrics_snapshot protegido por lock
                     with _metrics_lock:
                         network_metrics["ifaces"] = _metrics_snapshot.get("ifaces", [])
+                        network_metrics["main_nic"] = _metrics_snapshot.get("main_nic")
+                        network_metrics["main_nic_ip"] = _metrics_snapshot.get("main_nic_ip")
                 
                 # Fusionar
                 snapshot = {**fast_metrics, **network_metrics}
@@ -381,10 +383,11 @@ def get_heartbeat_snapshot() -> Dict[str, Any]:
         }
 
 def force_update_interfaces() -> None:
-    """Fuerza una lectura inmediata de las interfaces y actualiza structure.json."""
+    """Fuerza una lectura inmediata de todas las métricas y actualiza el snapshot interno."""
     try:
-        # Solo llamar a la lógica de computación interna
-        _compute_network_metrics()
-        LOGGER.info("Interfaces de red actualizadas (Forzado)")
+        fast = _compute_fast_metrics()
+        net = _compute_network_metrics()
+        _set_metrics({**fast, **net})
+        LOGGER.info("Métricas de sistema y red actualizadas (Forzado)")
     except Exception as e:
-        LOGGER.error(f"Error actualizando interfaces: {e}")
+        LOGGER.error(f"Error en actualización forzada: {e}")
