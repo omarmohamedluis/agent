@@ -242,58 +242,54 @@ def _handle_command(cmd_data: Dict[str, Any]):
         if svc_id:
             try:
                 log_print("info", module_name, f">>> STARTING RITUAL: {action} (Thread: {threading.get_ident()})")
-                # 1. Total Silence
-                _reporting_paused = True
                 
-                # 2. Configure & Start
+                # 1. Notify server we are busy starting this ritual
+                send_immediate_heartbeat()
+
+                # 2. Total Silence
+                pause_reporting()
+                
+                # 3. Configure & Start
                 if config_name:
                     requests.post(f"http://localhost:8000/api/services/{svc_id}/config/select", json={"name": config_name}, timeout=10)
                 requests.post(f"http://localhost:8000/api/services/{svc_id}/start", timeout=30)
                 
-                # 3. Wait for settlement (OS Network, VLAN, Service Process)
+                # 4. Wait for settlement (OS Network, VLAN, Service Process)
                 time.sleep(3)
                 
-                # 4. Final Sync
-                if serial:
-                    from heartbeat import force_update_interfaces
-                    force_update_interfaces()
-                    full_payload = _build_client_payload()
-                    _post_json(f"/api/agents/{serial}/ready", full_payload)
-                
-                # 5. Resume
-                _reporting_paused = False
+                # 5. Final Sync & Resume
+                report_ready()
+                resume_reporting()
                 log_print("info", module_name, f"<<< RITUAL COMPLETED: {action}")
             except Exception as e:
                 log_print("error", module_name, f"Failed to start service via command: {e}")
-                _reporting_paused = False
+                resume_reporting()
     elif action == "stop_service":
         svc_id = params.get("service_id")
         serial = _build_client_payload().get("serial")
         if svc_id:
             try:
                 log_print("info", module_name, f">>> STARTING RITUAL: {action} (Thread: {threading.get_ident()})")
-                # 1. Total Silence
-                _reporting_paused = True
                 
-                # 2. Stop
+                # 1. Notify server we are busy stopping this
+                send_immediate_heartbeat()
+
+                # 2. Total Silence
+                pause_reporting()
+                
+                # 3. Stop
                 requests.post(f"http://localhost:8000/api/services/{svc_id}/stop", timeout=5)
                 
-                # 3. Wait for settlement
+                # 4. Wait for settlement
                 time.sleep(3)
                 
-                # 4. Final Sync (now in Standby)
-                if serial:
-                    from heartbeat import force_update_interfaces
-                    force_update_interfaces()
-                    full_payload = _build_client_payload()
-                    _post_json(f"/api/agents/{serial}/ready", full_payload)
-                
-                # 5. Resume
-                _reporting_paused = False
+                # 5. Final Sync & Resume
+                report_ready()
+                resume_reporting()
                 log_print("info", module_name, f"<<< RITUAL COMPLETED: {action}")
             except Exception as e:
                 log_print("error", module_name, f"Failed to stop service via command: {e}")
-                _reporting_paused = False
+                resume_reporting()
 
 # ---------------------------------------------------------------------------
 # Loops
@@ -392,3 +388,33 @@ def push_config_to_server(service_id: str, name: str, data: Dict[str, Any]) -> b
     log_print("info", module_name, f"Pushing config '{name}' for '{service_id}' to server...")
     res = _post_json(f"/api/configs/{service_id}?name={name}&serial={serial}", data)
     return res is not None and res.get("status") == "ok"
+
+def send_immediate_heartbeat() -> bool:
+    """Sends a heartbeat to the server right now, skipping the loop wait."""
+    payload = _build_client_payload()
+    res = _post_json("/api/heartbeat", payload)
+    if res:
+        global _last_contact_time
+        _last_contact_time = time.time()
+        # Note: we don't handle commands here to avoid recursion/loops during rituals
+        return True
+    return False
+
+def report_ready() -> bool:
+    """Forces a 'ready' sync with the server after a ritual."""
+    serial = _build_client_payload().get("serial")
+    if serial:
+        from heartbeat import force_update_interfaces
+        force_update_interfaces()
+        full_payload = _build_client_payload()
+        res = _post_json(f"/api/agents/{serial}/ready", full_payload)
+        return res is not None
+    return False
+
+def pause_reporting():
+    global _reporting_paused
+    _reporting_paused = True
+
+def resume_reporting():
+    global _reporting_paused
+    _reporting_paused = False

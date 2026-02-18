@@ -214,6 +214,15 @@ async def reload_service_config(svc_id: str):
     # Establecer Estado Ocupado para Feedback en UI
     STRUCTURE_MANAGER.set_busy(f"RELOAD_{svc_id}", f"Configurando {svc_id}...")
     
+    # Notify server we are doing things (Ritual Start)
+    try:
+        from net_com_handler import send_immediate_heartbeat, pause_reporting, resume_reporting, report_ready
+        # Send one heartbeat with 'is_busy' true before pausing
+        await asyncio.to_thread(send_immediate_heartbeat)
+        pause_reporting()
+    except Exception as e:
+        LOGGER.error(f"Error notifying ritual start: {e}")
+
     suppress_network_listener = True
     try:
         # 1. Detener Servicio (Bloqueante)
@@ -272,6 +281,14 @@ async def reload_service_config(svc_id: str):
     finally:
         suppress_network_listener = False
         STRUCTURE_MANAGER.clear_busy(f"RELOAD_{svc_id}")
+        
+        # Ritual End: Resume heartbeats and report ready
+        try:
+            from net_com_handler import resume_reporting, report_ready
+            resume_reporting()
+            await asyncio.to_thread(report_ready)
+        except Exception as e:
+            LOGGER.error(f"Error notifying ritual end: {e}")
 
 @app.post("/api/services/{svc_id}/message")
 async def service_message(svc_id: str, message: dict):

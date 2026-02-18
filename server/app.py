@@ -265,9 +265,12 @@ async def get_agents():
         last_seen = data.get("last_seen", 0)
         system_status = data.get("system_status", {})
         
-        if now - last_seen > 15:
+        is_busy = system_status and system_status.get("is_busy")
+        timeout = 60 if is_busy else 15
+        
+        if now - last_seen > timeout:
             data["status"] = "offline"
-        elif system_status and system_status.get("is_busy"):
+        elif is_busy:
             data["status"] = "loading"
             data["busy_message"] = system_status.get("busy_message", "Loading...")
         else:
