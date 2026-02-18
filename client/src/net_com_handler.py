@@ -224,12 +224,15 @@ def _handle_command(cmd_data: Dict[str, Any]):
     log_print("info", module_name, f"Command received: {action}")
     
     if action == "shutdown":
+        STRUCTURE_MANAGER.set_busy("REMOTE_SHUTDOWN", "SHUTTING DOWN (Remote)...")
         try:
+            # We call the local API which now handles the final heartbeat in graceful_cleanup
             requests.post("http://localhost:8000/api/system/cleanup", timeout=10)
         except:
             pass
         subprocess.run(["sudo", "shutdown", "now"])
     elif action == "reboot":
+        STRUCTURE_MANAGER.set_busy("REMOTE_REBOOT", "REBOOTING (Remote)...")
         try:
             requests.post("http://localhost:8000/api/system/cleanup", timeout=10)
         except:

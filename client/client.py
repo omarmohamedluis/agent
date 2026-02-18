@@ -149,7 +149,15 @@ async def api_status():
 @app.post("/api/services/{svc_id}/start")
 async def start_service(svc_id: str):
     global suppress_network_listener, last_network_sig
-    suppress_network_listener = True
+    # Notify server we are doing things (Ritual Start)
+    try:
+        from net_com_handler import send_immediate_heartbeat, pause_reporting, resume_reporting, report_ready
+        # Send one heartbeat with 'is_busy' true before pausing
+        await asyncio.to_thread(send_immediate_heartbeat)
+        pause_reporting()
+    except Exception as e:
+        LOGGER.error(f"Error notifying ritual start: {e}")
+
     try:
         # 1. Habilitar Servicio en Estructura (para que net_manager lo vea)
         STRUCTURE_MANAGER.update_service_state(svc_id, enabled=True)
@@ -176,11 +184,27 @@ async def start_service(svc_id: str):
         raise HTTPException(status_code=500, detail="Fallo al iniciar servicio")
     finally:
         suppress_network_listener = False
+        
+        # Ritual End: Resume heartbeats and report ready
+        try:
+            from net_com_handler import resume_reporting, report_ready
+            resume_reporting()
+            await asyncio.to_thread(report_ready)
+        except Exception as e:
+            LOGGER.error(f"Error notifying ritual end: {e}")
 
 @app.post("/api/services/{svc_id}/stop")
 async def stop_service(svc_id: str):
     global suppress_network_listener, last_network_sig
-    suppress_network_listener = True
+    # Notify server we are doing things (Ritual Start)
+    try:
+        from net_com_handler import send_immediate_heartbeat, pause_reporting, resume_reporting, report_ready
+        # Send one heartbeat with 'is_busy' true before pausing
+        await asyncio.to_thread(send_immediate_heartbeat)
+        pause_reporting()
+    except Exception as e:
+        LOGGER.error(f"Error notifying ritual start: {e}")
+
     try:
         # Verificar si está en modo configuración ANTES de detenerlo
         is_config_mode = svc_id in service_manager.config_mode_services
@@ -200,6 +224,14 @@ async def stop_service(svc_id: str):
         raise HTTPException(status_code=500, detail="Fallo al detener servicio")
     finally:
         suppress_network_listener = False
+        
+        # Ritual End: Resume heartbeats and report ready
+        try:
+            from net_com_handler import resume_reporting, report_ready
+            resume_reporting()
+            await asyncio.to_thread(report_ready)
+        except Exception as e:
+            LOGGER.error(f"Error notifying ritual end: {e}")
 
 @app.post("/api/services/{svc_id}/reload_config")
 async def reload_service_config(svc_id: str):
@@ -429,6 +461,14 @@ async def settings_page(request: Request):
 
 def graceful_cleanup():
     LOGGER.info("Realizando limpieza del sistema antes de apagado/reinicio...")
+    
+    # Notify server we are cleaning up (if not already notified)
+    try:
+        from net_com_handler import send_immediate_heartbeat
+        send_immediate_heartbeat()
+    except Exception as e:
+        LOGGER.debug(f"Could not send final heartbeat: {e}")
+
     try:
         service_manager.stop_all(persist_state=True)
     except Exception as e:
@@ -455,6 +495,12 @@ async def system_control(action: str):
     
     if action == "reboot":
         STRUCTURE_MANAGER.set_busy("SYSTEM_REBOOT", "REBOOTING...")
+        # Notify server we are doing things
+        try:
+            from net_com_handler import send_immediate_heartbeat
+            await asyncio.to_thread(send_immediate_heartbeat)
+        except:
+            pass
         # Dar tiempo a la UI para actualizarse
         await asyncio.sleep(3)
         await asyncio.to_thread(graceful_cleanup)
@@ -463,6 +509,12 @@ async def system_control(action: str):
         
     elif action == "shutdown":
         STRUCTURE_MANAGER.set_busy("SYSTEM_SHUTDOWN", "SHUTTING DOWN...")
+        # Notify server we are doing things
+        try:
+            from net_com_handler import send_immediate_heartbeat
+            await asyncio.to_thread(send_immediate_heartbeat)
+        except:
+            pass
         # Dar tiempo a la UI para actualizarse
         await asyncio.sleep(3)
         await asyncio.to_thread(graceful_cleanup)
