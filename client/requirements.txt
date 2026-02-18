@@ -7,4 +7,5 @@ netifaces
 mido
 python-rtmidi
 python-osc
+requests
 debugpy

@@ -13,20 +13,41 @@ class DisplayManager:
         self.driver: Optional[DisplayDriver] = None
 
     def init(self):
-        LOGGER.info(f"Initializing DisplayManager with driver: {self.driver_name}")
-        try:
-            if self.driver_name == "ssd1306":
-                self.driver = SSD1306Driver()
-                self.driver.init()
-            else:
-                LOGGER.warning(f"Unknown driver '{self.driver_name}', falling back to Dummy")
-                self.driver = DummyDriver()
-                self.driver.init()
-        except Exception as e:
-            LOGGER.error(f"Failed to initialize driver '{self.driver_name}': {e}")
-            LOGGER.info("Falling back to DummyDriver")
-            self.driver = DummyDriver()
-            self.driver.init()
+        LOGGER.info(f"Initializing DisplayManager (Target: {self.driver_name})")
+        
+        # Try Auto-detection if driver_name is default or explicit
+        potential_drivers = []
+        if self.driver_name == "ssd1306":
+            potential_drivers = ["ssd1306", "uctronics"]
+        elif self.driver_name == "uctronics":
+            potential_drivers = ["uctronics", "ssd1306"]
+        else:
+            potential_drivers = [self.driver_name]
+
+        for driver_id in potential_drivers:
+            try:
+                if driver_id == "ssd1306":
+                    from displays.ssd1306 import SSD1306Driver
+                    self.driver = SSD1306Driver()
+                    self.driver.init()
+                    self.driver_name = "ssd1306"
+                    LOGGER.info("SSD1306 detected and initialized")
+                    return
+                elif driver_id == "uctronics":
+                    from displays.uctronics import UCTRONICS_RM0004Driver
+                    self.driver = UCTRONICS_RM0004Driver()
+                    self.driver.init()
+                    self.driver_name = "uctronics"
+                    LOGGER.info("UCTRONICS RM0004 detected and initialized")
+                    return
+            except Exception as e:
+                LOGGER.debug(f"Driver {driver_id} not available: {e}")
+
+        # Fallback
+        LOGGER.warning("No physical display detected, falling back to Dummy")
+        self.driver = DummyDriver()
+        self.driver.init()
+        self.driver_name = "dummy"
 
     def display(self, image: Image.Image):
         if self.driver:

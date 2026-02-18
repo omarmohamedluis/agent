@@ -25,27 +25,38 @@ STRUCTURE_MANAGER = get_structure_manager()
 BASE_DIR = Path(__file__).resolve().parents[1]  # reaches client/
 ASSETS_PATH  = BASE_DIR / "web" / "utilities"
 
-OLED_W, OLED_H = 128, 64
+# -------- Hardware --------
+_display_manager = DisplayManager(driver_name="ssd1306")
+
+try:
+    _display_manager.init()
+except Exception as e:
+    # We log but continue, because DisplayManager handles fallbacks
+    # and we definitely need it initialized to get OLED_W/H.
+    pass
+
+OLED_W = _display_manager.width
+OLED_H = _display_manager.height
 HEADER_H = 16
 
 _standard_listener_registered = False
 
-# -------- Hardware --------
-
-_display_manager = DisplayManager(driver_name="ssd1306")
-try:
-    _display_manager.init()
-except Exception as e:
-    log_event("error", "ui", f"Fallo al iniciar display manager: {e}")
-
 module_name = "omiclient.ui"
 
-# -------- Carga de Assets --------
+# -------- Colores y Estilos (RGB) --------
+CLR_BLACK = (0, 0, 0)
+CLR_WHITE = (255, 255, 255)
+CLR_YELLOW = (255, 255, 0)
+CLR_GREEN = (0, 255, 0)
+CLR_BLUE = (0, 191, 255)  # Celeste/Azul claro para mejor legibilidad
+CLR_RED = (255, 0, 0)
 
+# -------- Carga de Assets --------
 try:
-    _FONT = ImageFont.truetype(str(ASSETS_PATH / "PixelOperator.ttf"), 14)
-    _ICON_FONT = ImageFont.truetype(str(ASSETS_PATH / "lineawesome-webfont.ttf"), 16)
-    _ICON  = Image.open(ASSETS_PATH / "omarpi.png")
+    # Aumentamos tamaño de fuente para 160x80 (de 14 a 18)
+    _FONT = ImageFont.truetype(str(ASSETS_PATH / "PixelOperator.ttf"), 18)
+    _ICON_FONT = ImageFont.truetype(str(ASSETS_PATH / "lineawesome-webfont.ttf"), 20)
+    _ICON = Image.open(ASSETS_PATH / "omarpi.png")
 except Exception as e:
     log_event("error", module_name, f"Fallo al cargar assets: {e}")
     _FONT = ImageFont.load_default()
@@ -56,13 +67,16 @@ except Exception as e:
 # -------- Lienzos (Canvases) --------
 def _base_canvas() -> Image.Image:
     """Fondo negro con icono en la parte inferior (para Carga/Error/Apagado)."""
-    img = Image.new("L", (OLED_W, OLED_H), 0)
+    img = Image.new("RGB", (OLED_W, OLED_H), CLR_BLACK)
     if _ICON:
         max_w, max_h = OLED_W, OLED_H - HEADER_H
         w, h = _ICON.size
         scale = min(max_w / w, max_h / h)
         nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
         icon = _ICON.resize((nw, nh), Image.LANCZOS)
+        # Convertimos icono a RGB si es necesario para pegarlo bien
+        if icon.mode != "RGB":
+            icon = icon.convert("RGB")
         x = (OLED_W - nw) // 2
         y = OLED_H - nh
         img.paste(icon, (x, y))
@@ -70,7 +84,7 @@ def _base_canvas() -> Image.Image:
 
 def _new_frame() -> Image.Image:
     """Frame completamente negro (sin icono)."""
-    return Image.new("L", (OLED_W, OLED_H), 0)
+    return Image.new("RGB", (OLED_W, OLED_H), CLR_BLACK)
 
 # -------- Cabeceras (Headers) --------
 def _draw_header_with_progress(img: Image.Image, percent: int, label: str):
@@ -80,57 +94,50 @@ def _draw_header_with_progress(img: Image.Image, percent: int, label: str):
     tw, th = draw.textbbox((0, 0), text, font=_FONT)[2:]
     tx = max(2, (OLED_W - tw) // 2)
     ty = max(0, (HEADER_H - th) // 2)
-    draw.text((tx, ty), text, font=_FONT, fill=255)
+    
+    # Barra de progreso en Amarillo (con texto en Negro encima)
     bar_w = int((percent / 100.0) * OLED_W)
     if bar_w > 0:
-        draw.rectangle([0, 0, bar_w - 1, HEADER_H - 1], fill=255)
-        text_layer = Image.new("L", (OLED_W, HEADER_H), 0)
-        ImageDraw.Draw(text_layer).text((tx, ty), text, font=_FONT, fill=255)
-        bar_mask = Image.new("L", (OLED_W, HEADER_H), 0)
-        ImageDraw.Draw(bar_mask).rectangle([0, 0, bar_w - 1, HEADER_H - 1], fill=255)
-        masked = Image.new("L", (OLED_W, HEADER_H), 0)
-        masked.paste(text_layer, (0, 0), mask=bar_mask)
-        img.paste(0, (0, 0, OLED_W, HEADER_H), mask=masked)
+        draw.rectangle([0, 0, bar_w - 1, HEADER_H - 1], fill=CLR_YELLOW)
+        
+    draw.text((tx, ty), text, font=_FONT, fill=CLR_WHITE if bar_w == 0 else CLR_BLACK)
 
 def _draw_header_error(img: Image.Image, label: str):
     draw = ImageDraw.Draw(img)
-    draw.rectangle([0, 0, OLED_W - 1, HEADER_H - 1], fill=255)
+    draw.rectangle([0, 0, OLED_W - 1, HEADER_H - 1], fill=CLR_RED)
     text = label or "ERROR"
     tw, th = draw.textbbox((0, 0), text, font=_FONT)[2:]
     tx = max(2, (OLED_W - tw) // 2)
     ty = max(0, (HEADER_H - th) // 2)
-    draw.text((tx, ty), text, font=_FONT, fill=0)
+    draw.text((tx, ty), text, font=_FONT, fill=CLR_WHITE)
 
-def _draw_wifi_icon(draw: ImageDraw.ImageDraw, ok: bool, inverted: bool):
-
-    glyph = "\uf1eb"  # usar normal y tachar si no ok
-    fill = 0 if inverted else 255
+def _draw_wifi_icon(draw: ImageDraw.ImageDraw, ok: bool, color: tuple):
+    glyph = "\uf1eb"  # icono wifi
     gw, gh = draw.textbbox((0, 0), glyph, font=_ICON_FONT)[2:]
     x = OLED_W - gw - 2
     y = max(0, (HEADER_H - gh) // 2)
-    draw.text((x, y), glyph, font=_ICON_FONT, fill=fill)
+    draw.text((x, y), glyph, font=_ICON_FONT, fill=color)
     if not ok:
-        # Línea diagonal cruzando la caja del glifo
         x0, y0 = x, y
         x1, y1 = x + gw, y + gh
-        draw.line([(x0, y0), (x1, y1)], fill=fill, width=2)
+        draw.line([(x0, y0), (x1, y1)], fill=CLR_RED, width=2)
 
 def _draw_header_text_left_center_right_inverted(img: Image.Image, left:str, center:str, right_wifi_ok: bool):
-    """Cabecera blanca, texto negro."""
+    """Cabecera Amarilla, texto Negro."""
     draw = ImageDraw.Draw(img)
-    draw.rectangle([0, 0, OLED_W - 1, HEADER_H - 1], fill=255)
+    draw.rectangle([0, 0, OLED_W - 1, HEADER_H - 1], fill=CLR_YELLOW)
     # IZQUIERDA
     l_text = left or ""
-    l_tw, l_th = draw.textbbox((0,0), l_text, font=_FONT)[2:]
-    draw.text((2, max(0, (HEADER_H - l_th)//2)), l_text, font=_FONT, fill=0)
+    l_th = draw.textbbox((0,0), l_text, font=_FONT)[3] - draw.textbbox((0,0), l_text, font=_FONT)[1]
+    draw.text((2, max(0, (HEADER_H - l_th)//2)), l_text, font=_FONT, fill=CLR_BLACK)
     # DERECHA (icono negro)
-    _draw_wifi_icon(draw, ok=right_wifi_ok, inverted=True)
+    _draw_wifi_icon(draw, ok=right_wifi_ok, color=CLR_BLACK)
     # CENTRO
     c_text = center or ""
     c_tw, c_th = draw.textbbox((0,0), c_text, font=_FONT)[2:]
     cx = max(2, (OLED_W - c_tw)//2)
     cy = max(0, (HEADER_H - c_th)//2)
-    draw.text((cx, cy), c_text, font=_FONT, fill=0)
+    draw.text((cx, cy), c_text, font=_FONT, fill=CLR_BLACK)
 
 # -------- Utilidades --------
 
@@ -196,26 +203,21 @@ def show_error_ui(label: str = "ERROR", times: int = 3, interval: float = 0.25) 
 
 
 def update_standard_ui(snapshot: Dict[str, Any]) -> None:
-    """Cabecera blanco/negro y pie con CPU/TEMP y RED (WIFI/ETH ip/cidr)."""
+    """Cabecera Amarilla y pie con CPU/TEMP (Verde/Azul/Rojo)."""
     
     # Verificar Estado Ocupado primero
     structure = STRUCTURE_MANAGER.get_structure()
     sys_status = structure.get("system_status", {})
     if sys_status.get("is_busy"):
         msg = sys_status.get("busy_message") or "PROCESANDO..."
-        # Mostrar UI de carga en lugar del frame estándar
-        # Usamos una versión simplificada aquí para evitar recursión si show_loading_ui llama a stop_standard_ui
-        # De hecho show_loading_ui llama a stop_standard_ui que desregistra este listener!
-        # Así que no podemos llamar a show_loading_ui directamente si queremos seguir escuchando.
-        # Solo dibujamos el frame de carga aquí.
         img = _base_canvas()
-        _draw_header_with_progress(img, 50, msg) # 50% como "ocupado" genérico
+        _draw_header_with_progress(img, 50, msg)
         _display(img)
         return
 
     img = _new_frame()
 
-    # Cabecera Invertida: fondo blanco, texto negro
+    # Cabecera Amarilla
     index = structure.get("identity", {}).get("index", None)
     index_label = f"#{index if index is not None else '--'}"
     app_label = (_get_current_app_name() or "").strip().upper() or "--"
@@ -233,13 +235,7 @@ def update_standard_ui(snapshot: Dict[str, Any]) -> None:
     temp = snapshot.get("temp")
     ifaces = snapshot.get("ifaces") or []
 
-    # Elegir interfaz primaria con prioridad:
-    # 1. Ethernet Física (eth0)
-    # 2. WiFi (wlan0)
-    # 3. VLAN (eth0.X)
-    # 4. Otros
     primary = None
-    
     def _get_prio(iface):
         name = iface.get("name", "").lower()
         if _is_eth_iface(name) and "." not in name: return 0
@@ -253,29 +249,33 @@ def update_standard_ui(snapshot: Dict[str, Any]) -> None:
 
     if primary:
         iface_name = primary.get("name") or ""
-        if _is_wifi_iface(iface_name):
-            kind = "WIFI"
-        elif _is_eth_iface(iface_name):
-            if "." in iface_name:
-                kind = "VLAN"
-            else:
-                kind = "ETH"
-        else:
-            kind = "NET"
+        kind = "WIFI" if _is_wifi_iface(iface_name) else ("VLAN" if "." in iface_name else "ETH")
         ip_cidr = primary.get("cidr") or primary.get("ip") or "-"
-        ip_text = f"{kind} {ip_cidr if ip_cidr else '-'}"
+        ip_label = f"{kind}: "
+        ip_value = f"{ip_cidr}"
     else:
-        ip_text = "NET -"
+        ip_label = "NET: "
+        ip_value = "-"
 
-    y = HEADER_H + 0
-    draw.text((2, y),      f"CPU: {('--' if cpu  is None else f'{cpu:.0f}%')}", font=_FONT, fill=255)
-    draw.text((2, y + 12), f"TEMP:{('--' if temp is None else f'{temp:.0f}C')}", font=_FONT, fill=255)
+    # Dibujado con Colores
+    line_h = 20 # Mayor espaciado para fuente 18
+    y = HEADER_H + 2
 
-    tw, _ = draw.textbbox((0, 0), ip_text, font=_FONT)[2:]
-    while tw > (OLED_W - 4) and len(ip_text) > 4:
-        ip_text = ip_text[:-2] + "…"
-        tw, _ = draw.textbbox((0, 0), ip_text, font=_FONT)[2:]
-    draw.text((2, y + 24), ip_text, font=_FONT, fill=255)
+    # CPU
+    cpu_val = "--" if cpu is None else f"{cpu:.0f}%"
+    cpu_color = CLR_RED if (cpu is not None and cpu > 70) else CLR_BLUE
+    draw.text((2, y), "CPU:", font=_FONT, fill=CLR_GREEN)
+    draw.text((50, y), cpu_val, font=_FONT, fill=cpu_color)
+
+    # TEMP
+    temp_val = "--" if temp is None else f"{temp:.0f}C"
+    temp_color = CLR_RED if (temp is not None and temp > 65) else CLR_BLUE
+    draw.text((2, y + line_h), "TEMP:", font=_FONT, fill=CLR_GREEN)
+    draw.text((50, y + line_h), temp_val, font=_FONT, fill=temp_color)
+
+    # NET
+    draw.text((2, y + line_h * 2), ip_label, font=_FONT, fill=CLR_GREEN)
+    draw.text((50, y + line_h * 2), ip_value, font=_FONT, fill=CLR_BLUE)
 
     _display(img)
 

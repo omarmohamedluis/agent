@@ -1,5 +1,6 @@
 #!/bin/bash
-cd /home/omar/omi/agent
-exec sudo -E /home/omar/omi/agent/.venv/bin/python "$@"
-EOF
-chmod +x scripts/sudo_python.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+cd "$PROJECT_ROOT"
+exec sudo -E "$PROJECT_ROOT/.venv/bin/python" "$@"

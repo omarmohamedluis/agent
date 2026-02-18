@@ -61,6 +61,21 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r client/requirements.txt
 
+# 5.5. Configurar I2C para LCD
+echo "📟 Configurando I2C para pantalla LCD..."
+CONFIG_FILE="/boot/firmware/config.txt"
+if [ ! -f "$CONFIG_FILE" ]; then CONFIG_FILE="/boot/config.txt"; fi
+
+if grep -q "^#dtparam=i2c_arm=on" "$CONFIG_FILE"; then
+    sudo sed -i 's/^#dtparam=i2c_arm=on/dtparam=i2c_arm=on/' "$CONFIG_FILE"
+elif ! grep -q "^dtparam=i2c_arm=on" "$CONFIG_FILE"; then
+    echo "dtparam=i2c_arm=on" | sudo tee -a "$CONFIG_FILE"
+fi
+
+if ! grep -q "dtparam=i2c_arm_baudrate=400000" "$CONFIG_FILE"; then
+    sudo sed -i "/dtparam=i2c_arm=on/a dtparam=i2c_arm_baudrate=400000" "$CONFIG_FILE"
+fi
+
 # 6. Configurar Node.js v24 y compilar Satellite
 echo "🤖 Configurando Node.js y compilando Satellite..."
 if ! command -v node &> /dev/null || [[ $(node -v) != v24* ]]; then
@@ -77,8 +92,11 @@ cd ../../../..
 
 echo "==========================================="
 echo "✅ Instalación completada con éxito."
-echo "Para iniciar el cliente:"
-echo "cd $INSTALL_DIR"
-echo "source .venv/bin/activate"
 echo "sudo python3 client/client.py"
 echo "==========================================="
+
+read -p "🔄 Instalación completada. ¿Deseas reiniciar ahora para aplicar cambios de hardware? (y/n): " reboot_now
+if [[ $reboot_now == [yY]* ]]; then
+    echo "Reiniciando..."
+    sudo reboot
+fi

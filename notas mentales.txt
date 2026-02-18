@@ -3,7 +3,6 @@ el binding del servicio no hace falta (esta relacionado con las VLAN)
 
 mejorar el log en la pagina 
 
-
 active_confit.txt en el ignore que lo meti yo a mano, por si lo borra
 
 revisar todo lo de satellite.
