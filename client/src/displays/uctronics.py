@@ -125,3 +125,179 @@ class UCTRONICS_RM0004Driver(DisplayDriver):
         if self._bus:
             self._bus.close()
             self._bus = None
+
+    # --- High Level Rendering ---
+
+    def _get_font(self, size: int):
+        from PIL import ImageFont
+        try:
+            from pathlib import Path
+            fpath = Path(__file__).resolve().parents[2] / "web" / "utilities" / "PixelOperator.ttf"
+            return ImageFont.truetype(str(fpath), size)
+        except Exception:
+            return ImageFont.load_default()
+
+    def _get_icon_font(self, size: int):
+        from PIL import ImageFont
+        try:
+            from pathlib import Path
+            fpath = Path(__file__).resolve().parents[2] / "web" / "utilities" / "lineawesome-webfont.ttf"
+            return ImageFont.truetype(str(fpath), size)
+        except Exception:
+            return ImageFont.load_default()
+
+    def _get_logo(self):
+        from PIL import Image
+        try:
+            from pathlib import Path
+            fpath = Path(__file__).resolve().parents[2] / "web" / "utilities" / "omarpi.png"
+            return Image.open(str(fpath))
+        except Exception:
+            return None
+
+    def render_loading(self, percent: int, label: str):
+        from PIL import ImageDraw, Image
+        img = Image.new("RGB", (self._width, self._height), (0, 0, 0))
+        
+        # Draw Logo at bottom
+        logo = self._get_logo()
+        if logo:
+            max_h = self._height - 20
+            w, h = logo.size
+            scale = min(self._width / w, max_h / h)
+            nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+            logo_res = logo.resize((nw, nh), Image.LANCZOS).convert("RGB")
+            img.paste(logo_res, ((self._width - nw) // 2, self._height - nh))
+
+        draw = ImageDraw.Draw(img)
+        CLR_YELLOW = (255, 255, 0)
+        CLR_BLACK = (0, 0, 0)
+        CLR_WHITE = (255, 255, 255)
+        
+        font = self._get_font(18)
+        txt = label or f"LOADING {percent}%"
+        
+        tw, th = draw.textbbox((0, 0), txt, font=font)[2:]
+        tx, ty = (self._width - tw) // 2, (20 - th) // 2
+        
+        # Header with progress bar
+        bar_w = int((percent / 100.0) * self._width)
+        if bar_w > 0:
+            draw.rectangle([0, 0, bar_w, 19], fill=CLR_YELLOW)
+        
+        # Draw text (White on black base, black on yellow bar)
+        draw.text((tx, ty), txt, font=font, fill=CLR_WHITE)
+        
+        if bar_w > 0:
+            # Masking for dual color text
+            bar_mask = Image.new("L", (self._width, 20), 0)
+            ImageDraw.Draw(bar_mask).rectangle([0, 0, bar_w, 19], fill=255)
+            
+            temp_header = Image.new("RGB", (self._width, 20), CLR_YELLOW)
+            ImageDraw.Draw(temp_header).text((tx, ty), txt, font=font, fill=CLR_BLACK)
+            img.paste(temp_header, (0, 0), mask=bar_mask)
+
+        self.display(img)
+
+    def render_message(self, text: str, is_error: bool = False):
+        from PIL import ImageDraw, Image
+        img = Image.new("RGB", (self._width, self._height), (0, 0, 0))
+        
+        # Draw Logo at bottom
+        logo = self._get_logo()
+        if logo:
+            max_h = self._height - 20
+            w, h = logo.size
+            scale = min(self._width / w, max_h / h)
+            nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+            logo_res = logo.resize((nw, nh), Image.LANCZOS).convert("RGB")
+            img.paste(logo_res, ((self._width - nw) // 2, self._height - nh))
+
+        draw = ImageDraw.Draw(img)
+        CLR_RED = (255, 0, 0)
+        CLR_WHITE = (255, 255, 255)
+        CLR_BLACK = (0, 0, 0)
+        
+        header_clr = CLR_RED if is_error else CLR_WHITE
+        draw.rectangle([0, 0, self._width, 19], fill=header_clr)
+        
+        font_h = self._get_font(18)
+        header_txt = "SYSTEM MSG" if not is_error else "ERROR"
+        tw, th = draw.textbbox((0, 0), header_txt, font=font_h)[2:]
+        draw.text(((self._width - tw)//2, (20 - th)//2), header_txt, font=font_h, fill=CLR_BLACK)
+        
+        self.display(img)
+
+    def render_standard(self, snapshot: dict, structure: dict, server_online: bool):
+        from PIL import ImageDraw, Image
+        img = Image.new("RGB", (self._width, self._height), (0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        
+        CLR_YELLOW = (255, 255, 0)
+        CLR_BLACK = (0, 0, 0)
+        CLR_WHITE = (255, 255, 255)
+        CLR_GREEN = (0, 255, 0)
+        CLR_BLUE = (0, 191, 255)
+        CLR_RED = (255, 0, 0)
+
+        # 1. Header (Yellow)
+        draw.rectangle([0, 0, self._width, 19], fill=CLR_YELLOW)
+        f_h = self._get_font(18)
+        
+        idx = structure.get("identity", {}).get("index", "--")
+        draw.text((4, 0), f"#{idx}", font=f_h, fill=CLR_BLACK)
+        
+        services = structure.get("services", [])
+        active_name = "STANDBY"
+        for s in services:
+            if s.get("running"):
+                active_name = s.get("name", "ACTIVE")
+                break
+        
+        svc_txt = active_name.upper()[:12]
+        sw, sh = draw.textbbox((0, 0), svc_txt, font=f_h)[2:]
+        draw.text(((self._width - sw)//2, (20 - sh)//2), svc_txt, font=f_h, fill=CLR_BLACK)
+        
+        icon_f = self._get_icon_font(20)
+        glyph = "\uf1eb" 
+        iw, ih = draw.textbbox((0,0), glyph, font=icon_f)[2:]
+        ix = self._width - iw - 4
+        draw.text((ix, (20 - ih)//2), glyph, font=icon_f, fill=CLR_BLACK)
+        if not server_online:
+            draw.line([(ix, 2), (ix+iw, 18)], fill=CLR_RED, width=2)
+
+        # 2. Body
+        f_b = self._get_font(18)
+        cpu = snapshot.get("cpu", 0)
+        temp = snapshot.get("temp", 0)
+        
+        y = 22
+        line_h = 20
+        # CPU
+        draw.text((4, y), "CPU:", font=f_b, fill=CLR_GREEN)
+        clr_cpu = CLR_RED if cpu > 70 else CLR_BLUE
+        draw.text((50, y), f"{cpu:.0f}%", font=f_b, fill=clr_cpu)
+        
+        # TMP
+        draw.text((4, y + line_h), "TMP:", font=f_b, fill=CLR_GREEN)
+        clr_tmp = CLR_RED if temp > 65 else CLR_BLUE
+        draw.text((50, y + line_h), f"{temp:.0f}C", font=f_b, fill=clr_tmp)
+        
+        # NET
+        ifaces = snapshot.get("ifaces", [])
+        primary = None
+        for iface in ifaces:
+            if not iface.get("ip", "").startswith("127"):
+                primary = iface
+                break
+        
+        if primary:
+            ip = primary.get("cidr") or primary.get("ip") or "-"
+            name = primary.get("name", "").upper()[:4]
+            net_txt = f"{name}: {ip}"
+        else:
+            net_txt = "NET: -"
+
+        draw.text((4, y + line_h * 2), net_txt, font=f_b, fill=CLR_BLUE)
+        
+        self.display(img)

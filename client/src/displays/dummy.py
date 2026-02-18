@@ -26,3 +26,12 @@ class DummyDriver(DisplayDriver):
 
     def cleanup(self):
         LOGGER.info("DummyDisplay cleanup")
+
+    def render_loading(self, percent: int, label: str):
+        pass
+
+    def render_message(self, text: str, is_error: bool = False):
+        pass
+
+    def render_standard(self, snapshot: dict, structure: dict, server_online: bool):
+        pass

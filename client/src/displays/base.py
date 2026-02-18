@@ -31,3 +31,18 @@ class DisplayDriver(ABC):
     def cleanup(self):
         """Release resources."""
         pass
+
+    @abstractmethod
+    def render_loading(self, percent: int, label: str):
+        """Render and display a loading screen."""
+        pass
+
+    @abstractmethod
+    def render_message(self, text: str, is_error: bool = False):
+        """Render and display a message screen."""
+        pass
+
+    @abstractmethod
+    def render_standard(self, snapshot: dict, structure: dict, server_online: bool):
+        """Render and display the standard dashboard."""
+        pass
