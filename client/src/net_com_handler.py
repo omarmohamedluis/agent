@@ -5,6 +5,7 @@ Handles discovery via UDP broadcast and subsequent API calls.
 """
 import json
 import socket
+import subprocess
 import threading
 import time
 import requests
@@ -223,20 +224,16 @@ def _handle_command(cmd_data: Dict[str, Any]):
     log_print("info", module_name, f"Command received: {action}")
     
     if action == "shutdown":
-        import requests
         try:
             requests.post("http://localhost:8000/api/system/cleanup", timeout=10)
         except:
             pass
-        import subprocess
         subprocess.run(["sudo", "shutdown", "now"])
     elif action == "reboot":
-        import requests
         try:
             requests.post("http://localhost:8000/api/system/cleanup", timeout=10)
         except:
             pass
-        import subprocess
         subprocess.run(["sudo", "reboot"])
     elif action == "start_service":
         svc_id = params.get("service_id")
