@@ -16,6 +16,7 @@ from typing import Dict, Any, Optional
 
 from logger import get_logger
 from structure_manager import get_structure_manager
+from os_utils import fix_permissions
 
 LOGGER = get_logger("omiclient.service_manager")
 STRUCTURE_MANAGER = get_structure_manager()
@@ -172,6 +173,7 @@ class ServiceManager:
             # Ensure directory exists
             try:
                 log_path.parent.mkdir(parents=True, exist_ok=True)
+                fix_permissions(log_path.parent)
             except OSError as e:
                 LOGGER.error(f"Could not create log directory for {svc_id}: {e}")
                 # Continue without log or fail? Fail to not lose output

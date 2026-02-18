@@ -1,6 +1,6 @@
 fastapi
 python-multipart
-uvicorn
+uvicorn[standard]
 jinja2
 luma.oled
 psutil

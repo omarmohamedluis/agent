@@ -7,6 +7,7 @@ import logging
 import sys
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
+from os_utils import fix_permissions
 
 # Configuración de Rutas
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -38,6 +39,9 @@ def configure_logging():
     file_handler = logging.FileHandler(current_log_file, encoding='utf-8')
     file_handler.setFormatter(logging.Formatter(FORMAT, datefmt=DATE_FORMAT[:-3]))
     root_logger.addHandler(file_handler)
+    
+    # Reparar permisos del nuevo log
+    fix_permissions(current_log_file)
     
     # Console Handler
     console_handler = logging.StreamHandler(sys.stdout)
