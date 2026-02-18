@@ -452,6 +452,7 @@ async def read_log(category: str, filename: str, lines: int = 200):
 @app.get("/api/repo/branches")
 async def list_repo_branches():
     """List available git branches in the client repository."""
+    LOGGER.info("API: Listing repository branches...")
     try:
         import subprocess
         # Get local and remote branches
@@ -511,6 +512,60 @@ async def api_system_cleanup():
     await asyncio.to_thread(graceful_cleanup)
     return {"status": "cleaned"}
 
+    raise HTTPException(status_code=400, detail="Acción inválida")
+
+@app.post("/api/system/update")
+async def system_update(payload: dict):
+    branch = payload.get("branch", "main")
+    LOGGER.info(f"API: System update requested for branch: {branch}")
+    STRUCTURE_MANAGER.set_busy("SYSTEM_UPDATE", f"UPDATING ({branch})...")
+    
+    # Notify server we are doing things
+    try:
+        from net_com_handler import send_immediate_heartbeat
+        await asyncio.to_thread(send_immediate_heartbeat)
+    except:
+        pass
+        
+    # Dar tiempo a la UI para actualizarse
+    await asyncio.sleep(3)
+    
+    # 1. Parada limpia
+    await asyncio.to_thread(graceful_cleanup)
+    
+    # 2. Guardar info de branch si no existe (por si acaso no vino de net_com_handler)
+    update_config = Path("/tmp/omi_update.json")
+    if not update_config.exists():
+        with update_config.open("w") as f:
+            import json
+            json.dump({"branch": branch}, f)
+            
+    # 3. Lanzar script de update totalmente independiente
+    # Usamos setsid para que sea líder de su propia sesión de procesos
+    update_script = BASE_DIR.parent / "scripts" / "update.sh"
+    
+    LOGGER.info(f"EJECUTANDO SCRIPT DE ACTUALIZACIÓN: {update_script}")
+    
+    # Abrir logs para el script de update
+    log_dir = BASE_DIR / "logs" / "components"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    update_log = open(log_dir / "update_script.log", "a")
+    
+    subprocess.Popen(
+        [str(update_script)],
+        stdout=update_log,
+        stderr=update_log,
+        start_new_session=True,
+        cwd=str(BASE_DIR.parent)
+    )
+    
+    # 4. Salir del programa actual
+    # Damos un pequeñísimo margen para que el proceso hijo se desprenda
+    # Pero el sys.exit debe ser pronto.
+    threading.Timer(1.0, lambda: sys.exit(0)).start()
+    
+    return {"status": "updating", "branch": branch}
+
 @app.post("/api/system/{action}")
 async def system_control(action: str):
     import subprocess
@@ -546,56 +601,6 @@ async def system_control(action: str):
         # Usually triggered via /api/system/update but included for consistency
         return {"status": "update_started"}
     raise HTTPException(status_code=400, detail="Acción inválida")
-
-@app.post("/api/system/update")
-async def system_update(payload: dict):
-    branch = payload.get("branch", "main")
-    STRUCTURE_MANAGER.set_busy("SYSTEM_UPDATE", f"UPDATING ({branch})...")
-    
-    # Notify server we are doing things
-    try:
-        from net_com_handler import send_immediate_heartbeat
-        await asyncio.to_thread(send_immediate_heartbeat)
-    except:
-        pass
-        
-    # Dar tiempo a la UI para actualizarse
-    await asyncio.sleep(3)
-    
-    # 1. Parada limpia
-    await asyncio.to_thread(graceful_cleanup)
-    
-    # 2. Guardar info de branch si no existe (por si acaso no vino de net_com_handler)
-    update_config = Path("/tmp/omi_update.json")
-    if not update_config.exists():
-        with update_config.open("w") as f:
-            json.dump({"branch": branch}, f)
-            
-    # 3. Lanzar script de update totalmente independiente
-    # Usamos setsid para que sea líder de su propia sesión de procesos
-    update_script = BASE_DIR.parent / "scripts" / "update.sh"
-    
-    LOGGER.info(f"EJECUTANDO SCRIPT DE ACTUALIZACIÓN: {update_script}")
-    
-    # Abrir logs para el script de update
-    log_dir = BASE_DIR / "logs" / "components"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    update_log = open(log_dir / "update_script.log", "a")
-    
-    subprocess.Popen(
-        [str(update_script)],
-        stdout=update_log,
-        stderr=update_log,
-        start_new_session=True,
-        cwd=str(BASE_DIR.parent)
-    )
-    
-    # 4. Salir del programa actual
-    # Damos un pequeñísimo margen para que el proceso hijo se desprenda
-    # Pero el sys.exit debe ser pronto.
-    threading.Timer(1.0, lambda: sys.exit(0)).start()
-    
-    return {"status": "updating", "branch": branch}
 
 @app.post("/api/network/config")
 async def network_config(config: dict):

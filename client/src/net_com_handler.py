@@ -317,7 +317,7 @@ def _handle_command(cmd_data: Dict[str, Any]):
             # We call the local API system/cleanup (which is in client.py) 
             # but we need to run the update.sh script AFTER cleanup.
             # Best way: add a new endpoint in client.py that handles this sequence.
-            requests.post(f"http://localhost:8000/api/system/update", json={"branch": branch}, timeout=5)
+            requests.post(f"http://localhost:8000/api/system/update", json={"branch": branch}, timeout=30)
         except Exception as e:
             log_print("error", module_name, f"Failed to trigger system update sequence: {e}")
 
