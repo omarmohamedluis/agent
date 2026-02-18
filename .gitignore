@@ -45,7 +45,7 @@ client/servicios/MIDI/configs/*.json
 
 
 # Satellite Service
-client/servicios/satellite/satellite_code/
+# client/servicios/satellite/satellite_code/
 client/servicios/satellite/bin/
 client/servicios/satellite/fnm_data/
 client/servicios/satellite/runtime_config.json

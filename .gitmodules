@@ -1,0 +1,3 @@
+[submodule "client/servicios/satellite/satellite_code"]
+	path = client/servicios/satellite/satellite_code
+	url = https://github.com/bitfocus/companion-satellite.git

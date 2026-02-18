@@ -122,9 +122,21 @@ def setup_fnm():
             log_wrapper(f"Error instalando FNM: {e}", "ERROR")
             raise Exception(f"No se pudo instalar FNM: {e}")
             
-    # Ensure repo is cloned
+    # Ensure repo is cloned/initialized
     if not (CODE_DIR / "package.json").exists():
-        log_wrapper("Satellite no encontrado o incompleto. Clonando repositorio...")
+        log_wrapper("Satellite no encontrado o incompleto. Intentando inicializar submódulo...")
+        try:
+            # Intentar inicializar si es un submódulo
+            subprocess.run(
+                ["git", "submodule", "update", "--init", "--recursive", str(CODE_DIR)],
+                cwd=SERVICE_DIR.parent.parent.parent, # Root del repositorio (agent/)
+                check=True, capture_output=True
+            )
+        except Exception as e:
+            log_wrapper(f"Fallo al inicializar submódulo: {e}. Cayendo a clonado manual...", "WARNING")
+
+    if not (CODE_DIR / "package.json").exists():
+        log_wrapper("Aún no se encuentra Satellite. Clonando repositorio manualmente...")
         if CODE_DIR.exists():
             log_wrapper("Limpiando directorio incompleto...")
             shutil.rmtree(CODE_DIR)
