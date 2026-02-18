@@ -31,7 +31,19 @@
             "python": "${workspaceFolder}/scripts/sudo_python.sh",
             "justMyCode": false,
             "preLaunchTask": "wait-for-server"
-        }
+        },
+        {
+            "name": "Windows Server",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "server.app",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "windows": {
+                "python": "python.exe"
+            },
+            "justMyCode": false
+        },
     ],
     "compounds": [
         {
