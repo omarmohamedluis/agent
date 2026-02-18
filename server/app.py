@@ -111,11 +111,34 @@ class HeartbeatPayload(BaseModel):
     system_status: Optional[Dict[str, Any]] = None
 
 class CommandPayload(BaseModel):
-    action: str # shutdown, reboot, wol, start_service
+    action: str # shutdown, reboot, wol, start_service, update
     service_id: Optional[str] = None
     config_name: Optional[str] = None
+    branch: Optional[str] = None
 
 # --- API Endpoints ---
+
+@app.get("/api/repo/branches")
+async def list_repo_branches():
+    """List available git branches in the repository."""
+    try:
+        import subprocess
+        # Get local and remote branches
+        result = subprocess.run(
+            ["git", "branch", "-a", "--format=%(refname:short)"],
+            capture_output=True, text=True, check=True, cwd=str(BASE_DIR.parent)
+        )
+        branches = set()
+        for line in result.stdout.splitlines():
+            branch = line.strip()
+            if branch.startswith("origin/"):
+                branch = branch[7:]
+            if branch and "HEAD" not in branch:
+                branches.add(branch)
+        return {"branches": sorted(list(branches))}
+    except Exception as e:
+        LOGGER.error(f"Error listing branches: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list branches")
 
 @app.post("/api/handshake")
 async def handshake(payload: HandshakePayload):

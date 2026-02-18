@@ -289,6 +289,7 @@
                     ${agent.status === 'offline' ? `<button class="btn btn-sm btn-danger" onclick="deleteAgent('${serial}')">Eliminar</button>` : ''}
                     <button class="btn btn-sm btn-warning" onclick="sendPower('${serial}', 'reboot')">R</button>
                     <button class="btn btn-sm btn-danger" onclick="sendPower('${serial}', 'shutdown')">O</button>
+                    <button class="btn btn-sm btn-primary" onclick="updateAgent('${serial}')">Actualizar</button>
                 </td>
             </tr>
         `).join('');
@@ -325,6 +326,58 @@
 
         await apiFetch(`/api/agents/${serial}`, { method: 'DELETE' });
         loadAgents();
+    };
+
+    window.updateAgent = async (serial) => {
+        const modalTitle = document.getElementById('modal-title');
+        const modalContent = document.getElementById('modal-content');
+        const modalConfirm = document.getElementById('modal-confirm');
+        const modalCancel = document.getElementById('modal-cancel');
+        const overlay = document.getElementById('overlay');
+
+        modalTitle.textContent = "Actualizar Agente";
+        modalContent.innerHTML = "<p>Cargando ramas disponibles...</p>";
+        overlay.classList.remove('hidden');
+
+        const data = await apiFetch('/api/repo/branches');
+        if (!data || !data.branches) {
+            modalContent.innerHTML = "<p class='text-danger'>Error al cargar las ramas.</p>";
+            return;
+        }
+
+        let selectHtml = `
+            <p>Selecciona la rama para actualizar el agente <strong>${serial}</strong>:</p>
+            <select id="update-branch-select" style="width: 100%; margin-top: 1rem; padding: 0.5rem;">
+                ${data.branches.map(b => `<option value="${b}" ${b === 'main' ? 'selected' : ''}>${b}</option>`).join('')}
+            </select>
+            <p style="margin-top: 1rem; font-size: 0.8rem; color: #888;">El agente se detendrá, descargará el código y se reiniciará.</p>
+        `;
+        modalContent.innerHTML = selectHtml;
+
+        modalConfirm.onclick = async () => {
+            const branch = document.getElementById('update-branch-select').value;
+            overlay.classList.add('hidden');
+
+            // Optimistic update
+            if (state.agents[serial]) {
+                state.agents[serial].status = 'loading';
+                state.agents[serial].busy_message = 'Updating...';
+                state.agents[serial].is_optimistic = true;
+                renderHome();
+            }
+
+            await apiFetch(`/api/agents/${serial}/command`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'update', branch: branch })
+            });
+
+            setTimeout(poll, 200);
+        };
+
+        modalCancel.onclick = () => {
+            overlay.classList.add('hidden');
+        };
     };
 
     function switchView(view) {

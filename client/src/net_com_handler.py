@@ -293,6 +293,33 @@ def _handle_command(cmd_data: Dict[str, Any]):
             except Exception as e:
                 log_print("error", module_name, f"Failed to stop service via command: {e}")
                 resume_reporting()
+    elif action == "update":
+        branch = params.get("branch") or "main"
+        log_print("info", module_name, f"Updating system to branch: {branch}")
+        
+        STRUCTURE_MANAGER.set_busy("SYSTEM_UPDATE", f"UPDATING ({branch})...")
+        
+        # Save branch info for the update script
+        update_info = {"branch": branch}
+        update_config = Path("/tmp/omi_update.json")
+        try:
+            with update_config.open("w") as f:
+                json.dump(update_info, f)
+        except Exception as e:
+            log_print("error", module_name, f"Failed to save update config: {e}")
+            return
+
+        # Notify server before cleaning up
+        send_immediate_heartbeat()
+        
+        # Trigger cleanup and update script
+        try:
+            # We call the local API system/cleanup (which is in client.py) 
+            # but we need to run the update.sh script AFTER cleanup.
+            # Best way: add a new endpoint in client.py that handles this sequence.
+            requests.post(f"http://localhost:8000/api/system/update", json={"branch": branch}, timeout=5)
+        except Exception as e:
+            log_print("error", module_name, f"Failed to trigger system update sequence: {e}")
 
 # ---------------------------------------------------------------------------
 # Loops

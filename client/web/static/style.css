@@ -281,6 +281,24 @@ main {
     color: var(--text-primary);
 }
 
+.btn-warning {
+    background: #f59e0b; /* Amber 500 */
+    color: white;
+}
+
+.btn-warning:hover {
+    background: #d97706;
+}
+
+.btn-secondary {
+    background: #4b5563; /* Gray 600 */
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: #374151;
+}
+
 .btn-config {
     background: rgba(255, 255, 255, 0.05);
     color: var(--text-secondary);

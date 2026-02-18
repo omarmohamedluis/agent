@@ -95,7 +95,21 @@ echo "✅ Instalación completada con éxito."
 echo "sudo python3 client/client.py"
 echo "==========================================="
 
-read -p "🔄 Instalación completada. ¿Deseas reiniciar ahora para aplicar cambios de hardware? (y/n): " reboot_now
+# Dar permisos de ejecución al script de arranque
+chmod +x scripts/start_agent.sh
+
+# Preguntar por el auto-arranque
+read -p "🚀 ¿Deseas activar el auto-arranque (crontab) para que el agente se ejecute al iniciar? (y/n): " auto_start
+if [[ $auto_start == [yY]* ]]; then
+    echo "⚙️ Configurando auto-arranque en crontab de root..."
+    # Obtener el comando absoluto
+    START_SCRIPT_PATH="$(pwd)/scripts/start_agent.sh"
+    # Añadir al crontab de root si no existe ya
+    (sudo crontab -l 2>/dev/null | grep -v "$START_SCRIPT_PATH"; echo "@reboot $START_SCRIPT_PATH") | sudo crontab -
+    echo "✅ Auto-arranque configurado con éxito."
+fi
+
+read -p "🔄 ¿Deseas reiniciar ahora para aplicar cambios? (y/n): " reboot_now
 if [[ $reboot_now == [yY]* ]]; then
     echo "Reiniciando..."
     sudo reboot

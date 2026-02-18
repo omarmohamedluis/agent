@@ -127,6 +127,30 @@
             </section>
 
             <section class="section">
+                <h2><i class="fas fa-sync-alt"></i> Software Update</h2>
+                <div class="actions" id="update-actions">
+                    <button onclick="checkForUpdates()" class="btn btn-primary" style="width: auto;">
+                        <i class="fas fa-search"></i> Check for Updates
+                    </button>
+                </div>
+                <div id="branch-selection"
+                    style="display: none; margin-top: 1.5rem; border-top: 1px solid #333; padding-top: 1rem;">
+                    <p style="margin-bottom: 0.8rem;">Select Branch:</p>
+                    <select id="branch-select"
+                        style="width: 100%; margin-bottom: 1rem; padding: 0.7rem; border-radius: 6px;">
+                        <!-- Branches will be injected here -->
+                    </select>
+                    <button onclick="startUpdate()" class="btn btn-primary" style="width: auto;">
+                        <i class="fas fa-download"></i> Install Update now
+                    </button>
+                    <button onclick="cancelUpdate()" class="btn btn-secondary"
+                        style="margin-left: 0.5rem; width: auto;">
+                        Cancel
+                    </button>
+                </div>
+            </section>
+
+            <section class="section">
                 <h2><i class="fas fa-power-off"></i> System Control</h2>
                 <div class="actions">
                     <button onclick="systemAction('reboot')" class="btn btn-danger" style="width: auto;">
@@ -218,6 +242,60 @@
                 console.error("Polling error:", e);
             }
         }
+
+        async function checkForUpdates() {
+            const btn = document.querySelector('#update-actions button');
+            const branchSelection = document.getElementById('branch-selection');
+            const branchSelect = document.getElementById('branch-select');
+
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
+
+            try {
+                const res = await fetch('/api/repo/branches');
+                const data = await res.json();
+
+                if (data.branches) {
+                    branchSelect.innerHTML = data.branches.map(b => `<option value="${b}" ${b === 'main' ? 'selected' : ''}>${b}</option>`).join('');
+                    branchSelection.style.display = 'block';
+                } else {
+                    alert('Could not fetch branches.');
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Error connecting to local API.');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-search"></i> Check for Updates';
+            }
+        }
+
+        function cancelUpdate() {
+            document.getElementById('branch-selection').style.display = 'none';
+        }
+
+        async function startUpdate() {
+            const branch = document.getElementById('branch-select').value;
+            if (!confirm(`Confirm update to branch "${branch}"? This will stop all services and reboot the system.`)) return;
+
+            try {
+                const res = await fetch('/api/system/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ branch: branch })
+                });
+
+                if (res.ok) {
+                    // Start polling immediately to show the "UPDATING" overlay
+                    updateStatus();
+                } else {
+                    alert('Failed to start update.');
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
         setInterval(updateStatus, 2000);
     </script>
 </body>

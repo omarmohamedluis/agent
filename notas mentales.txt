@@ -36,3 +36,8 @@ el servidor se asigna una ID a las raspberrys pero estas no la aplican
 
 cunado pierden al servidor, deberian ponerse en modo offliney reflejarlo en logcada
 
+asegurarme que puedo modificar los id's desde el servidor y eso se refleja en el cliente
+
+revisar logs (archivo por ejecucion y numero máximo de logs)
+
+ver logs desde el servidor
