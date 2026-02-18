@@ -8,47 +8,49 @@ Este documento detalla los pasos para instalar el Cliente (Raspberry Pi) y el Se
 
 Sigue estos pasos en una Raspberry Pi con el sistema operativo (Raspberry Pi OS Lite 64-bit recomendado) recién instalado.
 
-### 1. Actualizar el sistema
+### Opción A: Instalación Automática (Recomendada)
+Copia y pega este bloque para iniciar el instalador interactivo:
+```bash
+# Descargar y ejecutar el instalador
+curl -fsSL https://raw.githubusercontent.com/omarmohamedluis/agent.git/v2/scripts/install_pi.sh -o install_pi.sh
+chmod +x install_pi.sh
+./install_pi.sh
+```
+*Nota: El script te preguntará qué rama instalar y configurará todo automáticamente.*
+
+### Opción B: Instalación Manual
+Si prefieres hacerlo paso a paso:
+
+#### 1. Actualizar e instalar dependencias base
 ```bash
 sudo apt update && sudo apt upgrade -y
+sudo apt install -y git python3-pip python3-venv network-manager libasound2-dev libjack-jackd2-dev
 ```
 
-### 2. Instalar el repositorio y submódulos
+#### 2. Clonar repositorio (Interactivo)
 ```bash
-# Instalar git si no está presente
-sudo apt install git -y
-
-# Clonar repositorio
-git clone https://github.com/omarmohamedluis/agent.git omi-agent
+read -p "Introduce la rama a descargar (v2, main, etc.) [default: v2]: " BRANCH
+BRANCH=${BRANCH:-v2}
+git clone -b $BRANCH --recursive https://github.com/omarmohamedluis/agent.git omi-agent
 cd omi-agent
-
-# Inicializar submódulos (Satellite)
-git submodule update --init --recursive
 ```
 
-### 3. Instalar dependencias del Cliente
+#### 3. Configurar Python
 ```bash
-# Instalar dependencias de sistema y Python (incluye librerías para compilar python-rtmidi)
-sudo apt install -y python3-pip python3-venv network-manager libasound2-dev libjack-jackd2-dev
-
-# Crear y activar entorno virtual
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Instalar librerías de Python desde el archivo de requerimientos
 pip install -r client/requirements.txt
 ```
 
-### 4. Compilar y preparar Satellite
-Satellite requiere Node.js v24 y Yarn. Aunque el servicio lo intenta configurar automáticamente, puedes prepararlo manualmente:
-
+#### 4. Compilar Satellite (Node.js)
 ```bash
-cd client/servicios/satellite/satellite_code
-
-# Habilitar Yarn vía Corepack
+# Instalar Node.js v24
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+sudo apt install -y nodejs
 sudo corepack enable
 
-# Instalar y compilar
+# Compilar
+cd client/servicios/satellite/satellite_code
 yarn install
 yarn build
 ```
