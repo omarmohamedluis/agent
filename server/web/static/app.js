@@ -199,10 +199,16 @@
             if (configContainer) {
                 const showButton = agent.status === 'online' && agent.active_service && agent.active_service_port;
                 const existingBtn = configContainer.querySelector('button');
-                if (showButton && !existingBtn) {
-                    configContainer.innerHTML = `
-                        <button class="btn btn-primary" onclick="configureAgent('${serial}', ${agent.active_service_port})" style="margin-bottom: 0.8rem; width: 100%;">⚙️ CONFIGURAR</button>
-                    `;
+
+                if (showButton) {
+                    const btnHtml = `<button class="btn btn-primary" onclick="configureAgent('${serial}', ${agent.active_service_port})" style="margin-bottom: 0.8rem; width: 100%;">⚙️ CONFIGURAR</button>`;
+                    if (!existingBtn) {
+                        configContainer.innerHTML = btnHtml;
+                    } else {
+                        // Update existing button if parameters changed
+                        // Using setAttribute is safer than innerHTML replacement for existing elements to preserve state if any
+                        existingBtn.setAttribute('onclick', `configureAgent('${serial}', ${agent.active_service_port})`);
+                    }
                 } else if (!showButton && existingBtn) {
                     configContainer.innerHTML = '';
                 }

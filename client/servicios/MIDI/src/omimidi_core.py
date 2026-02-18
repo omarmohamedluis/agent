@@ -835,12 +835,13 @@ def main() -> None:
                     LOGGER.info("Creando instancia del core...")
                     core = OmiMidiCore()
                     
-                    # Iniciar WebUI si no está corriendo o si cambió el puerto
-                    if web_proc is None or not web_proc.is_alive():
-                        LOGGER.info(f"Iniciando WebUI en puerto {core.map.ui_port}...")
-                        web_proc = start_webui(port=core.map.ui_port)
+                    # Iniciar WebUI
+                    # Usar puerto configurado o 9001 por defecto
+                    ui_port = core.map.ui_port
+                    LOGGER.info(f"Iniciando WebUI en puerto {ui_port}...")
+                    web_proc = start_webui(host="0.0.0.0", port=ui_port)
                     
-                    LOGGER.info("Iniciando bucle principal...")
+                    # Bucle principal
                     core.run()
                     
                     # Si run() termina normalmente (sin excepción), salimos del loop

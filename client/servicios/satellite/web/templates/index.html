@@ -339,7 +339,7 @@
     <div class="container">
         <div class="panel-left">
             <header style="display: flex; justify-content: space-between; align-items: center;">
-                <h1>📡 Satellite Manager</h1>
+                <h1 id="pageTitle">📡 Satellite Manager</h1>
             </header>
 
             <!-- Satellite Config -->
@@ -501,6 +501,10 @@
         let wasInstalling = false;
 
         async function init() {
+            // Update Title with Hostname
+            document.getElementById('pageTitle').innerText = `📡 Satellite @ ${window.location.hostname}`;
+            document.title = `Satellite @ ${window.location.hostname}`;
+
             connectWS();
             await checkStatus(); // Primero checking de estado para saber si es config
             await loadActivePresetData();
