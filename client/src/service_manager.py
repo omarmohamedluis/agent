@@ -8,6 +8,7 @@ import subprocess
 import logging
 import os
 import signal
+import sys
 import time
 import socket
 from pathlib import Path
@@ -146,7 +147,7 @@ class ServiceManager:
                  return False
 
             # Resolve variable ${PYTHON}
-            cmd = [x.replace("${PYTHON}", "python3") for x in entry]
+            cmd = [x.replace("${PYTHON}", sys.executable) for x in entry]
             
             # EXCLUSIVE MODE: Stop all other running services first
             # Copy keys to avoid "dictionary changed size during iteration"
@@ -468,7 +469,7 @@ class ServiceManager:
         config = self.services_config[svc_id]
         cwd = BASE_DIR / config.get("cwd", ".")
         entry = config.get("entry", [])
-        cmd = [x.replace("${PYTHON}", "python3") for x in entry]
+        cmd = [x.replace("${PYTHON}", sys.executable) for x in entry]
         
         env = os.environ.copy()
         env["OMI_CONFIG_MODE"] = "1" # MAGIC FLAG
