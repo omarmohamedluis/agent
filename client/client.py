@@ -3,6 +3,7 @@ Punto de entrada principal del Cliente OMI Agent.
 Gestiona el servidor web, el ciclo de vida de los servicios y la comunicación básica.
 """
 import sys
+import json
 import subprocess # Added for terminal cleanup
 import asyncio
 import logging
@@ -46,7 +47,7 @@ LOGGER = get_logger("omiclient.core")
 from service_manager import ServiceManager
 from system import get_system_status
 import ui
-from net_com_handler import handshake, close_comm_channel, get_last_contact_time, check_server_status
+from net_com_handler import handshake, close_comm_channel, get_last_contact_time, check_server_status, push_config_to_server
 from structure_manager import get_structure_manager
 from heartbeat import start_heartbeat, get_heartbeat_snapshot
 
@@ -226,6 +227,21 @@ async def reload_service_config(svc_id: str):
         # 2. Sincronizar Metadatos (Leer nuevo archivo map)
         try:
             await asyncio.to_thread(STRUCTURE_MANAGER.sync_service_metadata, svc_id)
+            
+            # Sincronizar con el servidor central tras recarga
+            try:
+                structure = STRUCTURE_MANAGER.get_structure()
+                services = structure.get("services", [])
+                target_svc = next((s for s in services if s.get("name") == svc_id), {})
+                current_config = target_svc.get("configuration", "Default")
+                config_path = service_manager._get_configs_dir(svc_id) / f"{current_config}.json"
+                if config_path.exists():
+                    with config_path.open("r", encoding="utf-8") as f:
+                        config_data = json.load(f)
+                    push_config_to_server(svc_id, current_config, config_data)
+                    LOGGER.info(f"Configuración '{current_config}' sincronizada tras reload de {svc_id}")
+            except Exception as e:
+                LOGGER.warning(f"Fallo al sincronizar config tras reload: {e}")
         except Exception as e:
             LOGGER.error(f"Fallo al sincronizar metadatos para {svc_id}: {e}")
             raise HTTPException(status_code=500, detail=f"Fallo al sincronizar metadatos: {e}")
@@ -311,6 +327,16 @@ async def save_service_config(svc_id: str, payload: dict):
         raise HTTPException(status_code=400, detail="Nombre de configuración requerido")
         
     if service_manager.save_config_as(svc_id, config_name):
+        # Sincronizar con el servidor central si está conectado
+        try:
+            config_path = service_manager._get_configs_dir(svc_id) / f"{config_name}.json"
+            if config_path.exists():
+                with config_path.open("r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+                push_config_to_server(svc_id, config_name, config_data)
+        except Exception as e:
+            LOGGER.warning(f"Fallo al sincronizar config {config_name} con el servidor: {e}")
+            
         return {"status": "saved", "config": config_name}
     raise HTTPException(status_code=500, detail="Fallo al guardar configuración")
 

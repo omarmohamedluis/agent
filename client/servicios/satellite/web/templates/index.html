@@ -622,14 +622,55 @@
                     }, 1000);
                 } else {
                     // If restarting, give it a moment then reload UI to see it running
-                    setTimeout(() => window.location.reload(), 2000);
+                    showLoadingOverlay("Reiniciando", "Esperando a que el servicio vuelva a estar en línea...");
+                    setTimeout(checkAvailabilityAndReload, 3000);
                 }
 
             } catch (e) {
                 showToast("Error guardando");
                 btn.disabled = false;
-                btn.innerText = "💾 Guardar y Salir";
+                btn.innerText = "💾 Guardar y Reiniciar";
             }
+        }
+
+        function showLoadingOverlay(title, message) {
+            const overlay = document.getElementById('loadingOverlay');
+            document.getElementById('loadingTitle').innerText = title;
+            document.getElementById('loadingMessage').innerText = message;
+            document.getElementById('progressBar').style.width = '100%';
+            document.getElementById('cancelInstallBtn').style.display = 'none';
+            overlay.style.display = 'flex';
+        }
+
+        function checkAvailabilityAndReload() {
+            const start = Date.now();
+            const poller = setInterval(async () => {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 2000);
+
+                    // Add cache buster to prevent cached responses
+                    const res = await fetch('/api/status?t=' + Date.now(), {
+                        cache: 'no-store',
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeoutId);
+
+                    if (res.ok) {
+                        clearInterval(poller);
+                        window.location.reload();
+                    }
+                } catch (e) {
+                    console.log("Waiting for service...", e);
+                }
+
+                // Timeout after 60 seconds
+                if (Date.now() - start > 60000) {
+                    clearInterval(poller);
+                    alert("El servicio tardó demasiado en responder. Intente recargar manualmente.");
+                    window.location.reload();
+                }
+            }, 1000);
         }
 
         // --- Companion Manager Logic ---

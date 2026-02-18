@@ -34,7 +34,15 @@
     async function loadAgents() {
         const data = await apiFetch('/api/agents');
         if (data && data.agents) {
-            // Handle Agents (Merge with optimistic state)
+            // 1. Remove agents from local state that aren't in the remote data
+            // (Unless they are optimistic/launching)
+            for (const serial in state.agents) {
+                if (!data.agents[serial] && !state.agents[serial].is_optimistic) {
+                    delete state.agents[serial];
+                }
+            }
+
+            // 2. Add/Update remaining agents
             for (const serial in data.agents) {
                 const remote = data.agents[serial];
                 const local = state.agents[serial];
@@ -156,6 +164,11 @@
                             <p class="state-text"><strong>Activo:</strong> ${agent.active_service ? `${agent.active_service} (${agent.active_config || 'Default'})` : 'Standby'}</p>
                         </div>
                         <div class="controls">
+                            <div class="configure-button-container">
+                                ${(agent.status === 'online' && agent.active_service && agent.active_service_port) ? `
+                                    <button class="btn btn-primary" onclick="configureAgent('${serial}', ${agent.active_service_port})" style="margin-bottom: 0.8rem; width: 100%;">⚙️ CONFIGURAR</button>
+                                ` : ''}
+                            </div>
                             <div class="selector-group">
                                 <label>Srv:</label>
                                 <select class="srv-select" onchange="updateSelection('${serial}', 'service', this.value)" ${isLocked ? 'disabled' : ''}>
@@ -206,6 +219,20 @@
             const stateTextEl = card.querySelector('.state-text');
             stateTextEl.innerHTML = `<strong>Activo:</strong> ${agent.active_service ? `${agent.active_service} (${agent.active_config || 'Default'})` : 'Standby'}`;
             card.querySelector('.current-state').classList.toggle('active', !!agent.active_service);
+
+            // Update Configure Button for existing cards
+            const configContainer = card.querySelector('.configure-button-container');
+            if (configContainer) {
+                const showButton = agent.status === 'online' && agent.active_service && agent.active_service_port;
+                const existingBtn = configContainer.querySelector('button');
+                if (showButton && !existingBtn) {
+                    configContainer.innerHTML = `
+                        <button class="btn btn-primary" onclick="configureAgent('${serial}', ${agent.active_service_port})" style="margin-bottom: 0.8rem; width: 100%;">⚙️ CONFIGURAR</button>
+                    `;
+                } else if (!showButton && existingBtn) {
+                    configContainer.innerHTML = '';
+                }
+            }
 
             // Update Selectors (ONLY if not focused and options changed)
             const srvSelect = card.querySelector('.srv-select');
@@ -279,7 +306,7 @@
                     </span>
                 </td>
                 <td>
-                    <button class="btn btn-sm btn-danger" onclick="deleteAgent('${serial}')">Eliminar</button>
+                    ${agent.status === 'offline' ? `<button class="btn btn-sm btn-danger" onclick="deleteAgent('${serial}')">Eliminar</button>` : ''}
                     <button class="btn btn-sm btn-warning" onclick="sendPower('${serial}', 'reboot')">R</button>
                     <button class="btn btn-sm btn-danger" onclick="sendPower('${serial}', 'shutdown')">O</button>
                 </td>
@@ -287,6 +314,14 @@
         `).join('');
         agentsList.innerHTML = html;
     }
+
+    window.configureAgent = (serial, port) => {
+        const agent = state.agents[serial];
+        if (!agent || !agent.ip) return;
+
+        const url = `http://${agent.ip}:${port}`;
+        window.open(url, '_blank');
+    };
 
     window.updateAgentId = async (serial, currentId) => {
         const newId = prompt(`Asignar nuevo ID numérico para ${serial}:`, currentId);
@@ -297,6 +332,18 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: parseInt(newId) })
         });
+        loadAgents();
+    };
+
+    window.deleteAgent = async (serial) => {
+        if (!confirm(`¿Eliminar definitivamente el agente ${serial} del registro?`)) return;
+
+        // Remove locally first for immediate UI feedback
+        delete state.agents[serial];
+        renderAgents();
+        renderHome();
+
+        await apiFetch(`/api/agents/${serial}`, { method: 'DELETE' });
         loadAgents();
     };
 

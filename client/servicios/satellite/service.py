@@ -19,6 +19,9 @@ CONFIGS_DIR = SERVICE_DIR / "configs"
 RUNTIME_CONFIG = SERVICE_DIR / "runtime_config.json"
 ACTIVE_CONFIG_FILE = SERVICE_DIR / "active_config.txt"
 
+# Flag global para evitar race condition entre thread de instalación y main loop
+INSTALLING = False
+
 # Determinar log file desde el entorno OMI o local
 OMI_LOG_PATH = os.environ.get("OMI_LOG_PATH")
 if OMI_LOG_PATH:
@@ -189,7 +192,21 @@ def update_status(state, message=None, progress=None):
 
 def install_satellite_thread(node_bin, env, is_update=False, config_mode=False):
     """Proceso de instalación/compilación en segundo plano."""
+    global INSTALLING
     try:
+        update_status("installing", "Instalando dependencias de sistema...", 5)
+        try:
+            # Instalar dependencias requeridas por Companion (audio/midi)
+            # -y para confirmar, -qq para reducir ruido
+            subprocess.run(
+                ["sudo", "apt-get", "install", "-y", "libasound2-dev", "libjack-jackd2-dev"], 
+                check=True, 
+                capture_output=True
+            )
+        except Exception as e:
+            # No bloqueante, quizás ya están o no hay sudo, pero lo logueamos
+            log_wrapper(f"Advertencia instalando dependencias apt: {e}", "WARNING")
+
         update_status("installing", "Verificando herramientas...", 10)
         bin_dir = Path(node_bin).parent
         corepack_bin = bin_dir / "corepack"
@@ -214,10 +231,14 @@ def install_satellite_thread(node_bin, env, is_update=False, config_mode=False):
             cmd = [str(yarn_bin), "install"] if yarn_bin.exists() else [str(corepack_bin), "yarn", "install"]
             subprocess.run(cmd, cwd=CODE_DIR, env=env, check=True, capture_output=True)
 
-        # Always build if update or missing
         main_js = CODE_DIR / "satellite" / "dist" / "main.js"
         if is_update or not main_js.exists():
             update_status("installing", "Compilando Satellite...", 70)
+            # Clean potential partial build
+            if main_js.exists():
+                try: main_js.unlink()
+                except: pass
+                
             cmd = [str(yarn_bin), "build"] if yarn_bin.exists() else [str(corepack_bin), "yarn", "build"]
             subprocess.run(cmd, cwd=CODE_DIR, env=env, check=True, capture_output=True)
         
@@ -226,9 +247,18 @@ def install_satellite_thread(node_bin, env, is_update=False, config_mode=False):
         else:
             update_status("starting", "¡Casi listo!", 100)
         log_wrapper("Instalación/Actualización finalizada satisfactoriamente.")
+    except subprocess.CalledProcessError as e:
+        log_wrapper(f"Fallo en subproceso: {e.cmd}", "ERROR")
+        if e.stdout:
+            log_wrapper(f"STDOUT: {e.stdout.decode(errors='replace')}", "ERROR")
+        if e.stderr:
+            log_wrapper(f"STDERR: {e.stderr.decode(errors='replace')}", "ERROR")
+        update_status("error", f"Error de instalación: {e}")
     except Exception as e:
         log_wrapper(f"Fallo en hilo de instalación: {e}", "ERROR")
         update_status("error", f"Error de instalación: {str(e)}")
+    finally:
+        INSTALLING = False
 
 def get_active_config_name():
     if ACTIVE_CONFIG_FILE.exists():
@@ -327,8 +357,11 @@ def main():
     
     # Limpieza inicial
     if STATE_FILE.exists():
-        try: os.unlink(STATE_FILE)
-        except: pass
+        try: 
+            os.unlink(STATE_FILE)
+            log_wrapper("Estado previo limpiado correctamente.")
+        except Exception as e:
+            log_wrapper(f"Advertencia: No se pudo limpiar el archivo de estado previo: {e}", "WARNING")
 
     # --- MODO CONFIGURACIÓN ---
     config_mode = os.environ.get("OMI_CONFIG_MODE") == "1"
@@ -370,10 +403,14 @@ def main():
     def handle_stop(signum, frame):
         log_wrapper("Cierre solicitado. Limpiando procesos...")
         if sat_proc:
-            try: os.killpg(os.getpgid(sat_proc.pid), signal.SIGTERM)
+            try: 
+                os.killpg(os.getpgid(sat_proc.pid), signal.SIGTERM)
+                sat_proc.wait(timeout=5)
             except: pass
         if web_proc:
-            try: os.killpg(os.getpgid(web_proc.pid), signal.SIGTERM)
+            try: 
+                os.killpg(os.getpgid(web_proc.pid), signal.SIGTERM)
+                web_proc.wait(timeout=2)
             except: pass
         sys.exit(0)
 
@@ -397,12 +434,14 @@ def main():
                 try:
                     update_status("installing", f"Iniciando {action_name}...", 5)
                     node_bin, env = setup_fnm()
+                    global INSTALLING
+                    INSTALLING = True
                     threading.Thread(target=install_satellite_thread, args=(node_bin, env, is_update, config_mode)).start()
                 except Exception as e:
                     update_status("error", f"Fallo al iniciar setup: {e}")
 
             # B. Detectar fin de instalacion
-            if not config_mode and not installed:
+            if not config_mode and not installed and not INSTALLING:
                 try:
                     if (CODE_DIR / "satellite" / "dist" / "main.js").exists():
                         node_bin, env = setup_fnm()

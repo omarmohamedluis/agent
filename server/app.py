@@ -94,6 +94,7 @@ class HandshakePayload(BaseModel):
     ip: Optional[str] = None
     active_service: Optional[str] = None
     active_config: Optional[str] = None
+    web_port: Optional[int] = None
     cpu: Optional[float] = None
     temp: Optional[float] = None
     presets: Dict[str, Dict[str, Dict[str, Any]]] # {service_id: {config_name: {data: ...}}}
@@ -106,6 +107,7 @@ class HeartbeatPayload(BaseModel):
     ip: Optional[str] = None
     active_service: Optional[str] = None
     active_config: Optional[str] = None
+    web_port: Optional[int] = None
     system_status: Optional[Dict[str, Any]] = None
 
 class CommandPayload(BaseModel):
@@ -125,6 +127,7 @@ async def handshake(payload: HandshakePayload):
         "ip": payload.ip,
         "active_service": payload.active_service,
         "active_config": payload.active_config,
+        "active_service_port": payload.web_port,
         "cpu": payload.cpu,
         "temp": payload.temp,
         "status": "online",
@@ -167,6 +170,14 @@ async def handshake(payload: HandshakePayload):
         state["commands"] = commands
         agent_runtime_state[payload.serial] = state
         emit_event(payload.serial, "command", f"Delivered (via handshake): {cmd.get('action')} to client")
+        
+        # Update busy message to indicate it's now executing
+        storage.upsert_agent(payload.serial, {
+            "system_status": {
+                "is_busy": True,
+                "busy_message": f"Executing {cmd.get('action')}..."
+            }
+        })
 
     # 4. Return ALL configs and any pending command
     return {
@@ -205,6 +216,7 @@ async def heartbeat(payload: HeartbeatPayload):
         "ip": payload.ip,
         "active_service": payload.active_service,
         "active_config": payload.active_config,
+        "active_service_port": payload.web_port,
         "system_status": {
             "is_busy": is_busy,
             "busy_message": busy_message
@@ -231,6 +243,15 @@ async def heartbeat(payload: HeartbeatPayload):
         state["commands"] = commands
         agent_runtime_state[payload.serial] = state
         emit_event(payload.serial, "command", f"Delivered: {cmd.get('action')} to client")
+        
+        # Update busy message to indicate it's now executing
+        storage.upsert_agent(payload.serial, {
+            "system_status": {
+                "is_busy": True,
+                "busy_message": f"Executing {cmd.get('action')}..."
+            }
+        })
+        
         return {"status": "ok", "command": cmd}
     
     return {"status": "ok"}
@@ -244,15 +265,15 @@ async def get_agents():
         last_seen = data.get("last_seen", 0)
         system_status = data.get("system_status", {})
         
-        if system_status and system_status.get("is_busy"):
+        if now - last_seen > 60:
+            data["status"] = "offline"
+        elif now - last_seen > 15:
+            data["status"] = "away"
+        elif system_status and system_status.get("is_busy"):
             data["status"] = "loading"
             data["busy_message"] = system_status.get("busy_message", "Loading...")
-        elif now - last_seen < 15:
-            data["status"] = "online"
-        elif now - last_seen < 60:
-            data["status"] = "away"
         else:
-            data["status"] = "offline"
+            data["status"] = "online"
             
     return {
         "agents": agents,
@@ -318,6 +339,7 @@ async def agent_ready(serial: str, payload: Dict[str, Any]):
         "status": "online",
         "active_service": payload.get("active_service"),
         "active_config": payload.get("active_config"),
+        "active_service_port": payload.get("web_port"),
         "ip": payload.get("ip"),
         "system_status": {
             "is_busy": True,
@@ -331,6 +353,12 @@ async def agent_ready(serial: str, payload: Dict[str, Any]):
         final_state = f"Active ({payload.get('active_service')})"
         
     emit_event(serial, "sync", f"Final State Confirmed: {final_state}")
+    return {"status": "ok"}
+
+@app.delete("/api/agents/{serial}")
+async def delete_agent(serial: str):
+    storage.delete_agent(serial)
+    emit_event(serial, "removal", f"Agent removed from registry")
     return {"status": "ok"}
 
 @app.post("/api/agents/{serial}/id")
@@ -360,8 +388,12 @@ async def list_configs(service_id: Optional[str] = None):
     return {"configs": storage.get_configs(service_id)}
 
 @app.post("/api/configs/{service_id}")
-async def save_config(service_id: str, name: str, data: Dict[str, Any]):
-    storage.save_config(service_id, name, data)
+async def save_config(service_id: str, name: str, data: Dict[str, Any], serial: Optional[str] = None):
+    # Use serial if provided, else storage defaults to "server"
+    if serial:
+        storage.save_config(service_id, name, data, serial)
+    else:
+        storage.save_config(service_id, name, data)
     return {"status": "ok"}
 
 @app.delete("/api/configs/{service_id}/{name}")

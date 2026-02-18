@@ -8,6 +8,8 @@ import subprocess
 import logging
 import os
 import signal
+import time
+import socket
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -208,6 +210,30 @@ class ServiceManager:
 
             self.processes[svc_id] = subprocess_obj
             
+            # Wait for Port Readiness if web_port is defined
+            # This prevents the UI from trying to load the iframe before the service is ready
+            try:
+                web_port = config.get("web_port")
+                # Try to get dynamic port if available via structure sync logic later, but initial start uses static?
+                # Best effort: check config.
+                
+                if web_port:
+                    port = int(web_port)
+                    LOGGER.info(f"Waiting for {svc_id} to open port {port}...")
+                    start_wait = time.time()
+                    while time.time() - start_wait < 15: # 15s timeout
+                        try:
+                            # Use socket connect to check if port is open
+                            with socket.create_connection(("localhost", port), timeout=0.2):
+                                LOGGER.info(f"Service {svc_id} is ready on port {port}")
+                                break
+                        except (OSError, ConnectionRefusedError):
+                            time.sleep(0.2)
+                    else:
+                        LOGGER.warning(f"Timeout waiting for {svc_id} on port {port}, proceeding anyway.")
+            except Exception as e:
+                LOGGER.warning(f"Error checking port readiness for {svc_id}: {e}")
+
             # Update Running State
             STRUCTURE_MANAGER.update_service_state(svc_id, running=True)
             

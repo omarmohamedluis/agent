@@ -62,7 +62,7 @@ def save_json(path: Path, data: Dict[str, Any]):
 
 ALLOWED_AGENT_FIELDS = [
     "id", "host", "ip", "cpu", "temp", 
-    "active_service", "active_config", "system_status", 
+    "active_service", "active_config", "active_service_port", "system_status", 
     "status", "last_seen", "last_launch_at", "version", 
     "awaiting_stable_heartbeat"
 ]

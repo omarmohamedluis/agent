@@ -238,8 +238,10 @@ async def get_status():
 async def get_companion_status():
     """Returns local version if installed."""
     package_json = BASE_DIR / "satellite_code" / "package.json"
+    main_js = BASE_DIR / "satellite_code" / "satellite" / "dist" / "main.js"
+    
     version = None
-    if package_json.exists():
+    if package_json.exists() and main_js.exists():
         try:
             with open(package_json, 'r') as f:
                 data = json.load(f)

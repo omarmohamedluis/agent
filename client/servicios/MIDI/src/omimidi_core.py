@@ -50,7 +50,9 @@ LEARN_REQ_FILE   = os.path.join(BASE_DIR, "OMIMIDI_learn_request.json")   # WebU
 STATE_FILE       = os.path.join(BASE_DIR, "OMIMIDI_state.json")           # último valor por ruta OSC
 RESTART_REQ_FILE = os.path.join(BASE_DIR, "OMIMIDI_restart.flag")         # WebUI solicita reinicio; el core se re-ejecuta
 WEBUI_PID_FILE   = os.path.join(BASE_DIR, "OMIMIDI_webui.pid")            # PID de la WebUI para poder matarla
-SERVER_INFO_PATH = Path(__file__).resolve().parents[4] / 'client' / 'agent_pi' / 'data' / 'server.json'
+SERVER_INFO_PATH = Path(__file__).resolve().parents[3] / 'data' / 'server.json'
+STRUCTURE_PATH = Path(__file__).resolve().parents[3] / 'data' / 'structure.json'
+import urllib.parse
 
 
 from omimidi_logger import get_logger
@@ -74,31 +76,43 @@ def _load_server_info() -> Dict[str, Any]:
     except Exception:
         return {}
 
+def _load_identity() -> Dict[str, Any]:
+    try:
+        with STRUCTURE_PATH.open('r', encoding='utf-8') as fh:
+            data = json.load(fh)
+            return data.get("identity", {})
+    except Exception:
+        return {}
+
 def push_map_to_server(map_data: Dict[str, Any], *, source: str = "omimidi_core") -> None:
     """Envía la configuración actual al servidor central para sincronización."""
     info = _load_server_info()
-    server_api = info.get("api")
-    serial = info.get("serial")
-    host = info.get("host")
-    if not server_api or not serial:
-        return
+    ident = _load_identity()
+    
+    ip = info.get("ip")
+    port = info.get("port", 9000)
+    serial = ident.get("serial")
+    
+    if not ip or not serial:
+        # Fallback to older fields if present (backward compatibility if needed)
+        ip = info.get("api", "").replace("http://", "").split(":")[0]
+        serial = info.get("serial")
+        if not ip or not serial:
+            return
+
     config_name = str(map_data.get("file_info", {}).get("name") or "default")
-    payload = json.dumps(
-        {
-            "name": config_name,
-            "data": map_data,
-            "serial": serial,
-            "host": host,
-            "source": source,
-            "overwrite": True,
-        }
-    ).encode("utf-8")
-    url = f"{server_api}/api/configs/MIDI"
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+    
+    # URL format: http://{ip}:{port}/api/configs/MIDI?name={name}&serial={serial}
     try:
+        url = f"http://{ip}:{port}/api/configs/MIDI?name={urllib.parse.quote(config_name)}&serial={urllib.parse.quote(serial)}"
+        
+        # Payload is raw map_data as expected by storage.save_config (which takes Dict[str, Any] as 'data')
+        payload = json.dumps(map_data).encode("utf-8")
+        
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
         urllib.request.urlopen(req, timeout=5)
     except Exception as exc:
-        LOGGER.warning(f"Falló sincronización de preset '{config_name}': {exc}")
+        LOGGER.warning(f"Falló sincronización de preset '{config_name}' a {ip}:{port}: {exc}")
 
 def cleanup_runtime_files():
     """Elimina archivos temporales generados durante la ejecución."""

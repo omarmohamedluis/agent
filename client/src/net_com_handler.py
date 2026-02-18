@@ -102,6 +102,7 @@ def _build_client_payload() -> Dict[str, Any]:
         "ip": heartbeat_snapshot.get("main_nic_ip"),
         "active_service": service_state.get("actual"),
         "active_config": service_state.get("configuration"),
+        "web_port": service_state.get("web_port"),
         "presets": presets,
         "version": version_info,
         "id": identity.get("index"),
@@ -374,3 +375,13 @@ def close_comm_channel(reason: str = "client_shutdown") -> None:
     _session_active.clear()
     _sender_stop.set()
     log_print("info", module_name, f"Session finished: {reason}")
+
+def push_config_to_server(service_id: str, name: str, data: Dict[str, Any]) -> bool:
+    """Sends a local configuration to the Director server."""
+    serial = _build_client_payload().get("serial")
+    if not serial:
+        return False
+        
+    log_print("info", module_name, f"Pushing config '{name}' for '{service_id}' to server...")
+    res = _post_json(f"/api/configs/{service_id}?name={name}&serial={serial}", data)
+    return res is not None and res.get("status") == "ok"
