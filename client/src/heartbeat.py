@@ -76,16 +76,25 @@ def _get_ip_info() -> List[Dict[str, Optional[str]]]:
 def _enrich_ip_info(ip_info: List[Dict[str, Optional[str]]]) -> List[Dict[str, Any]]:
     enriched: List[Dict[str, Any]] = []
     for entry in ip_info:
+        name = entry.get("name") or ""
         ip = entry.get("ip")
         netmask = entry.get("netmask")
         prefix = _mask_to_prefix(netmask)
+        
+        vlan = None
+        if name.startswith("eth0."):
+            try:
+                vlan = int(name.split(".")[-1])
+            except:
+                pass
+
         enriched.append(
             {
-                "name": entry.get("name"),
+                "name": name,
                 "ip": ip,
                 "netmask": netmask,
                 "cidr": f"{ip}/{prefix}" if (ip and prefix is not None) else (ip or None),
-                "vlan": None, # Heartbeat aún no detecta VLANs, pero mantiene la clave
+                "vlan": vlan,
             }
         )
     return enriched
@@ -172,6 +181,10 @@ def _set_metrics(snapshot: Dict[str, Any]) -> None:
         _metrics_snapshot["ifaces"] = list(ifaces)
         _metrics_snapshot["main_nic"] = snapshot.get("main_nic")
         _metrics_snapshot["main_nic_ip"] = snapshot.get("main_nic_ip")
+        
+        # Guardar active_vlan si viene en el snapshot
+        if "active_vlan" in snapshot:
+            _metrics_snapshot["active_vlan"] = snapshot.get("active_vlan")
 
         CpuUsage = _metrics_snapshot["cpu"]
         TEMP = _metrics_snapshot["temp"]
@@ -182,6 +195,7 @@ def _set_metrics(snapshot: Dict[str, Any]) -> None:
             "ifaces": list(_metrics_snapshot["ifaces"]),
             "main_nic": _metrics_snapshot["main_nic"],
             "main_nic_ip": _metrics_snapshot["main_nic_ip"],
+            "active_vlan": _metrics_snapshot.get("active_vlan")
         }
 
     _notify_listeners(published)
@@ -224,6 +238,18 @@ def _compute_network_metrics() -> Dict[str, Any]:
     ip_info = _get_ip_info()
     enriched_ifaces = _enrich_ip_info(ip_info)
     
+    # Buscar VLAN activa (que exista en el sistema)
+    active_vlan = None
+    for iface in enriched_ifaces:
+        if iface.get("vlan") is not None:
+            active_vlan = iface.get("vlan")
+            # Priorizamos la que tenga IP, pero si encontramos una sin IP al menos reportamos que existe
+            if iface.get("ip"):
+                break
+
+    with _metrics_lock:
+        _metrics_snapshot["active_vlan"] = active_vlan
+
     # Determinar Main NIC
     main_nic = _determine_main_nic(enriched_ifaces)
     
@@ -233,11 +259,11 @@ def _compute_network_metrics() -> Dict[str, Any]:
             if iface.get("name") == main_nic:
                 main_nic_ip = iface.get("ip")
                 break
-    
+
     # Actualizar StructureManager
     STRUCTURE_MANAGER.update_network_interfaces(enriched_ifaces, main_nic=main_nic)
     
-    return {"ifaces": enriched_ifaces, "main_nic": main_nic, "main_nic_ip": main_nic_ip}
+    return {"ifaces": enriched_ifaces, "main_nic": main_nic, "main_nic_ip": main_nic_ip, "active_vlan": active_vlan}
 
 
 def _heartbeat_loop() -> None:
@@ -268,6 +294,7 @@ def _heartbeat_loop() -> None:
                         network_metrics["ifaces"] = _metrics_snapshot.get("ifaces", [])
                         network_metrics["main_nic"] = _metrics_snapshot.get("main_nic")
                         network_metrics["main_nic_ip"] = _metrics_snapshot.get("main_nic_ip")
+                        network_metrics["active_vlan"] = _metrics_snapshot.get("active_vlan")
                 
                 # Fusionar
                 snapshot = {**fast_metrics, **network_metrics}
@@ -374,13 +401,14 @@ def unregister_heartbeat_listener(callback: Callable[[Dict[str, Any]], None]) ->
             _listeners.remove(callback)
 
 def get_heartbeat_snapshot() -> Dict[str, Any]:
-        return {
-            "cpu": _metrics_snapshot.get("cpu"),
-            "temp": _metrics_snapshot.get("temp"),
-            "ifaces": list(_metrics_snapshot.get("ifaces", [])),
-            "main_nic": _metrics_snapshot.get("main_nic"),
-            "main_nic_ip": _metrics_snapshot.get("main_nic_ip"),
-        }
+    return {
+        "cpu": _metrics_snapshot.get("cpu"),
+        "temp": _metrics_snapshot.get("temp"),
+        "ifaces": list(_metrics_snapshot.get("ifaces", [])),
+        "main_nic": _metrics_snapshot.get("main_nic"),
+        "main_nic_ip": _metrics_snapshot.get("main_nic_ip"),
+        "active_vlan": _metrics_snapshot.get("active_vlan"),
+    }
 
 def force_update_interfaces() -> None:
     """Fuerza una lectura inmediata de todas las métricas y actualiza el snapshot interno."""

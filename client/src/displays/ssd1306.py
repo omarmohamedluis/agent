@@ -1,4 +1,5 @@
-from PIL import Image
+import threading
+from PIL import Image, ImageDraw, ImageFont
 from luma.core.interface.serial import i2c
 from luma.oled.device import ssd1306
 from .base import DisplayDriver
@@ -10,6 +11,8 @@ class SSD1306Driver(DisplayDriver):
         self._port = port
         self._address = address
         self._device = None
+        self._lock = threading.Lock()
+        self._font_cache = {}
 
     def init(self):
         serial = i2c(port=self._port, address=self._address)
@@ -20,12 +23,13 @@ class SSD1306Driver(DisplayDriver):
             self._device.clear()
 
     def display(self, image: Image.Image):
-        if self._device:
-            if image.size != (self._device.width, self._device.height):
-                image = image.resize((self._device.width, self._device.height), Image.NEAREST)
-            if image.mode != self._device.mode:
-                image = image.convert(self._device.mode)
-            self._device.display(image)
+        with self._lock:
+            if self._device:
+                if image.size != (self._device.width, self._device.height):
+                    image = image.resize((self._device.width, self._device.height), Image.NEAREST)
+                if image.mode != self._device.mode:
+                    image = image.convert(self._device.mode)
+                self._device.display(image)
 
     def width(self) -> int:
         return self._width
@@ -41,20 +45,24 @@ class SSD1306Driver(DisplayDriver):
     # --- High Level Rendering ---
 
     def _get_font(self, size: int):
-        from PIL import ImageFont
+        key = f"P_{size}"
+        if key in self._font_cache: return self._font_cache[key]
         try:
             from pathlib import Path
             fpath = Path(__file__).resolve().parents[2] / "web" / "utilities" / "PixelOperator.ttf"
-            return ImageFont.truetype(str(fpath), size)
+            self._font_cache[key] = ImageFont.truetype(str(fpath), size)
+            return self._font_cache[key]
         except Exception:
             return ImageFont.load_default()
 
     def _get_icon_font(self, size: int):
-        from PIL import ImageFont
+        key = f"I_{size}"
+        if key in self._font_cache: return self._font_cache[key]
         try:
             from pathlib import Path
             fpath = Path(__file__).resolve().parents[2] / "web" / "utilities" / "lineawesome-webfont.ttf"
-            return ImageFont.truetype(str(fpath), size)
+            self._font_cache[key] = ImageFont.truetype(str(fpath), size)
+            return self._font_cache[key]
         except Exception:
             return ImageFont.load_default()
 
@@ -68,7 +76,6 @@ class SSD1306Driver(DisplayDriver):
             return None
 
     def render_loading(self, percent: int, label: str):
-        from PIL import ImageDraw, Image
         img = Image.new("1", (self._width, self._height), 0)
         
         # Draw Logo at bottom
@@ -112,7 +119,6 @@ class SSD1306Driver(DisplayDriver):
         self.display(img)
 
     def render_message(self, text: str, is_error: bool = False):
-        from PIL import ImageDraw, Image
         img = Image.new("1", (self._width, self._height), 0)
         
         # Draw Logo at bottom
@@ -136,7 +142,6 @@ class SSD1306Driver(DisplayDriver):
         self.display(img)
 
     def render_standard(self, snapshot: dict, structure: dict, server_online: bool):
-        from PIL import ImageDraw, Image
         img = Image.new("1", (self._width, self._height), 0)
         draw = ImageDraw.Draw(img)
         
@@ -169,15 +174,23 @@ class SSD1306Driver(DisplayDriver):
         # 2. Body
         f_b = self._get_font(14)
         cpu = snapshot.get("cpu", 0)
-        temp = snapshot.get("temp", 0)
+        cpu_val = f"CPU: {cpu:.0f}%" if cpu is not None else "CPU: --"
+        draw.text((4, 20), cpu_val, font=f_b, fill=255)
         
-        draw.text((4, 20), f"CPU: {cpu:.0f}%", font=f_b, fill=255)
-        draw.text((4, 34), f"TEMP: {temp:.0f}C", font=f_b, fill=255)
+        # VLAN (if active)
+        vlan = snapshot.get("active_vlan")
+        if vlan is not None:
+            v_txt = f"VLAN:{vlan}"
+            vw = draw.textbbox((0, 0), v_txt, font=f_b)[2]
+            draw.text((self._width - vw - 2, 20), v_txt, font=f_b, fill=255)
+            
+        temp_val = f"TEMP: {temp:.0f}C" if temp is not None else "TEMP: --"
+        draw.text((4, 34), temp_val, font=f_b, fill=255)
         
         ip_val = "DISCONNECTED"
         ifaces = snapshot.get("ifaces", [])
         # Prio: eth, wlan, others
-        sorted_if = sorted(ifaces, key=lambda x: (0 if "eth" in x.get("name","").lower() else 1 if "wlan" in x.get("name","").lower() else 2))
+        sorted_if = sorted(ifaces, key=lambda x: (0 if "eth" in (x.get("name") or "").lower() else 1 if "wlan" in (x.get("name") or "").lower() else 2))
         if sorted_if:
             ip = sorted_if[0].get("ip") or "-"
             name = sorted_if[0].get("name", "").upper()[:4]

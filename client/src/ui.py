@@ -1,4 +1,5 @@
 import logging
+import threading
 from typing import Any, Dict, Optional
 
 from heartbeat import (
@@ -17,6 +18,7 @@ STRUCTURE_MANAGER = get_structure_manager()
 # --- Estado Global de UI ---
 _display_manager = DisplayManager(driver_name="ssd1306")
 _standard_listener_registered = False
+_ui_lock = threading.RLock()
 
 def init():
     """Inicializa la pantalla y el driver correspondiente."""
@@ -28,33 +30,50 @@ def init():
 
 # --- API Pública de UI (Delegación al Driver) ---
 
-def show_loading_ui(percent: int, label: str = ""):
+def show_loading_ui(percent: int, label: str = "", stop_listener: bool = True):
     """Muestra pantalla de carga delegando al driver."""
-    stop_standard_ui()
-    if _display_manager.driver:
-        _display_manager.driver.render_loading(percent, label)
+    with _ui_lock:
+        if stop_listener:
+            stop_standard_ui()
+        if _display_manager.driver:
+            try:
+                _display_manager.driver.render_loading(percent, label)
+            except Exception as e:
+                LOGGER.error(f"Error en render_loading: {e}")
 
-def show_message_ui(label: str = "", is_error: bool = False):
+def show_message_ui(label: str = "", is_error: bool = False, stop_listener: bool = True):
     """Muestra un mensaje delegando al driver."""
-    stop_standard_ui()
-    if _display_manager.driver:
-        _display_manager.driver.render_message(label, is_error)
+    with _ui_lock:
+        if stop_listener:
+            stop_standard_ui()
+        if _display_manager.driver:
+            try:
+                _display_manager.driver.render_message(label, is_error)
+            except Exception as e:
+                LOGGER.error(f"Error en render_message: {e}")
 
 def update_standard_ui(snapshot: Dict[str, Any]) -> None:
     """Actualiza la interfaz estándar delegando al driver."""
-    structure = STRUCTURE_MANAGER.get_structure()
-    
-    # 1. Verificar Estado "Busy" del sistema
-    sys_status = structure.get("system_status", {})
-    if sys_status.get("is_busy"):
-        msg = sys_status.get("busy_message") or "PROCESANDO..."
-        show_loading_ui(50, msg)
-        return
+    with _ui_lock:
+        try:
+            structure = STRUCTURE_MANAGER.get_structure()
+            
+            # 1. Verificar Estado "Busy" del sistema
+            sys_status = structure.get("system_status", {})
+            if sys_status.get("is_busy"):
+                msg = sys_status.get("busy_message") or "PROCESANDO..."
+                # Nota: Aquí llamamos a show_loading_ui que ya tiene el lock.
+                # En Python, threading.Lock() NO es reentrante por defecto.
+                # Deberíamos usar RLock() si vamos a anidar.
+                _display_manager.driver.render_loading(50, msg)
+                return
 
-    # 2. Render normal delegando al driver activo
-    if _display_manager.driver:
-        server_online = check_server_status()
-        _display_manager.driver.render_standard(snapshot, structure, server_online)
+            # 2. Render normal delegando al driver activo
+            if _display_manager.driver:
+                server_online = check_server_status()
+                _display_manager.driver.render_standard(snapshot, structure, server_online)
+        except Exception as e:
+            LOGGER.error(f"Error actualizando standard UI: {e}", exc_info=True)
 
 def _heartbeat_callback(snapshot: Dict[str, Any]):
     update_standard_ui(snapshot)

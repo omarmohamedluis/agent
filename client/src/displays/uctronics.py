@@ -1,6 +1,7 @@
 import time
 import logging
-from PIL import Image
+import threading
+from PIL import Image, ImageDraw, ImageFont
 from smbus2 import SMBus, i2c_msg
 from .base import DisplayDriver
 
@@ -30,6 +31,8 @@ class UCTRONICS_RM0004Driver(DisplayDriver):
         self._bus = None
         self._width = ST7735_WIDTH
         self._height = ST7735_HEIGHT
+        self._lock = threading.Lock()
+        self._font_cache = {}
 
     def init(self):
         try:
@@ -89,31 +92,32 @@ class UCTRONICS_RM0004Driver(DisplayDriver):
             time.sleep(0.0007) # From C code usleep(700)
 
     def display(self, image: Image.Image):
-        if not self._bus:
-            return
-        
-        # Resize if necessary
-        if image.size != (self._width, self._height):
-            image = image.resize((self._width, self._height), Image.LANCZOS)
-        
-        # Convert to RGB565
-        image = image.convert("RGB")
-        pixels = image.load()
-        
-        data = bytearray()
-        for y in range(self._height):
-            for x in range(self._width):
-                r, g, b = pixels[x, y]
-                # RGB888 to RGB565
-                color = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
-                data.append((color >> 8) & 0xFF)
-                data.append(color & 0xFF)
-        
-        self._set_address_window(0, 0, self._width - 1, self._height - 1)
-        self._write_command(BURST_WRITE_REG, 0x00, 0x01)
-        self._burst_transfer(data)
-        self._write_command(BURST_WRITE_REG, 0x00, 0x00)
-        self._write_command(SYNC_REG, 0x00, 0x01)
+        with self._lock:
+            if not self._bus:
+                return
+            
+            # Resize if necessary
+            if image.size != (self._width, self._height):
+                image = image.resize((self._width, self._height), Image.LANCZOS)
+            
+            # Convert to RGB565
+            image = image.convert("RGB")
+            pixels = image.load()
+            
+            data = bytearray()
+            for y in range(self._height):
+                for x in range(self._width):
+                    r, g, b = pixels[x, y]
+                    # RGB888 to RGB565
+                    color = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+                    data.append((color >> 8) & 0xFF)
+                    data.append(color & 0xFF)
+            
+            self._set_address_window(0, 0, self._width - 1, self._height - 1)
+            self._write_command(BURST_WRITE_REG, 0x00, 0x01)
+            self._burst_transfer(data)
+            self._write_command(BURST_WRITE_REG, 0x00, 0x00)
+            self._write_command(SYNC_REG, 0x00, 0x01)
 
     def width(self) -> int:
         return self._width
@@ -130,19 +134,25 @@ class UCTRONICS_RM0004Driver(DisplayDriver):
 
     def _get_font(self, size: int):
         from PIL import ImageFont
+        key = f"P_{size}"
+        if key in self._font_cache: return self._font_cache[key]
         try:
             from pathlib import Path
             fpath = Path(__file__).resolve().parents[2] / "web" / "utilities" / "PixelOperator.ttf"
-            return ImageFont.truetype(str(fpath), size)
+            self._font_cache[key] = ImageFont.truetype(str(fpath), size)
+            return self._font_cache[key]
         except Exception:
             return ImageFont.load_default()
 
     def _get_icon_font(self, size: int):
         from PIL import ImageFont
+        key = f"I_{size}"
+        if key in self._font_cache: return self._font_cache[key]
         try:
             from pathlib import Path
             fpath = Path(__file__).resolve().parents[2] / "web" / "utilities" / "lineawesome-webfont.ttf"
-            return ImageFont.truetype(str(fpath), size)
+            self._font_cache[key] = ImageFont.truetype(str(fpath), size)
+            return self._font_cache[key]
         except Exception:
             return ImageFont.load_default()
 
@@ -156,7 +166,6 @@ class UCTRONICS_RM0004Driver(DisplayDriver):
             return None
 
     def render_loading(self, percent: int, label: str):
-        from PIL import ImageDraw, Image
         img = Image.new("RGB", (self._width, self._height), (0, 0, 0))
         
         # Draw Logo at bottom
@@ -200,7 +209,6 @@ class UCTRONICS_RM0004Driver(DisplayDriver):
         self.display(img)
 
     def render_message(self, text: str, is_error: bool = False):
-        from PIL import ImageDraw, Image
         img = Image.new("RGB", (self._width, self._height), (0, 0, 0))
         
         # Draw Logo at bottom
@@ -229,7 +237,6 @@ class UCTRONICS_RM0004Driver(DisplayDriver):
         self.display(img)
 
     def render_standard(self, snapshot: dict, structure: dict, server_online: bool):
-        from PIL import ImageDraw, Image
         img = Image.new("RGB", (self._width, self._height), (0, 0, 0))
         draw = ImageDraw.Draw(img)
         
@@ -275,29 +282,38 @@ class UCTRONICS_RM0004Driver(DisplayDriver):
         line_h = 20
         # CPU
         draw.text((4, y), "CPU:", font=f_b, fill=CLR_GREEN)
-        clr_cpu = CLR_RED if cpu > 70 else CLR_BLUE
-        draw.text((50, y), f"{cpu:.0f}%", font=f_b, fill=clr_cpu)
+        cpu_val = f"{cpu:.0f}%" if cpu is not None else "--"
+        clr_cpu = CLR_RED if (cpu is not None and cpu > 70) else CLR_BLUE
+        draw.text((50, y), cpu_val, font=f_b, fill=clr_cpu)
+        
+        # VLAN (if active)
+        vlan = snapshot.get("active_vlan")
+        if vlan is not None:
+            draw.text((95, y), "VLAN:", font=f_b, fill=CLR_GREEN)
+            draw.text((135, y), f"{vlan}", font=f_b, fill=CLR_BLUE)
         
         # TMP
         draw.text((4, y + line_h), "TMP:", font=f_b, fill=CLR_GREEN)
-        clr_tmp = CLR_RED if temp > 65 else CLR_BLUE
-        draw.text((50, y + line_h), f"{temp:.0f}C", font=f_b, fill=clr_tmp)
+        temp_val = f"{temp:.0f}C" if temp is not None else "--"
+        clr_tmp = CLR_RED if (temp is not None and temp > 65) else CLR_BLUE
+        draw.text((50, y + line_h), temp_val, font=f_b, fill=clr_tmp)
         
         # NET
         ifaces = snapshot.get("ifaces", [])
         primary = None
         for iface in ifaces:
-            if not iface.get("ip", "").startswith("127"):
+            ip = iface.get("ip")
+            if ip and not ip.startswith("127"):
                 primary = iface
                 break
         
         if primary:
-            ip = primary.get("cidr") or primary.get("ip") or "-"
-            name = primary.get("name", "").upper()[:4]
-            net_txt = f"{name}: {ip}"
+            ip_str = primary.get("cidr") or primary.get("ip") or "-"
+            name = (primary.get("name") or "").upper()[:4]
+            draw.text((4, y + line_h * 2), f"{name}:", font=f_b, fill=CLR_GREEN)
+            draw.text((50, y + line_h * 2), ip_str, font=f_b, fill=CLR_BLUE)
         else:
-            net_txt = "NET: -"
-
-        draw.text((4, y + line_h * 2), net_txt, font=f_b, fill=CLR_BLUE)
+            draw.text((4, y + line_h * 2), "NET:", font=f_b, fill=CLR_GREEN)
+            draw.text((50, y + line_h * 2), "-", font=f_b, fill=CLR_BLUE)
         
         self.display(img)

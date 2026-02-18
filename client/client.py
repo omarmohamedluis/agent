@@ -573,7 +573,7 @@ def main():
     # 0.2 Iniciar Heartbeat
     start_heartbeat()
     
-    # 1. Init UI
+    # 1. Init UI (Explicit loading screens)
     ui.show_loading_ui(10, "INICIANDO...")
     
     # 1.5 Forzar Actualización de Interfaces de Red (Poblar structure.json)
