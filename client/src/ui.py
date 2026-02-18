@@ -95,12 +95,26 @@ def _draw_header_with_progress(img: Image.Image, percent: int, label: str):
     tx = max(2, (OLED_W - tw) // 2)
     ty = max(0, (HEADER_H - th) // 2)
     
-    # Barra de progreso en Amarillo (con texto en Negro encima)
+    # 1. Dibujamos la barra amarilla (si existe)
     bar_w = int((percent / 100.0) * OLED_W)
     if bar_w > 0:
         draw.rectangle([0, 0, bar_w - 1, HEADER_H - 1], fill=CLR_YELLOW)
         
-    draw.text((tx, ty), text, font=_FONT, fill=CLR_WHITE if bar_w == 0 else CLR_BLACK)
+    # 2. Dibujamos el texto en Blanco (se verá sobre el fondo negro)
+    draw.text((tx, ty), text, font=_FONT, fill=CLR_WHITE)
+    
+    # 3. Si hay barra, usamos una máscara para que el texto sobre el amarillo sea Negro
+    if bar_w > 0:
+        # Máscara que cubre solo la barra
+        bar_mask = Image.new("L", (OLED_W, HEADER_H), 0)
+        ImageDraw.Draw(bar_mask).rectangle([0, 0, bar_w - 1, HEADER_H - 1], fill=255)
+        
+        # Imagen temporal con fondo amarillo y texto negro
+        temp_header = Image.new("RGB", (OLED_W, HEADER_H), CLR_YELLOW)
+        ImageDraw.Draw(temp_header).text((tx, ty), text, font=_FONT, fill=CLR_BLACK)
+        
+        # Pegamos solo el trozo de la barra sobre la imagen original
+        img.paste(temp_header, (0, 0), mask=bar_mask)
 
 def _draw_header_error(img: Image.Image, label: str):
     draw = ImageDraw.Draw(img)
