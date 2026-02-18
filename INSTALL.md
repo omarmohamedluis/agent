@@ -28,15 +28,15 @@ git submodule update --init --recursive
 
 ### 3. Instalar dependencias del Cliente
 ```bash
-# Instalar dependencias de sistema y Python
-sudo apt install -y python3-pip python3-venv NetworkManager
+# Instalar dependencias de sistema y Python (incluye librerías para compilar python-rtmidi)
+sudo apt install -y python3-pip python3-venv network-manager libasound2-dev libjack-jackd2-dev
 
 # Crear y activar entorno virtual
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Instalar librerías de Python
-pip install fastapi uvicorn jinja2 luma.oled psutil netifaces mido python-rtmidi python-osc debugpy
+# Instalar librerías de Python desde el archivo de requerimientos
+pip install -r client/requirements.txt
 ```
 
 ### 4. Compilar y preparar Satellite
@@ -65,7 +65,7 @@ Descarga e instala la última versión de **Python 3.10+** desde [python.org](ht
 ### 2. Instalar dependencias
 Abre una terminal (PowerShell o CMD) en la carpeta del proyecto y ejecuta:
 ```powershell
-pip install fastapi uvicorn jinja2 pydantic
+pip install -r server/requirements.txt
 ```
 
 ### 3. Ejecutar el Servidor

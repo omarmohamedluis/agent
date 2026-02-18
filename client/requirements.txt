@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+jinja2
+luma.oled
+psutil
+netifaces
+mido
+python-rtmidi
+python-osc
+debugpy
