@@ -318,6 +318,12 @@ def _sender_loop() -> None:
         if res:
             global _last_contact_time
             _last_contact_time = time.time()
+            
+            # Sync ID from server
+            server_id = res.get("id")
+            if server_id is not None:
+                STRUCTURE_MANAGER.update_identity_index(server_id)
+
             if res.get("command"):
                 _handle_command(res)
         
@@ -352,6 +358,12 @@ def handshake() -> bool:
 
         global _last_contact_time
         _last_contact_time = time.time()
+        
+        # Sync ID from server
+        server_id = res.get("id")
+        if server_id is not None:
+            STRUCTURE_MANAGER.update_identity_index(server_id)
+
         log_print("info", module_name, "Handshake ACCEPTED by Director (HTTP).")
         
         # Check for immediate command returned in handshake

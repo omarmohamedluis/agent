@@ -184,6 +184,16 @@ class StructureManager:
             if not identity["name"] or identity["name"].strip() == "":
                 identity["name"] = identity["host"]
 
+    def update_identity_index(self, new_index: int) -> bool:
+        """Actualiza el índice de identidad (ID) si es diferente al actual."""
+        with self._data_lock:
+            identity = self._data.setdefault("identity", {})
+            current_index = identity.get("index")
+            if current_index != new_index:
+                identity["index"] = new_index
+                return self.save_structure()
+        return False
+
     def update_network_interfaces(self, interfaces: List[Dict[str, Any]], main_nic: Optional[str] = None) -> bool:
         """Actualiza interfaces de red y main_nic. Retorna True si hubo cambios."""
         with self._data_lock:

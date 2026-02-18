@@ -180,8 +180,10 @@ async def handshake(payload: HandshakePayload):
         })
 
     # 4. Return ALL configs and any pending command
+    agent_data = storage.get_agents().get(payload.serial, {})
     return {
         "status": "ok",
+        "id": agent_data.get("id"), # Include the assigned ID
         "configs": storage.get_configs(),
         "command": cmd
     }
@@ -252,9 +254,9 @@ async def heartbeat(payload: HeartbeatPayload):
             }
         })
         
-        return {"status": "ok", "command": cmd}
+        return {"status": "ok", "id": agent_data.get("id"), "command": cmd}
     
-    return {"status": "ok"}
+    return {"status": "ok", "id": agent_data.get("id")}
 
 @app.get("/api/agents")
 async def get_agents():

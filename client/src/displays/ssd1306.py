@@ -159,7 +159,11 @@ class SSD1306Driver(DisplayDriver):
                 active_name = s.get("name", "ACTIVE")
                 break
         
-        svc_txt = active_name.upper()[:12]
+        if not server_online:
+            svc_txt = "OFFLINE"
+        else:
+            svc_txt = active_name.upper()[:12]
+            
         sw, sh = draw.textbbox((0, 0), svc_txt, font=f_h)[2:]
         draw.text(((self._width - sw)//2, (16 - sh)//2), svc_txt, font=f_h, fill=0)
         
@@ -176,31 +180,41 @@ class SSD1306Driver(DisplayDriver):
         cpu = snapshot.get("cpu", 0)
         temp = snapshot.get("temp", 0)
         cpu_val = f"CPU: {cpu:.0f}%" if cpu is not None else "CPU: --"
-        draw.text((4, 20), cpu_val, font=f_b, fill=255)
+        draw.text((4, 18), cpu_val, font=f_b, fill=255)
         
         # VLAN (if active)
         vlan = snapshot.get("active_vlan")
         if vlan is not None:
-            v_txt = f"VLAN:{vlan}"
+            v_txt = f"V:{vlan}"
             vw = draw.textbbox((0, 0), v_txt, font=f_b)[2]
-            draw.text((self._width - vw - 2, 20), v_txt, font=f_b, fill=255)
+            draw.text((self._width - vw - 2, 18), v_txt, font=f_b, fill=255)
             
-        temp_val = f"TEMP: {temp:.0f}C" if temp is not None else "TEMP: --"
-        draw.text((4, 34), temp_val, font=f_b, fill=255)
+        temp_val = f"TMP: {temp:.0f}C" if temp is not None else "TMP: --"
+        draw.text((4, 32), temp_val, font=f_b, fill=255)
         
-        ip_val = "DISCONNECTED"
-        ifaces = snapshot.get("ifaces", [])
-        # Prio: eth, wlan, others
-        sorted_if = sorted(ifaces, key=lambda x: (0 if "eth" in (x.get("name") or "").lower() else 1 if "wlan" in (x.get("name") or "").lower() else 2))
-        if sorted_if:
-            ip = sorted_if[0].get("ip") or "-"
-            name = sorted_if[0].get("name", "").upper()[:4]
+        # Network Info
+        main_nic = snapshot.get("main_nic")
+        main_nic_ip = snapshot.get("main_nic_ip")
+        
+        if main_nic:
+            name = main_nic.upper()[:4]
+            ip = main_nic_ip or "-"
             ip_val = f"{name} {ip}"
+        else:
+            # Fallback to first available with IP
+            ifaces = snapshot.get("ifaces", [])
+            sorted_if = sorted(ifaces, key=lambda x: (0 if "eth" in (x.get("name") or "").lower() else 1 if "wlan" in (x.get("name") or "").lower() else 2))
+            if sorted_if:
+                ip = sorted_if[0].get("ip") or "-"
+                name = sorted_if[0].get("name", "").upper()[:4]
+                ip_val = f"{name} {ip}"
+            else:
+                ip_val = "DISCONNECTED"
 
         # Text wrap / trim for IP
         while draw.textbbox((0,0), ip_val, font=f_b)[2] > self._width - 4 and len(ip_val) > 10:
             ip_val = ip_val[:-1]
             
-        draw.text((4, 48), ip_val, font=f_b, fill=255)
+        draw.text((4, 46), ip_val, font=f_b, fill=255)
         
         self.display(img)

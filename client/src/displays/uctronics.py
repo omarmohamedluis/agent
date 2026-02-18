@@ -85,11 +85,22 @@ class UCTRONICS_RM0004Driver(DisplayDriver):
         length = len(data)
         offset = 0
         while offset < length:
-            chunk_size = min(length - offset, BURST_MAX_LENGTH)
-            msg = i2c_msg.write(self._address, data[offset:offset + chunk_size])
-            self._bus.i2c_rdwr(msg)
-            offset += chunk_size
-            time.sleep(0.0007) # From C code usleep(700)
+            try:
+                chunk_size = min(length - offset, BURST_MAX_LENGTH)
+                msg = i2c_msg.write(self._address, data[offset:offset + chunk_size])
+                self._bus.i2c_rdwr(msg)
+                offset += chunk_size
+                time.sleep(0.0007) # From C code usleep(700)
+            except Exception as e:
+                LOGGER.error(f"I2C Burst Error: {e}")
+                # Try to re-init bus if it fails
+                try:
+                    self._bus.close()
+                    self._bus = SMBus(self._port)
+                except:
+                    pass
+                time.sleep(0.01)
+                continue
 
     def display(self, image: Image.Image):
         with self._lock:
@@ -261,7 +272,11 @@ class UCTRONICS_RM0004Driver(DisplayDriver):
                 active_name = s.get("name", "ACTIVE")
                 break
         
-        svc_txt = active_name.upper()[:12]
+        if not server_online:
+            svc_txt = "OFFLINE"
+        else:
+            svc_txt = active_name.upper()[:12]
+            
         sw, sh = draw.textbbox((0, 0), svc_txt, font=f_h)[2:]
         draw.text(((self._width - sw)//2, (20 - sh)//2), svc_txt, font=f_h, fill=CLR_BLACK)
         
@@ -289,8 +304,9 @@ class UCTRONICS_RM0004Driver(DisplayDriver):
         # VLAN (if active)
         vlan = snapshot.get("active_vlan")
         if vlan is not None:
-            draw.text((95, y), "VLAN:", font=f_b, fill=CLR_GREEN)
-            draw.text((135, y), f"{vlan}", font=f_b, fill=CLR_BLUE)
+            v_label = "VL:"
+            draw.text((95, y), v_label, font=f_b, fill=CLR_GREEN)
+            draw.text((125, y), f"{vlan}", font=f_b, fill=CLR_BLUE)
         
         # TMP
         draw.text((4, y + line_h), "TMP:", font=f_b, fill=CLR_GREEN)
@@ -299,21 +315,31 @@ class UCTRONICS_RM0004Driver(DisplayDriver):
         draw.text((50, y + line_h), temp_val, font=f_b, fill=clr_tmp)
         
         # NET
-        ifaces = snapshot.get("ifaces", [])
-        primary = None
-        for iface in ifaces:
-            ip = iface.get("ip")
-            if ip and not ip.startswith("127"):
-                primary = iface
-                break
+        main_nic = snapshot.get("main_nic")
+        main_nic_ip = snapshot.get("main_nic_ip")
         
-        if primary:
-            ip_str = primary.get("cidr") or primary.get("ip") or "-"
-            name = (primary.get("name") or "").upper()[:4]
+        if main_nic:
+            name = (main_nic or "").upper()[:4]
+            ip_str = main_nic_ip or "-"
             draw.text((4, y + line_h * 2), f"{name}:", font=f_b, fill=CLR_GREEN)
             draw.text((50, y + line_h * 2), ip_str, font=f_b, fill=CLR_BLUE)
         else:
-            draw.text((4, y + line_h * 2), "NET:", font=f_b, fill=CLR_GREEN)
-            draw.text((50, y + line_h * 2), "-", font=f_b, fill=CLR_BLUE)
+            # Fallback
+            ifaces = snapshot.get("ifaces", [])
+            primary = None
+            for iface in ifaces:
+                ip = iface.get("ip")
+                if ip and not ip.startswith("127"):
+                    primary = iface
+                    break
+            
+            if primary:
+                name = (primary.get("name") or "").upper()[:4]
+                ip_str = primary.get("ip") or "-"
+                draw.text((4, y + line_h * 2), f"{name}:", font=f_b, fill=CLR_GREEN)
+                draw.text((50, y + line_h * 2), ip_str, font=f_b, fill=CLR_BLUE)
+            else:
+                draw.text((4, y + line_h * 2), "NET:", font=f_b, fill=CLR_GREEN)
+                draw.text((50, y + line_h * 2), "-", font=f_b, fill=CLR_BLUE)
         
         self.display(img)
