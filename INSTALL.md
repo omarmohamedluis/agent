@@ -9,14 +9,21 @@ Este documento detalla los pasos para instalar el Cliente (Raspberry Pi) y el Se
 Sigue estos pasos en una Raspberry Pi con el sistema operativo (Raspberry Pi OS Lite 64-bit recomendado) recién instalado.
 
 ### Opción A: Instalación Automática (Recomendada)
-Copia y pega este bloque para iniciar el instalador interactivo:
+
+#### Si YA has clonado el repositorio:
+Si ya estás dentro de la carpeta `omi-agent`, simplemente ejecuta:
+```bash
+./scripts/install_pi.sh
+```
+
+#### Si es una instalación desde CERO (sin clonar):*
 ```bash
 # Descargar y ejecutar el instalador
-curl -fsSL https://raw.githubusercontent.com/omarmohamedluis/agent.git/v2/scripts/install_pi.sh -o install_pi.sh
+curl -fsSL https://raw.githubusercontent.com/omarmohamedluis/agent/v2-server-implementation/scripts/install_pi.sh -o install_pi.sh
 chmod +x install_pi.sh
 ./install_pi.sh
 ```
-*Nota: El script te preguntará qué rama instalar y configurará todo automáticamente.*
+*El script te preguntará qué rama instalar y configurará todo automáticamente.*
 
 ### Opción B: Instalación Manual
 Si prefieres hacerlo paso a paso:
