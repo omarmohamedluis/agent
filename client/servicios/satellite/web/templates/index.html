@@ -502,8 +502,8 @@
 
         async function init() {
             // Update Title with Hostname
-            document.getElementById('pageTitle').innerText = `📡 Satellite @ ${window.location.hostname}`;
-            document.title = `Satellite @ ${window.location.hostname}`;
+            document.getElementById('pageTitle').innerText = `📡 Satellite @ {{ hostname }}`;
+            document.title = `Satellite @ {{ hostname }}`;
 
             connectWS();
             await checkStatus(); // Primero checking de estado para saber si es config

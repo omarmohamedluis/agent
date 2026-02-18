@@ -75,7 +75,9 @@ def get_preset_data(name: str):
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    import socket
+    hostname = socket.gethostname() or "Satellite"
+    return templates.TemplateResponse("index.html", {"request": request, "hostname": hostname})
 
 @app.get("/api/presets")
 async def list_presets():

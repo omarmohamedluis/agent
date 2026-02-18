@@ -1,13 +1,13 @@
 """
-Interfaz de Usuario (UI).
-Gestiona la pantalla OLED, mostrando el estado del sistema, carga, errores
-y la información de red. Se suscribe al heartbeat para actualizaciones.
+Interfaz de Usuario (UI) Simplificada.
+Centraliza el dibujo y la visualización en la pantalla (OLED SSD1306 o Color UCTRONICS).
 """
-import json
 import time
+import logging
+import threading
 from pathlib import Path
-from typing import Any, Dict
-import sys
+from typing import Any, Dict, Optional
+from PIL import Image, ImageDraw, ImageFont
 
 from heartbeat import (
     get_heartbeat_snapshot,
@@ -15,315 +15,235 @@ from heartbeat import (
     unregister_heartbeat_listener,
     start_heartbeat
 )
-from PIL import Image, ImageDraw, ImageFont
 from net_com_handler import check_server_status
-from logger import log_event, log_print
 from display_manager import DisplayManager
 from structure_manager import get_structure_manager
 
+# --- Configuración y Constantes ---
+LOGGER = logging.getLogger("omiclient.ui")
 STRUCTURE_MANAGER = get_structure_manager()
-BASE_DIR = Path(__file__).resolve().parents[1]  # reaches client/
-ASSETS_PATH  = BASE_DIR / "web" / "utilities"
+BASE_DIR = Path(__file__).resolve().parents[1]
+ASSETS_PATH = BASE_DIR / "web" / "utilities"
 
-# -------- Hardware --------
-_display_manager = DisplayManager(driver_name="ssd1306")
-
-try:
-    _display_manager.init()
-except Exception as e:
-    # We log but continue, because DisplayManager handles fallbacks
-    # and we definitely need it initialized to get OLED_W/H.
-    pass
-
-OLED_W = _display_manager.width
-OLED_H = _display_manager.height
 HEADER_H = 16
-
-_standard_listener_registered = False
-
-module_name = "omiclient.ui"
-
-# -------- Colores y Estilos (RGB) --------
+# Colores
 CLR_BLACK = (0, 0, 0)
 CLR_WHITE = (255, 255, 255)
 CLR_YELLOW = (255, 255, 0)
 CLR_GREEN = (0, 255, 0)
-CLR_BLUE = (0, 191, 255)  # Celeste/Azul claro para mejor legibilidad
+CLR_BLUE = (0, 191, 255)
 CLR_RED = (255, 0, 0)
 
-# -------- Carga de Assets --------
-try:
-    # Aumentamos tamaño de fuente para 160x80 (de 14 a 18)
-    _FONT = ImageFont.truetype(str(ASSETS_PATH / "PixelOperator.ttf"), 18)
-    _ICON_FONT = ImageFont.truetype(str(ASSETS_PATH / "lineawesome-webfont.ttf"), 20)
-    _ICON = Image.open(ASSETS_PATH / "omarpi.png")
-except Exception as e:
-    log_event("error", module_name, f"Fallo al cargar assets: {e}")
-    _FONT = ImageFont.load_default()
-    _ICON_FONT = ImageFont.load_default()
-    _ICON = None
+# --- Estado Global de UI ---
+_display_manager = DisplayManager(driver_name="ssd1306")
+_standard_listener_registered = False
+_font_cache = {}
+_is_color = False
 
+def _get_font(size: int, font_name: str = "PixelOperator.ttf") -> ImageFont.FreeTypeFont:
+    key = f"{font_name}_{size}"
+    if key in _font_cache: return _font_cache[key]
+    try:
+        f = ImageFont.truetype(str(ASSETS_PATH / font_name), size)
+        _font_cache[key] = f
+        return f
+    except Exception:
+        return ImageFont.load_default()
 
-# -------- Lienzos (Canvases) --------
-def _base_canvas() -> Image.Image:
-    """Fondo negro con icono en la parte inferior (para Carga/Error/Apagado)."""
-    img = Image.new("RGB", (OLED_W, OLED_H), CLR_BLACK)
-    if _ICON:
-        max_w, max_h = OLED_W, OLED_H - HEADER_H
-        w, h = _ICON.size
-        scale = min(max_w / w, max_h / h)
-        nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
-        icon = _ICON.resize((nw, nh), Image.LANCZOS)
-        # Convertimos icono a RGB si es necesario para pegarlo bien
-        if icon.mode != "RGB":
-            icon = icon.convert("RGB")
-        x = (OLED_W - nw) // 2
-        y = OLED_H - nh
-        img.paste(icon, (x, y))
+def _get_icon_font(size: int) -> ImageFont.FreeTypeFont:
+    return _get_font(size, "lineawesome-webfont.ttf")
+
+def _new_image() -> Image.Image:
+    """Crea una imagen base según el tipo de pantalla."""
+    w, h = _display_manager.width, _display_manager.height
+    mode = "RGB" if _is_color else "1"
+    return Image.new(mode, (w, h), (0,0,0) if _is_color else 0)
+
+def init():
+    """Inicializa el hardware de pantalla."""
+    global _is_color
+    try:
+        _display_manager.init()
+        _is_color = "uctronics" in _display_manager.driver_name.lower()
+        LOGGER.info(f"UI inicializada: {_display_manager.driver_name} (Color: {_is_color})")
+    except Exception as e:
+        LOGGER.error(f"Fallo al inicializar pantalla: {e}")
+
+# --- Funciones de Dibujo (Centralizadas) ---
+
+def render_loading(percent: int, label: str) -> Image.Image:
+    img = _new_image()
+    draw = ImageDraw.Draw(img)
+    w, h = img.size
+    
+    # Header area as progress bar
+    bar_w = int((percent / 100.0) * w)
+    clr_primary = CLR_YELLOW if _is_color else (255 if not _is_color else CLR_WHITE)
+    
+    # Draw bar
+    draw.rectangle([0, 0, bar_w, HEADER_H], fill=clr_primary)
+    draw.rectangle([0, 0, w - 1, HEADER_H], outline=clr_primary)
+    
+    # Text on top
+    font = _get_font(12 if not _is_color else 14)
+    txt = f"LOADING {percent}%"
+    draw.text((2, 0), txt, font=font, fill=CLR_BLACK if bar_w > 60 else clr_primary)
+    
+    # Label
+    y = HEADER_H + 4
+    draw.text((2, y), (label or "")[:20], font=font, fill=clr_primary)
     return img
 
-def _new_frame() -> Image.Image:
-    """Frame completamente negro (sin icono)."""
-    return Image.new("RGB", (OLED_W, OLED_H), CLR_BLACK)
-
-# -------- Cabeceras (Headers) --------
-def _draw_header_with_progress(img: Image.Image, percent: int, label: str):
-    percent = max(0, min(100, int(percent)))
+def render_message(label: str, is_error: bool = True) -> Image.Image:
+    img = _new_image()
     draw = ImageDraw.Draw(img)
-    text = label or ""
-    tw, th = draw.textbbox((0, 0), text, font=_FONT)[2:]
-    tx = max(2, (OLED_W - tw) // 2)
-    ty = max(0, (HEADER_H - th) // 2)
+    w, h = img.size
     
-    # 1. Dibujamos la barra amarilla (si existe)
-    bar_w = int((percent / 100.0) * OLED_W)
-    if bar_w > 0:
-        draw.rectangle([0, 0, bar_w - 1, HEADER_H - 1], fill=CLR_YELLOW)
-        
-    # 2. Dibujamos el texto en Blanco (se verá sobre el fondo negro)
-    draw.text((tx, ty), text, font=_FONT, fill=CLR_WHITE)
+    header_clr = CLR_RED if (is_error and _is_color) else CLR_WHITE
+    txt_clr = CLR_WHITE if not _is_color else CLR_WHITE
     
-    # 3. Si hay barra, usamos una máscara para que el texto sobre el amarillo sea Negro
-    if bar_w > 0:
-        # Máscara que cubre solo la barra
-        bar_mask = Image.new("L", (OLED_W, HEADER_H), 0)
-        ImageDraw.Draw(bar_mask).rectangle([0, 0, bar_w - 1, HEADER_H - 1], fill=255)
-        
-        # Imagen temporal con fondo amarillo y texto negro
-        temp_header = Image.new("RGB", (OLED_W, HEADER_H), CLR_YELLOW)
-        ImageDraw.Draw(temp_header).text((tx, ty), text, font=_FONT, fill=CLR_BLACK)
-        
-        # Pegamos solo el trozo de la barra sobre la imagen original
-        img.paste(temp_header, (0, 0), mask=bar_mask)
+    draw.rectangle([0, 0, w, HEADER_H], fill=header_clr)
+    font_h = _get_font(12 if not _is_color else 14)
+    draw.text((2, 0), "SYSTEM MSG", font=font_h, fill=CLR_BLACK if not _is_color else CLR_WHITE)
+    
+    font_b = _get_font(10 if not _is_color else 14)
+    # Simple wrap
+    words = (label or "").split()
+    y = HEADER_H + 4
+    line = ""
+    for word in words:
+        if draw.textbbox((0,0), line + word, font=font_b)[2] < w - 4:
+            line += word + " "
+        else:
+            draw.text((2, y), line, font=font_b, fill=txt_clr)
+            y += 12
+            line = word + " "
+    draw.text((2, y), line, font=font_b, fill=txt_clr)
+    return img
 
-def _draw_header_error(img: Image.Image, label: str):
+def render_standard(snapshot: Dict[str, Any], structure: Dict[str, Any], server_online: bool) -> Image.Image:
+    img = _new_image()
     draw = ImageDraw.Draw(img)
-    draw.rectangle([0, 0, OLED_W - 1, HEADER_H - 1], fill=CLR_RED)
-    text = label or "ERROR"
-    tw, th = draw.textbbox((0, 0), text, font=_FONT)[2:]
-    tx = max(2, (OLED_W - tw) // 2)
-    ty = max(0, (HEADER_H - th) // 2)
-    draw.text((tx, ty), text, font=_FONT, fill=CLR_WHITE)
+    w, h = img.size
+    
+    header_bg = CLR_YELLOW if _is_color else 255
+    header_fg = CLR_BLACK
+    body_fg = CLR_WHITE if _is_color else 255
+    
+    # 1. Header
+    draw.rectangle([0, 0, w, HEADER_H], fill=header_bg)
+    
+    f_h = _get_font(10 if not _is_color else 14)
+    # Index
+    idx = structure.get("identity", {}).get("index", "--")
+    draw.text((2, 1), f"#{idx}", font=f_h, fill=header_fg)
+    
+    # Active App Name
+    services = structure.get("services", [])
+    active_name = "STANDBY"
+    if isinstance(services, list):
+        for s in services:
+            if s.get("running"):
+                active_name = s.get("name", "ACTIVE")
+                break
+    
+    svc_txt = active_name.upper()[:10]
+    sw = draw.textbbox((0, 0), svc_txt, font=f_h)[2]
+    draw.text(((w - sw)//2, 1), svc_txt, font=f_h, fill=header_fg)
+    
+    # Wifi Icon
+    icon_f = _get_icon_font(12 if not _is_color else 14)
+    glyph = "\uf1eb"
+    iw = draw.textbbox((0,0), glyph, font=icon_f)[2]
+    ix = w - iw - 2
+    draw.text((ix, 0), glyph, font=icon_f, fill=header_fg)
+    if not server_online:
+        draw.line([(ix, 0), (ix+iw, HEADER_H)], fill=header_fg, width=1)
 
-def _draw_wifi_icon(draw: ImageDraw.ImageDraw, ok: bool, color: tuple):
-    glyph = "\uf1eb"  # icono wifi
-    gw, gh = draw.textbbox((0, 0), glyph, font=_ICON_FONT)[2:]
-    x = OLED_W - gw - 2
-    y = max(0, (HEADER_H - gh) // 2)
-    draw.text((x, y), glyph, font=_ICON_FONT, fill=color)
-    if not ok:
-        x0, y0 = x, y
-        x1, y1 = x + gw, y + gh
-        draw.line([(x0, y0), (x1, y1)], fill=CLR_RED, width=2)
+    # 2. Body
+    y = HEADER_H + 4
+    line_h = 12 if not _is_color else 22
+    f_b = _get_font(10 if not _is_color else 16)
 
-def _draw_header_text_left_center_right_inverted(img: Image.Image, left:str, center:str, right_wifi_ok: bool):
-    """Cabecera Amarilla, texto Negro."""
-    draw = ImageDraw.Draw(img)
-    draw.rectangle([0, 0, OLED_W - 1, HEADER_H - 1], fill=CLR_YELLOW)
-    # IZQUIERDA
-    l_text = left or ""
-    l_th = draw.textbbox((0,0), l_text, font=_FONT)[3] - draw.textbbox((0,0), l_text, font=_FONT)[1]
-    draw.text((2, max(0, (HEADER_H - l_th)//2)), l_text, font=_FONT, fill=CLR_BLACK)
-    # DERECHA (icono negro)
-    _draw_wifi_icon(draw, ok=right_wifi_ok, color=CLR_BLACK)
-    # CENTRO
-    c_text = center or ""
-    c_tw, c_th = draw.textbbox((0,0), c_text, font=_FONT)[2:]
-    cx = max(2, (OLED_W - c_tw)//2)
-    cy = max(0, (HEADER_H - c_th)//2)
-    draw.text((cx, cy), c_text, font=_FONT, fill=CLR_BLACK)
+    # CPU & TEMP
+    cpu = snapshot.get("cpu", 0)
+    temp = snapshot.get("temp", 0)
+    
+    clr_cpu = CLR_BLUE if not _is_color else (CLR_RED if cpu > 70 else CLR_BLUE)
+    clr_tmp = CLR_BLUE if not _is_color else (CLR_RED if temp > 65 else CLR_BLUE)
+    label_clr = CLR_WHITE if not _is_color else CLR_GREEN
 
-# -------- Utilidades --------
+    draw.text((2, y), "CPU:", font=f_b, fill=label_clr)
+    draw.text((30 if not _is_color else 40, y), f"{cpu:.0f}%", font=f_b, fill=clr_cpu)
+    
+    draw.text((70 if not _is_color else 90, y), "TMP:", font=f_b, fill=label_clr)
+    draw.text((100 if not _is_color else 130, y), f"{temp:.0f}C", font=f_b, fill=clr_tmp)
+    
+    # IP
+    y += line_h
+    ifaces = snapshot.get("ifaces", [])
+    ip_val = "DISCONNECTED"
+    for iface in ifaces:
+        ip = iface.get("ip")
+        if ip and not ip.startswith("127"):
+            ip_val = ip
+            break
+            
+    draw.text((2, y), "IP:", font=f_b, fill=label_clr)
+    draw.text((20 if not _is_color else 30, y), ip_val, font=f_b, fill=CLR_BLUE if _is_color else body_fg)
 
-def _is_wifi_iface(name: str) -> bool:
-    if not name:
-        return False
-    n = name.lower()
-    return n.startswith("wl") or n.startswith("wlan") or n.startswith("wifi")
+    return img
 
-def _is_eth_iface(name: str) -> bool:
-    if not name:
-        return False
-    n = name.lower()
-    return n.startswith("eth") or n.startswith("en")
+# --- API Pública de UI ---
 
-def _display(img: Image.Image):
+def update_ui(img: Image.Image):
+    """Manda la imagen al hardware."""
     _display_manager.display(img)
 
-
-def _get_current_app_name() -> str:
-    try:
-        svc = STRUCTURE_MANAGER.get_active_service()
-        if svc:
-            return svc.get("name", "DESCONOCIDO").upper()
-    except Exception:
-        pass
-    return "STANDBY"
-
-
-def _get_connection_status() -> bool:
-    return check_server_status()
-
-def _standard_ui_listener(snapshot: Dict[str, Any]) -> None:
-    update_standard_ui(snapshot)
-
-
-# -------- API Pública --------
 def show_loading_ui(percent: int, label: str = ""):
     stop_standard_ui()
-    """Pantalla de carga: barra en cabecera con texto invertido; icono abajo."""
-    img = _base_canvas()
-    _draw_header_with_progress(img, percent, label)
-    _display(img)
+    img = render_loading(percent, label)
+    update_ui(img)
 
-def show_message_ui(label: str = ""):
+def show_message_ui(label: str = "", is_error: bool = False):
     stop_standard_ui()
-    """Cabecera blanca + texto ERROR (o etiqueta), icono abajo."""
-    img = _base_canvas()
-    _draw_header_error(img, label)
-    _display(img)
-
-
-def show_error_ui(label: str = "ERROR", times: int = 3, interval: float = 0.25) -> None:
-    """Muestra ErrorUI con parpadeo simple."""
-    times = max(1, int(times))
-    delay = max(0.05, float(interval))
-    for _ in range(times):
-        show_message_ui(label)
-        time.sleep(delay)
-        turn_ui_off()
-        time.sleep(delay)
-    show_message_ui(label)
-
+    img = render_message(label, is_error)
+    update_ui(img)
 
 def update_standard_ui(snapshot: Dict[str, Any]) -> None:
-    """Cabecera Amarilla y pie con CPU/TEMP (Verde/Azul/Rojo)."""
-    
-    # Verificar Estado Ocupado primero
+    # 1. Verificar Estado "Busy" del sistema
     structure = STRUCTURE_MANAGER.get_structure()
     sys_status = structure.get("system_status", {})
     if sys_status.get("is_busy"):
         msg = sys_status.get("busy_message") or "PROCESANDO..."
-        img = _base_canvas()
-        _draw_header_with_progress(img, 50, msg)
-        _display(img)
+        img = render_loading(50, msg)
+        update_ui(img)
         return
 
-    img = _new_frame()
+    # 2. Render normal
+    server_online = check_server_status()
+    img = render_standard(snapshot, structure, server_online)
+    update_ui(img)
 
-    # Cabecera Amarilla
-    index = structure.get("identity", {}).get("index", None)
-    index_label = f"#{index if index is not None else '--'}"
-    app_label = (_get_current_app_name() or "").strip().upper() or "--"
-    server_online = _get_connection_status()
-    _draw_header_text_left_center_right_inverted(
-        img,
-        index_label,
-        app_label,
-        right_wifi_ok=server_online,
-    )
+def _heartbeat_callback(snapshot: Dict[str, Any]):
+    update_standard_ui(snapshot)
 
-    # Pie (Footer)
-    draw = ImageDraw.Draw(img)
-    cpu  = snapshot.get("cpu")
-    temp = snapshot.get("temp")
-    ifaces = snapshot.get("ifaces") or []
+def start_standard_ui():
+    global _standard_listener_registered
+    if not _standard_listener_registered:
+        register_heartbeat_listener(_heartbeat_callback)
+        _standard_listener_registered = True
+    update_standard_ui(get_heartbeat_snapshot())
 
-    primary = None
-    def _get_prio(iface):
-        name = iface.get("name", "").lower()
-        if _is_eth_iface(name) and "." not in name: return 0
-        if _is_wifi_iface(name): return 1
-        if _is_eth_iface(name) and "." in name: return 2
-        return 3
-
-    if ifaces:
-        sorted_ifaces = sorted(ifaces, key=lambda x: (_get_prio(x), x.get("name", "")))
-        primary = sorted_ifaces[0]
-
-    if primary:
-        iface_name = primary.get("name") or ""
-        kind = "WIFI" if _is_wifi_iface(iface_name) else ("VLAN" if "." in iface_name else "ETH")
-        ip_cidr = primary.get("cidr") or primary.get("ip") or "-"
-        ip_label = f"{kind}: "
-        ip_value = f"{ip_cidr}"
-    else:
-        ip_label = "NET: "
-        ip_value = "-"
-
-    # Dibujado con Colores
-    line_h = 20 # Mayor espaciado para fuente 18
-    y = HEADER_H + 2
-
-    # CPU
-    cpu_val = "--" if cpu is None else f"{cpu:.0f}%"
-    cpu_color = CLR_RED if (cpu is not None and cpu > 70) else CLR_BLUE
-    draw.text((2, y), "CPU:", font=_FONT, fill=CLR_GREEN)
-    draw.text((50, y), cpu_val, font=_FONT, fill=cpu_color)
-
-    # TEMP
-    temp_val = "--" if temp is None else f"{temp:.0f}C"
-    temp_color = CLR_RED if (temp is not None and temp > 65) else CLR_BLUE
-    draw.text((2, y + line_h), "TEMP:", font=_FONT, fill=CLR_GREEN)
-    draw.text((50, y + line_h), temp_val, font=_FONT, fill=temp_color)
-
-    # NET
-    draw.text((2, y + line_h * 2), ip_label, font=_FONT, fill=CLR_GREEN)
-    draw.text((50, y + line_h * 2), ip_value, font=_FONT, fill=CLR_BLUE)
-
-    _display(img)
+def stop_standard_ui():
+    global _standard_listener_registered
+    if _standard_listener_registered:
+        unregister_heartbeat_listener(_heartbeat_callback)
+        _standard_listener_registered = False
 
 def turn_ui_off():
     stop_standard_ui()
-    """Apaga visualmente el OLED (pantalla completamente negra)."""
     _display_manager.clear()
-    log_event("info", module_name, "Pantalla OLED apagada")
 
-
-def start_standard_ui(ensure_heartbeat: bool = True) -> None:
-    """Registra la UI estándar para recibir actualizaciones del heartbeat."""
-    global _standard_listener_registered
-
-    log_print("info", module_name, "Iniciando UI Estándar")
-
-    if ensure_heartbeat:
-        start_heartbeat(start_active=True)
-
-    if not _standard_listener_registered:
-        register_heartbeat_listener(_standard_ui_listener)
-        _standard_listener_registered = True
-
-    snapshot = get_heartbeat_snapshot()
-    update_standard_ui(snapshot)
-
-
-def stop_standard_ui() -> None:
-    """Elimina la suscripción de la UI estándar y apaga la pantalla."""
-    global _standard_listener_registered
-
-    if _standard_listener_registered:
-        unregister_heartbeat_listener(_standard_ui_listener)
-        _standard_listener_registered = False
-        log_print("info", module_name, "Suscripción UI eliminada del heartbeat")
-
-log_print("info", module_name, "OLED inicializado y listo")
+# Inicializar al importar
+init()

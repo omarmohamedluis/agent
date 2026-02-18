@@ -1,4 +1,5 @@
 import logging
+import threading
 from typing import Optional
 from PIL import Image
 from displays.base import DisplayDriver
@@ -11,6 +12,7 @@ class DisplayManager:
     def __init__(self, driver_name: str = "ssd1306"):
         self.driver_name = driver_name
         self.driver: Optional[DisplayDriver] = None
+        self._lock = threading.Lock()
 
     def init(self):
         LOGGER.info(f"Initializing DisplayManager (Target: {self.driver_name})")
@@ -50,8 +52,9 @@ class DisplayManager:
         self.driver_name = "dummy"
 
     def display(self, image: Image.Image):
-        if self.driver:
-            self.driver.display(image)
+        with self._lock:
+            if self.driver:
+                self.driver.display(image)
 
     def clear(self):
         if self.driver:
