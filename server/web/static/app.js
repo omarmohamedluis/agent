@@ -70,38 +70,12 @@
     }
 
     const spawnPill = (event) => {
-        const container = document.getElementById('pill-container');
-        if (!container) return;
-
-        state.pillCount++;
-        const pill = document.createElement('div');
-        pill.className = `pill pill-${event.type}`;
-
-        let icon = '🔔';
-        if (event.type === 'heartbeat') icon = '💓';
-        if (event.type === 'command') icon = '⚡';
-        if (event.type === 'sync') icon = '✅';
+        // User requested to remove pop-up notifications.
+        // Logic removed but function kept to avoid breaking calls.
         if (event.type === 'discovery') {
-            icon = '🔍';
-            // Immediate config refresh on discovery
+            // Still refresh configs on discovery silently
             loadConfigs();
         }
-
-        pill.innerHTML = `
-            <span class="pill-icon">${icon}</span>
-            <div class="pill-content">
-                <span class="pill-serial">${event.serial} | #${state.pillCount}</span>
-                <span class="pill-msg">${event.message}</span>
-            </div>
-        `;
-
-        container.appendChild(pill);
-
-        // Auto remove
-        setTimeout(() => {
-            pill.classList.add('fade-out');
-            setTimeout(() => pill.remove(), 500);
-        }, 4000);
     };
 
     const poll = loadAgents; // Alias for compatibility with command handlers

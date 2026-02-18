@@ -240,8 +240,8 @@ def _handle_command(cmd_data: Dict[str, Any]):
                 
                 # 2. Configure & Start
                 if config_name:
-                    requests.post(f"http://localhost:8000/api/services/{svc_id}/config/select", json={"name": config_name}, timeout=5)
-                requests.post(f"http://localhost:8000/api/services/{svc_id}/start", timeout=5)
+                    requests.post(f"http://localhost:8000/api/services/{svc_id}/config/select", json={"name": config_name}, timeout=10)
+                requests.post(f"http://localhost:8000/api/services/{svc_id}/start", timeout=30)
                 
                 # 3. Wait for settlement (OS Network, VLAN, Service Process)
                 time.sleep(3)
