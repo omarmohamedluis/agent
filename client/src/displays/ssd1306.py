@@ -171,9 +171,10 @@ class SSD1306Driver(DisplayDriver):
         if not server_online:
             draw.line([(ix, 2), (ix+iw, 14)], fill=0, width=2)
 
-        # 2. Body
+        # Body
         f_b = self._get_font(14)
         cpu = snapshot.get("cpu", 0)
+        temp = snapshot.get("temp", 0)
         cpu_val = f"CPU: {cpu:.0f}%" if cpu is not None else "CPU: --"
         draw.text((4, 20), cpu_val, font=f_b, fill=255)
         

@@ -410,6 +410,28 @@ async def settings_page(request: Request):
         "network": network
     })
 
+def graceful_cleanup():
+    LOGGER.info("Realizando limpieza del sistema antes de apagado/reinicio...")
+    try:
+        service_manager.stop_all(persist_state=True)
+    except Exception as e:
+        LOGGER.error(f"Error deteniendo servicios durante limpieza: {e}")
+        
+    try:
+        ui.turn_ui_off()
+    except Exception as e:
+        LOGGER.error(f"Error apagando UI durante limpieza: {e}")
+
+    try:
+        close_comm_channel()
+    except Exception as e:
+        LOGGER.error(f"Error cerrando canal de comunicación durante limpieza: {e}")
+
+@app.post("/api/system/cleanup")
+async def api_system_cleanup():
+    await asyncio.to_thread(graceful_cleanup)
+    return {"status": "cleaned"}
+
 @app.post("/api/system/{action}")
 async def system_control(action: str):
     import subprocess
@@ -418,6 +440,7 @@ async def system_control(action: str):
         STRUCTURE_MANAGER.set_busy("SYSTEM_REBOOT", "REBOOTING...")
         # Dar tiempo a la UI para actualizarse
         await asyncio.sleep(3)
+        await asyncio.to_thread(graceful_cleanup)
         subprocess.run(["sudo", "reboot"])
         return {"status": "rebooting"}
         
@@ -425,8 +448,7 @@ async def system_control(action: str):
         STRUCTURE_MANAGER.set_busy("SYSTEM_SHUTDOWN", "SHUTTING DOWN...")
         # Dar tiempo a la UI para actualizarse
         await asyncio.sleep(3)
-        # Apagar la pantalla explícitamente antes de cortar energía
-        ui.turn_ui_off()
+        await asyncio.to_thread(graceful_cleanup)
         subprocess.run(["sudo", "shutdown", "now"])
         return {"status": "shutting_down"}
     raise HTTPException(status_code=400, detail="Acción inválida")
@@ -647,25 +669,8 @@ def main():
     except Exception as e:
         LOGGER.error(f"Error inesperado en bucle principal: {e}", exc_info=True)
     finally:
-        LOGGER.info("Apagando...")
+        graceful_cleanup()
         
-        # Forzar parada de todos los servicios
-        LOGGER.info("Deteniendo todos los servicios...")
-        try:
-            service_manager.stop_all(persist_state=True)
-        except Exception as e:
-            LOGGER.error(f"Error deteniendo servicios: {e}")
-            
-        try:
-            ui.turn_ui_off() # Limpieza de mejor esfuerzo
-        except Exception as e:
-            LOGGER.error(f"Error limpiando pantalla: {e}")
-            
-        try:
-            close_comm_channel()
-        except Exception as e:
-            LOGGER.error(f"Error cerrando canal de comunicación: {e}")
-            
         # Restaurar terminal (fix para freezing)
         try:
             subprocess.run(["stty", "sane"], stderr=subprocess.DEVNULL)

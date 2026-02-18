@@ -106,13 +106,13 @@
             let card = agentGrid.querySelector(`.agent-card[data-serial="${serial}"]`);
 
             const currentSelection = state.selections[serial] || {
-                service: agent.active_service || '',
+                service: agent.active_service || 'Standby',
                 preset: agent.active_config || ''
             };
 
-            const availableServices = Object.keys(state.configs);
+            const availableServices = ['Standby', ...Object.keys(state.configs)];
             const availablePresets = state.configs[currentSelection.service] ? Object.keys(state.configs[currentSelection.service]) : [];
-            const isDifferent = currentSelection.service !== agent.active_service || currentSelection.preset !== agent.active_config;
+            const isDifferent = (currentSelection.service === 'Standby' ? !!agent.active_service : currentSelection.service !== agent.active_service) || (currentSelection.service !== 'Standby' && currentSelection.preset !== agent.active_config);
             const hasActive = !!agent.active_service;
             const isLocked = agent.status === 'loading' || agent.status === 'stalled';
             const statusText = agent.status === 'loading' ? (agent.busy_message || 'loading...') : agent.status;
@@ -369,15 +369,17 @@
         if (!state.selections[serial]) {
             const agent = state.agents[serial];
             state.selections[serial] = {
-                service: agent.active_service || '',
+                service: agent.active_service || 'Standby',
                 preset: agent.active_config || ''
             };
         }
         state.selections[serial][key] = value;
         // If service changes, clear preset if not compatible
-        if (key === 'service') {
+        if (key === 'service' && value !== 'Standby') {
             const firstPreset = state.configs[value] ? Object.keys(state.configs[value])[0] : '';
             state.selections[serial].preset = firstPreset;
+        } else if (key === 'service' && value === 'Standby') {
+            state.selections[serial].preset = '';
         }
         renderHome();
     };
@@ -385,6 +387,10 @@
     window.startService = async (serial) => {
         const sel = state.selections[serial];
         if (!sel || !sel.service) return;
+
+        if (sel.service === 'Standby') {
+            return stopService(serial);
+        }
 
         // Optimistic update
         if (state.agents[serial]) {

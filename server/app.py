@@ -41,7 +41,7 @@ def configure_message_logging():
     if not logger.handlers:
         handler = logging.FileHandler(log_file)
         # Detailed format for precise diagnostics
-        formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S.%f')
+        formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
         handler.setFormatter(formatter)
         logger.addHandler(handler)
     
@@ -265,10 +265,8 @@ async def get_agents():
         last_seen = data.get("last_seen", 0)
         system_status = data.get("system_status", {})
         
-        if now - last_seen > 60:
+        if now - last_seen > 15:
             data["status"] = "offline"
-        elif now - last_seen > 15:
-            data["status"] = "away"
         elif system_status and system_status.get("is_busy"):
             data["status"] = "loading"
             data["busy_message"] = system_status.get("busy_message", "Loading...")
