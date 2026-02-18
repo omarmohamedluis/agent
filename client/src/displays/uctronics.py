@@ -284,9 +284,12 @@ class UCTRONICS_RM0004Driver(DisplayDriver):
         glyph = "\uf1eb" 
         iw, ih = draw.textbbox((0,0), glyph, font=icon_f)[2:]
         ix = self._width - iw - 4
-        draw.text((ix, (20 - ih)//2), glyph, font=icon_f, fill=CLR_BLACK)
+        iy = (20 - ih)//2
+        draw.text((ix, iy), glyph, font=icon_f, fill=CLR_BLACK)
         if not server_online:
-            draw.line([(ix, 2), (ix+iw, 18)], fill=CLR_RED, width=2)
+            # Draw a thick Red X over the icon
+            draw.line([(ix+1, iy+2), (ix+iw-1, iy+ih-2)], fill=CLR_RED, width=3)
+            draw.line([(ix+1, iy+ih-2), (ix+iw-1, iy+2)], fill=CLR_RED, width=3)
 
         # 2. Body
         f_b = self._get_font(18)

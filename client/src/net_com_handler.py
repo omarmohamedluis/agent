@@ -381,7 +381,10 @@ def handshake() -> bool:
 
 
 def check_server_status() -> bool:
-    return _session_active.is_set()
+    if not _session_active.is_set():
+        return False
+    # Return False if no contact for more than 15 seconds
+    return (time.time() - _last_contact_time) < 15.0
 
 
 def get_last_contact_time() -> float:

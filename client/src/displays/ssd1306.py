@@ -171,9 +171,12 @@ class SSD1306Driver(DisplayDriver):
         glyph = "\uf1eb" # Wifi
         iw, ih = draw.textbbox((0,0), glyph, font=icon_f)[2:]
         ix = self._width - iw - 2
-        draw.text((ix, (16 - ih)//2), glyph, font=icon_f, fill=0)
+        iy = (16 - ih)//2
+        draw.text((ix, iy), glyph, font=icon_f, fill=0)
         if not server_online:
-            draw.line([(ix, 2), (ix+iw, 14)], fill=0, width=2)
+            # Draw a thick X over the icon
+            draw.line([(ix+1, iy+2), (ix+iw-1, iy+ih-2)], fill=0, width=2)
+            draw.line([(ix+1, iy+ih-2), (ix+iw-1, iy+2)], fill=0, width=2)
 
         # Body
         f_b = self._get_font(14)

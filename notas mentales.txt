@@ -30,4 +30,9 @@ gran adicion de funciones:
 
 en el display uctronic, si aparece si no tengo ethernet con ip, wlan pero en el otro dirver de display no.
 
+el display de ultronic se queda muchas veces en negro pero el otro no, mira a ver que la logica sea parecida y que solo cambie las movidas del render
+
+el servidor se asigna una ID a las raspberrys pero estas no la aplican
+
+cunado pierden al servidor, deberian ponerse en modo offliney reflejarlo en logcada
 
