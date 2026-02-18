@@ -105,7 +105,7 @@ def start_standalone_ui():
         return
 
     LOGGER.info("Starting Client API Server...")
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="warning")
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
     _standalone_server = StandaloneServer(config)
     
     _standalone_thread = threading.Thread(target=_standalone_server.run, name="StandaloneUI", daemon=True)

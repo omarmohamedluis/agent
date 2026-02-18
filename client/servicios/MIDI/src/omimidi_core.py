@@ -761,15 +761,33 @@ class OmiMidiCore:
             raise RestartRequest()
 
 # ---- Arranque WebUI desde el core ----
-def start_webui(host: str = "0.0.0.0", port: int = 9001):
-    import uvicorn, multiprocessing
-    def run_server():
+# Helper separado para multiprocessing
+def _run_server(host: str, port: int):
+    import uvicorn
+    import sys
+    import traceback
+    
+    # Asegurar que el directorio actual está en sys.path (por si acaso el intérprete hereda mal)
+    if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+    try:
         # Guardar PID del worker para poder “matarlo” en reinicio
         with open(WEBUI_PID_FILE, "w") as f:
             f.write(str(os.getpid()))
+        
         from midiwebui import app
-        uvicorn.run(app, host=host, port=port, log_level="warning")
-    p = multiprocessing.Process(target=run_server, daemon=False)
+        # Usar log level 'info' para ver si arranca
+        uvicorn.run(app, host=host, port=port, log_level="info")
+    except Exception as e:
+        sys.stderr.write(f"CRITICAL ERROR IN WEBUI PROCESS: {e}\n")
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
+
+# ---- Arranque WebUI desde el core ----
+def start_webui(host: str = "0.0.0.0", port: int = 9001):
+    import multiprocessing
+    p = multiprocessing.Process(target=_run_server, args=(host, port), daemon=False)
     p.start()
     
     display_host = host
