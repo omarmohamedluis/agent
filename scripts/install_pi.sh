@@ -76,6 +76,14 @@ if ! grep -q "dtparam=i2c_arm_baudrate=400000" "$CONFIG_FILE"; then
     sudo sed -i "/dtparam=i2c_arm=on/a dtparam=i2c_arm_baudrate=400000" "$CONFIG_FILE"
 fi
 
+# 5.6. Configurar PCIe
+echo "⚡ Configurando PCIe..."
+if grep -q "^#dtparam=pciex1" "$CONFIG_FILE"; then
+    sudo sed -i 's/^#dtparam=pciex1/dtparam=pciex1/' "$CONFIG_FILE"
+elif ! grep -q "^dtparam=pciex1" "$CONFIG_FILE"; then
+    echo "dtparam=pciex1" | sudo tee -a "$CONFIG_FILE"
+fi
+
 # 6. Configurar Node.js v24 y compilar Satellite
 echo "🤖 Configurando Node.js y compilando Satellite..."
 if ! command -v node &> /dev/null || [[ $(node -v) != v24* ]]; then
