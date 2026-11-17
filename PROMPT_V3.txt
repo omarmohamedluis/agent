@@ -129,6 +129,15 @@ Criterio de finalización y entrega
 La tarea termina cuando los componentes del alcance están implementados e
 integrados, las comprobaciones automatizadas pertinentes han pasado y v3 está
 publicado con documentación suficiente para empezar la validación física.
+Mañana debe quedar la instalación y validación en hardware real, no completar
+funcionalidades, interfaces, adaptadores ni instaladores del alcance acordado.
+Toda integración de hardware debe tener su implementación real preparada;
+"pendiente de hardware" significa pendiente de comprobarla físicamente, no
+pendiente de programarla. Los sustitutos de pruebas no reemplazan el código
+de producción. No des la tarea por completada con funciones previstas ausentes
+o con stubs pendientes de conectar. Si un impedimento externo real deja alguna
+función sin implementar, decláralo expresamente como entrega incompleta y
+continúa resolviendo todo el trabajo que sí puedas completar.
 No es necesario esperar a mi respuesta ni tener acceso a mi Pi/CT para cerrar
 esta fase; su validación física y el funcionamiento real durante semanas son
 una fase posterior que debe quedar identificada con claridad.
