@@ -634,7 +634,7 @@ def create_app(data_dir: Path, *, transport=None, offline_after=None, request_ti
             if any(central.busy(a) for a in central.agents.values()):
                 raise HTTPException(409, "Hay operaciones sin resolver; recupere su resultado antes de restablecer")
             backup_file = None
-            if body.get("backup", True):
+            if action == "factory-reset" or body.get("backup", True):
                 directory = central.directory / "backups"
                 directory.mkdir(exist_ok=True)
                 from omi.maintenance import backup as create_backup

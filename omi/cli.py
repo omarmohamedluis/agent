@@ -160,7 +160,7 @@ def maintain_main() -> None:
                     raise ValueError("Pass --confirm to remove server enrollments and assignments")
                 store.delete_prefix("server.")
             elif args.action == "factory-reset":
-                saved = factory_reset(store, confirm=args.confirm, backup_dir=args.backup)
+                saved = factory_reset(store, confirm=args.confirm, backup_dir=args.backup or args.data_dir / "backups")
                 result["backup"] = str(saved) if saved else None
             print(json.dumps(result, ensure_ascii=False))
         finally:

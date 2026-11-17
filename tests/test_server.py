@@ -330,8 +330,9 @@ async def test_reset_installation_preserves_library_and_factory_backup_has_revis
     assert (await client.get("/api/agents")).json() == []
     assert len(app.state.library.export()) == 1
     assert (await client.put('/api/settings',json={"offline_after":25,"request_timeout":45})).status_code==200
-    response = await client.post("/api/maintenance/factory-reset", json={"confirm": True})
+    response = await client.post("/api/maintenance/factory-reset", json={"confirm": True, "backup": False})
     assert response.status_code == 200
+    assert response.json()["backup"] is not None
     assert app.state.library.export() == []
     assert app.state.central.offline_after==8
     assert app.state.central.client.timeout.read==10

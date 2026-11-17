@@ -189,7 +189,7 @@ def create_app(runtime: ClientRuntime, *, manage_lifecycle: bool = True) -> Fast
         elif action == "factory-reset":
             if value.get("confirm") is not True:
                 raise ValueError("Explicit confirmation is required")
-            saved = backup(runtime.store, runtime.data_dir / "backups") if value.get("backup", True) else None
+            saved = backup(runtime.store, runtime.data_dir / "backups")
             operation = runtime.coordinator.submit(Command(action="standby"))
             await runtime.coordinator.task
             if runtime.coordinator.operation(operation.id).status != "succeeded":

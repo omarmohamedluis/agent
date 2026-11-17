@@ -101,7 +101,7 @@ async def test_identity_survives_offline_restart_and_reset_applies_live(tmp_path
         assert not runtime.connected and runtime.local_control
         app = create_app(runtime, manage_lifecycle=False)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://pi") as client:
-            response = await client.post("/api/maintenance/factory-reset", json={"confirm": True, "backup": True})
+            response = await client.post("/api/maintenance/factory-reset", json={"confirm": True, "backup": False})
             assert response.status_code == 200, response.text
             assert (await client.get("/api/settings")).json() == Settings().model_dump()
         assert runtime.server_url is None
@@ -115,6 +115,28 @@ async def test_identity_survives_offline_restart_and_reset_applies_live(tmp_path
         recovered.close()
     finally:
         await runtime.close()
+
+
+def test_factory_cli_creates_recoverable_backup_without_optional_path(tmp_path, monkeypatch, capsys):
+    from omi.cli import maintain_main
+    store = Store(tmp_path / "omi.sqlite3")
+    store.put("settings", {"interface": "eth0"})
+    store.put("execution", {"target": None, "error": "Previous failure"})
+    store.close()
+    monkeypatch.setattr(sys, "argv", ["omi-maintain", "--data-dir", str(tmp_path), "factory-reset", "--confirm"])
+    maintain_main()
+    result = json.loads(capsys.readouterr().out)
+    recovered = Store(Path(result["backup"]))
+    try:
+        assert recovered.get("settings") == {"interface": "eth0"}
+        assert recovered.get("execution")["error"] == "Previous failure"
+    finally:
+        recovered.close()
+    cleared = Store(tmp_path / "omi.sqlite3")
+    try:
+        assert cleared.items() == {}
+    finally:
+        cleared.close()
 
 
 def test_log_budget_reconfigures_and_removes_oversized_rotated_logs(tmp_path):
