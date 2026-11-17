@@ -24,7 +24,7 @@ por IPC local. MIDI utiliza una ruta de eventos no bloqueante sin cola de trabaj
 independiente de HTTP, persistencia y logs. Las pruebas sustituyen adaptadores,
 no las implementaciones Linux de producción.
 
-## Propiedad de archivos durante implementación
+## Responsabilidades durante implementación
 
 | Responsable | Archivos |
 | --- | --- |
@@ -33,40 +33,43 @@ no las implementaciones Linux de producción.
 | Servidor y web | `omi/server/`, `omi/web/`, `tests/test_server*`, `tests/test_web*` |
 | Instalación y pantallas | `scripts/`, `deploy/`, `omi/display/`, `tests/test_install*`, `tests/test_display*`, README y guías de instalación/desarrollo |
 
-No se edita un archivo ajeno sin acuerdo con su responsable. El principal realiza
-los commits y la retirada final de archivos antiguos, después de rescatar drivers.
+Los agentes trabajaron con archivos separados. El principal integró los cambios,
+realizó los commits y retiró el legado después de rescatar sus drivers útiles.
 
 ## Plan y evidencias de aceptación
 
-- [ ] Contratos validados, persistencia atómica, biblioteca vacía, revisiones,
+- [x] Contratos validados, persistencia atómica, biblioteca vacía, revisiones,
       conflictos, importación/exportación, renombrado y borrado protegido.
-- [ ] Coordinador: exclusión, duplicados, fallos, timeout, proceso/red en orden,
+- [x] Coordinador: exclusión, duplicados, fallos, timeout, proceso/red en orden,
       recuperación local, cierre y acciones de alimentación verificadas con fakes.
-- [ ] NetworkManager real: gestión separada, VLAN propia, DHCP/IP fija comprobados,
+- [x] NetworkManager real: gestión separada, VLAN propia, DHCP/IP fija comprobados,
       eliminación restringida, pruebas de errores sin tocar la red anfitriona.
-- [ ] MIDI real: selección estable, arranque limitado, reconexión indefinida,
+- [x] MIDI real: selección estable, arranque limitado, reconexión indefinida,
       conversión/canales/todas las rutas, editor/Learn y aplicación en caliente.
-- [ ] Ensayos de ráfagas/carga: descartar eventos viejos, sin reintentos ni ráfagas
+- [x] Ensayos de ráfagas/carga: descartar eventos viejos, sin reintentos ni ráfagas
       posteriores, destinos conservados, métricas y control independientes.
-- [ ] Satellite real: versión fijada, instalación preparada, supervisión limitada,
+- [x] Satellite real: versión fijada, instalación preparada, supervisión limitada,
       hijos detenidos y pérdida de Companion sin reiniciar red/servicio.
-- [ ] Descubrimiento, identidad, onboard, edición/intercambio de IDs, estado
+- [x] Descubrimiento, identidad, onboard, edición/intercambio de IDs, estado
       esperado/observado, aceptar/sincronizar y autonomía/reconexión.
-- [ ] Replicación sin cambiar ejecución, conflictos offline conservados, aplicación
+- [x] Replicación sin cambiar ejecución, conflictos offline conservados, aplicación
       selectiva, acciones de grupo y rechazo offline/ocupado.
-- [ ] Web central/local completa: presets, rutas, captura remota, estado, consola,
+- [x] Web central/local completa: presets, rutas, captura remota, estado, consola,
       mantenimiento; comprobación práctica de recorridos en navegador simulado.
-- [ ] Pantallas opcionales y fallos aislados, mismos datos, franja amarilla.
-- [ ] Logs acotados, diagnóstico, limpieza/reset/backup y actualización recuperable.
-- [ ] Instaladores por rol, systemd, desarrollo Git/SSH, dependencias reproducibles,
+- [x] Pantallas opcionales y fallos aislados, mismos datos, franja amarilla.
+- [x] Logs acotados, diagnóstico, limpieza/reset/backup y actualización recuperable.
+- [x] Instaladores por rol, systemd, desarrollo Git/SSH, dependencias reproducibles,
       arranque sin Internet, empaquetado y sintaxis Bash comprobados.
-- [ ] Retirada de código/documentación obsoletos y actualización de guías.
-- [ ] Revisión independiente, correcciones, suite final, publicación origin/v3,
+- [x] Retirada de código/documentación obsoletos y actualización de guías.
+- [x] Revisión independiente, correcciones, suite final, publicación origin/v3,
       matriz de resultados y secuencia física preparada.
 
-Las pruebas físicas en Pi/CT, USB/I2C/VLAN reales y duración de semanas quedan
-para la validación posterior. Cualquier funcionalidad sin implementar impediría
-marcar esta fase como terminada.
+Las marcas significan implementación y comprobación automatizada de esta fase,
+no homologación física. Las evidencias y sus límites figuran en la
+[matriz de validación](VALIDATION.md). Las pruebas en Pi/CT, USB/I2C/VLAN reales
+y duración de semanas siguen la [secuencia física](HARDWARE_VALIDATION.md).
+Los adaptadores de producción están implementados; no quedan sustituidos por
+simulaciones ni interfaces pendientes de conectar.
 
 ## Progreso
 
@@ -76,9 +79,21 @@ marcar esta fase como terminada.
   coordinador, NetworkManager real, descubrimiento, runtime/API local y CLI.
   Primeras 19 pruebas de estos módulos pasan en Windows Python 3.12.10.
   Diagnóstico offline e interfaces CLI de ambos roles comprobados.
-- Subagentes trabajando en servicios, servidor/web e instaladores/pantallas.
-  Integración completa, pruebas de navegador, revisión independiente y retirada
-  del legado todavía pendientes: este registro no constituye entrega terminada.
+- Integrados servicios, servidor/web e instaladores/pantallas. Retirados los
+  antiguos `client/`, `server/`, scripts y submódulo Satellite reemplazados.
+  Los assets de pantalla rescatados viven en `omi/display/assets/`.
+- Pruebas de navegador Chromium con servidor y dos Pi simuladas: edición,
+  aplicación selectiva, Learn remoto, silencio completo y borradores conservados.
+  Empaquetado, CLI, dependencias y Bash comprobados en Windows y Linux.
+- Revisión independiente terminada y correcciones cubiertas por regresiones:
+  reloj ALSA tras carga, sockets independientes, readiness de Satellite,
+  TIME_WAIT, operaciones desconocidas, persistencia de ajustes, sesiones de
+  edición y protección de borrado. También se revisaron exclusión durante
+  actualización, verificación de rollback y copias obligatorias de factory reset.
+- GitHub Actions ejecutó suites completas en Linux con Python 3.11 y 3.12.
+  Un trabajo adicional preparó y arrancó el Satellite real fijado, lo paró y lo
+  arrancó de nuevo sin Companion. No quedó un defecto bloqueante conocido en la
+  revisión; el resultado no sustituye las pruebas físicas posteriores.
 
 ## Referencias técnicas y decisiones
 
@@ -89,5 +104,14 @@ marcar esta fase como terminada.
   preferencia de la ruta normal de administración. Esta política debe comprobarse
   con las rutas concretas de la instalación durante la prueba física.
 - Captura MIDI Linux por ALSA con timestamps de entrada y envíos UDP no bloqueantes
-  en proceso independiente; la implementación y ensayos los desarrolla el agente
-  de servicios. No se promete entrega OSC ni latencia física del USB/red.
+  en proceso independiente. Plazo útil inicial de 10 ms, configurable; no hay
+  cola de trabajo ni reintento de eventos. DNS y consulta de vecinos quedan fuera
+  del recorrido de eventos. No se promete entrega OSC ni tiempo real estricto
+  del USB/kernel/red; límites precisos en [SERVICES.md](SERVICES.md).
+- Satellite 3.8.0, build 804-8831637 y Node 24.22.2 preparados al instalar.
+  Arrancar servicios no descarga dependencias. Si falta Companion se espera;
+  una caída del hijo tiene recuperación limitada y limpieza de descendientes.
+- Actualización preparada antes de parar; verificación de commit, recuperación
+  terminada y objetivo exacto. El rollback también comprueba esos datos y aborta
+  antes de restaurar si falla la parada. El bloqueo de actualización sobrevive
+  al reinicio intencional y no expira mientras siga vivo el instalador externo.

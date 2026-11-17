@@ -107,9 +107,13 @@ del nuevo código ocurren antes de parar el proceso existente. Después se detie
 OMI, se guarda una copia coherente de todo su directorio de datos en
 `/var/backups/omi/<rol>/`, se intercambian los enlaces y se comprueba HTTP durante
 hasta 180 s. Se exige el commit instalado y la recuperación terminada de la misma
-revisión local, sin operación pendiente ni error; esperar un equipo externo es
-válido. Fallar el nuevo arranque restaura el código, la unidad y los datos
-anteriores. No se reinicia la Pi ni se borran presets para actualizar.
+revisión local, sin trabajo incompatible ni error de recuperación; esperar un
+equipo externo es válido. Un error histórico de standby sigue visible, pero no
+impide aceptar una recuperación correcta. El bloqueo de la propia actualización
+se conserva hasta que termine el instalador. Fallar el nuevo arranque restaura
+el código, la unidad y los datos anteriores y comprueba también su recuperación.
+Si falla la parada, se aborta antes de restaurar sobre un proceso vivo.
+No se reinicia la Pi ni se borran presets para actualizar.
 `update-status.json` en el directorio de datos contiene ID, fase, resultado y
 error; los detalles del proceso están en `journalctl -u omi-update-ID` si la
 actualización se lanzó desde la web. Conservar las versiones anteriores hasta
@@ -167,7 +171,9 @@ sudo systemctl start omi-client
 limpia el estado temporal conservando presets y ajustes. En el CT,
 `reset-installation --confirm` borra incorporaciones/asignaciones conservando la
 biblioteca. `factory-reset --confirm --backup DIRECTORIO` borra los datos de
-usuario tras guardar la copia. Ningún reset del CT borra a distancia las
+usuario tras guardar la copia. Si se omite `--backup`, se usa `backups` dentro
+del directorio de datos; la copia es obligatoria también desde la API.
+Ningún reset del CT borra a distancia las
 bibliotecas de las Pi. La web ofrece las acciones equivalentes con su confirmación.
 
 ## Satellite fijado

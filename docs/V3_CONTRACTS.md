@@ -1,7 +1,7 @@
 # Contratos de implementación v3
 
-Estos contratos coordinan el trabajo. `omi.models` es la definición ejecutable;
-proponer ampliaciones al principal antes de modificarla. Python >=3.11.
+Contratos de la implementación integrada. `omi.models` es la definición
+ejecutable y `/openapi.json` describe los endpoints de cada rol. Python >=3.11.
 
 ## Almacenamiento común (principal)
 
@@ -66,11 +66,16 @@ cuando central online y conforme, salvo sesión local pendiente.
 - POST `/api/editors` (EditorRequest) -> `{id,expires_at,learn:null}`.
   POST `/api/editors/{id}/renew`, POST `.../learn`, GET `...`, DELETE `...`.
   Lease 30 s; UI renueva cada 8 s. GET incluye `{id,expires_at,learn}`.
+  Un borrador nuevo en standby puede incluir `config`; `session_id` permite
+  cambiar atómicamente entre edición general y de rutas sin perder la sesión.
 - GET `/api/logs?level=&limit=200` -> `{lines:[...]}`; GET `/api/logs/download`.
 - POST `/api/simulate/midi` (dict) solo si simulated.
 - GET/PUT `/api/settings`: ajustes locales/manual server/interface/timings.
-- Mantenimiento por API: concretar con principal al integrar; UI debe incluir
-  limpieza logs, reset temporal, backup/factory (confirmación) y actualización.
+- GET `/api/backup` descarga una copia SQLite coherente. POST
+  `/api/maintenance/{action}` admite `clear-logs`, `reset-state`,
+  `factory-reset` y `update`. Factory exige `confirm:true` y crea siempre copia
+  antes de parar y borrar. Las acciones incompatibles requieren terminar la
+  operación y cerrar el editor. El servidor añade `reset-installation`.
 
 Las llamadas proxy del servidor incluyen `X-OMI-Control: central` para distinguir
 las solicitudes locales. No es autenticación. El principal controla restricciones
