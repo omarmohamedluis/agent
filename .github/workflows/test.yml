@@ -26,3 +26,19 @@ jobs:
       - run: python -m playwright install --with-deps chromium
       - run: python -m pytest -q
       - run: python -m build --no-isolation
+
+  satellite_smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: 'requirements-*.lock'
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libusb-1.0-0 libudev1 libfontconfig1
+      - run: python -m pip install -r requirements-server.lock
+      - run: python -m pip install --no-deps --no-build-isolation -e .
+      - run: bash scripts/install-satellite.sh "$RUNNER_TEMP/omi-satellite" --prepare-only
+      - run: python scripts/smoke-satellite.py --satellite-dir "$RUNNER_TEMP/omi-satellite/3.8.0-804-8831637-amd64" --data-dir "$RUNNER_TEMP/satellite-state"

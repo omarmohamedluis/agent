@@ -8,6 +8,9 @@ import subprocess
 import sys
 import tarfile
 import io
+import sqlite3
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -110,6 +113,7 @@ printf 'user-preset' > "$data_dir/preset"
 printf 'old-unit' > "$unit_path"
 printf 'new-unit' > "$source_dir/deploy/systemd/$unit"
 printf '%s' "$previous" > "$prefix/current"
+printf 'old-commit' > "$previous/.code-revision"
 status_write() {{ printf '%s:%s\\n' "$1" "$2" >> "$base/trace"; }}
 atomic_link() {{ printf '%s' "$1" > "$2"; }}
 systemctl() {{
@@ -118,7 +122,11 @@ systemctl() {{
         printf 'new-schema-data' > "$data_dir/preset"
     fi
 }}
-wait_healthy() {{ return {1 if fails else 0}; }}
+wait_healthy() {{
+    printf 'health:%s:%s\\n' "${{1:-$commit}}" "${{2:-$expected_target}}" >> "$base/trace"
+    [[ "${{1:-$commit}}" == old-commit ]] && return 0
+    return {1 if fails else 0}
+}}
 trap 'code=$?; if ((code)) && [[ "$stopped" == 1 ]]; then rollback_release; fi; exit "$code"' EXIT
 activate_release
 '''
@@ -134,6 +142,7 @@ activate_release
         assert (tmp_path / "data/preset").read_text() == "user-preset"
         assert (tmp_path / "data.failed-test-op/preset").read_text() == "new-schema-data"
         assert (tmp_path / "unit").read_text() == "old-unit"
+        assert "health:old-commit:null" in trace
     else:
         assert (tmp_path / "opt/current").read_text() == fixture + "/opt/new"
         assert (tmp_path / "unit").read_text() == "new-unit"
@@ -270,3 +279,162 @@ activate_release
     else:
         assert (tmp_path / "unit").read_text() == "new-unit"
         assert "stop omi-server.service" not in (tmp_path / "trace").read_text()
+
+
+@pytest.mark.skipif(not BASH, reason="Bash is required")
+def test_rollback_stop_failure_preserves_live_code_data_and_failure_status(tmp_path):
+    base = tmp_path.as_posix()
+    if sys.platform == "win32":
+        base = "/" + base[0].lower() + base[2:]
+    data = tmp_path / "data"
+    data.mkdir()
+    original_status = '{"id":"update-id","status":"failed","error":"new boot failed"}'
+    (data / "update-status.json").write_text(original_status)
+    (data / "omi.sqlite3").write_bytes(b"live database must stay here")
+    (tmp_path / "current").write_text("new-code")
+    (tmp_path / "snapshot.tar.gz").write_bytes(b"snapshot must stay here")
+    lib = (ROOT / "scripts/install-lib.sh").as_posix()
+    command = f'''set -Eeuo pipefail
+source '{lib}'
+base='{base}'
+unit=omi-client.service
+role=client
+previous="$base/old"
+prefix="$base"
+data_dir="$base/data"
+operation_id=update-id
+snapshot="$base/snapshot.tar.gz"
+unit_path="$base/unit"
+unit_backup="$base/unit.backup"
+status_write() {{ printf 'status:%s\\n' "$*" >> "$base/trace"; }}
+atomic_link() {{ printf 'link:%s\\n' "$*" >> "$base/trace"; }}
+mv() {{ printf 'mv:%s\\n' "$*" >> "$base/trace"; }}
+tar() {{ printf 'tar:%s\\n' "$*" >> "$base/trace"; }}
+systemctl() {{ printf 'systemctl:%s\\n' "$*" >> "$base/trace"; return 9; }}
+if rollback_release; then exit 0; else exit 17; fi
+'''
+    result = subprocess.run([BASH, "-c", command], capture_output=True, text=True)
+    assert result.returncode == 17, result.stderr
+    assert (tmp_path / "trace").read_text().splitlines() == ["systemctl:stop omi-client.service"]
+    assert (tmp_path / "current").read_text() == "new-code"
+    assert (data / "omi.sqlite3").read_bytes() == b"live database must stay here"
+    assert (data / "update-status.json").read_text() == original_status
+    assert (tmp_path / "snapshot.tar.gz").read_bytes() == b"snapshot must stay here"
+    assert not (tmp_path / "data.failed-update-id").exists()
+
+
+@pytest.mark.skipif(not BASH, reason="Bash is required")
+@pytest.mark.parametrize("observed", ["ready", "wrong_commit", "booting", "recovery_error", "wrong_target", "inactive"])
+def test_rollback_verifies_previous_code_boot_and_restored_target(tmp_path, observed):
+    saved_target = {"preset_id": "show", "revision": "applied-r1"}
+    before = tmp_path / "before"
+    before.mkdir()
+    with sqlite3.connect(before / "omi.sqlite3") as connection:
+        connection.execute("CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        connection.execute("INSERT INTO kv VALUES (?, ?)", ("execution", json.dumps({"target": saved_target})))
+    (before / "preset").write_text("snapshot preset")
+    (before / "update-status.json").write_text('{"id":"update-id","status":"running","phase":"stopping"}')
+    with tarfile.open(tmp_path / "snapshot.tar.gz", "w:gz") as archive:
+        archive.add(before, arcname=".")
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "preset").write_text("failed new-code data")
+    original_status = '{"id":"update-id","status":"failed","error":"new boot failed"}'
+    (data / "update-status.json").write_text(original_status)
+    old = tmp_path / "opt/old"
+    old.mkdir(parents=True)
+    (old / ".code-revision").write_text("old-commit")
+    (tmp_path / "opt/current").write_text("new-code")
+    (tmp_path / "unit").write_text("new-unit")
+    (tmp_path / "unit.backup").write_text("old-unit")
+    state = {"role": "client", "code_revision": "old-commit", "booting": False, "busy": False,
+             "recovery_error": False, "state": {"health": "ready", "target": saved_target}}
+    if observed == "wrong_commit":
+        state["code_revision"] = "new-commit"
+    elif observed == "booting":
+        state["booting"] = True
+    elif observed == "recovery_error":
+        state["recovery_error"] = True
+        state["state"].update(health="error", detail="Previous MIDI input failed to reopen")
+    elif observed == "wrong_target":
+        state["state"]["target"] = {"preset_id": "show", "revision": "wrong-r2"}
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            payload = json.dumps(state).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = tmp_path.as_posix()
+    if sys.platform == "win32":
+        base = "/" + base[0].lower() + base[2:]
+    python = Path(sys.executable).as_posix()
+    root = ROOT.as_posix()
+    command = f'''set -Eeuo pipefail
+source '{root}/scripts/install-lib.sh'
+base='{base}'
+prefix="$base/opt"
+previous="$prefix/old"
+data_dir="$base/data"
+snapshot="$base/snapshot.tar.gz"
+unit=omi-client.service
+role=client
+operation_id=update-id
+unit_path="$base/unit"
+unit_backup="$base/unit.backup"
+source_dir='{root}'
+commit=new-commit
+expected_target='{{"preset_id":"incorrect-new-target","revision":"r2"}}'
+python3() {{
+    if [[ "$1" == */verify-health.py ]]; then
+        printf '%s\\n' "$@" > "$base/health-args"
+        '{python}' "$@" --port {server.server_port} --timeout 0.2
+    else
+        '{python}' "$@"
+    fi
+}}
+atomic_link() {{ printf '%s' "$1" > "$2"; }}
+systemctl() {{
+    printf '%s\\n' "$*" >> "$base/trace"
+    if [[ "$1" == is-active ]]; then return {3 if observed == "inactive" else 0}; fi
+}}
+if rollback_release; then
+    result=0
+else
+    result=$?
+    echo 'Automatic recovery failed; see INSTALL.md recovery.' >&2
+fi
+# Match the update cleanup: successful recovery still means the update failed.
+status_write failed failed 'original update failure'
+exit "$result"
+'''
+    try:
+        result = subprocess.run([BASH, "-c", command], capture_output=True, text=True)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+    assert result.returncode == (0 if observed == "ready" else 1), result.stderr
+    assert requests and all(path == "/api/status" for path in requests)
+    if observed != "ready":
+        assert "Automatic recovery failed" in result.stderr
+    args = (tmp_path / "health-args").read_text().splitlines()
+    assert args[args.index("--commit") + 1] == "old-commit"
+    assert json.loads(args[args.index("--target") + 1]) == saved_target
+    assert (tmp_path / "opt/current").read_text() == base + "/opt/old"
+    assert (data / "preset").read_text() == "snapshot preset"
+    assert (tmp_path / "data.failed-update-id/preset").read_text() == "failed new-code data"
+    assert (tmp_path / "data.failed-update-id/update-status.json").read_text() == original_status
+    assert (tmp_path / "unit").read_text() == "old-unit"
+    update = json.loads((data / "update-status.json").read_text())
+    assert update["status"] == "failed" and update["error"] == "original update failure"

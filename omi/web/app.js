@@ -39,7 +39,30 @@ function button(label, action, disabled=false, extra='') {
 function presetLabel(target) {
   if (!target) return 'Standby';
   const revision = state.revisions.find(item => item.id === target.revision);
-  return `${revision?.name || state.presets.find(item => item.preset_id === target.preset_id)?.name || short(target.preset_id)} · ${short(target.revision)}`;
+  const catalog = state.presets.find(item => item.preset_id === target.preset_id);
+  const name = catalog && !catalog.conflict ? catalog.name : revision?.name;
+  return `${name || short(target.preset_id)} · ${short(target.revision)}`;
+}
+function healthLabel(health) {
+  return {standby:'Standby', starting:'Preparando', ready:'Listo', waiting:'Esperando dispositivo', error:'Error', stopping:'Deteniendo'}[health] || health;
+}
+function networkLabel(agent) {
+  const network = agent.state?.network || {};
+  const parts = [];
+  if (network.vlan) parts.push(`VLAN ${network.vlan}`);
+  if (network.addresses?.length) parts.push(network.addresses.join(', '));
+  else {
+    let management = agent.management_ip || '';
+    try { management ||= new URL(agent.endpoint).hostname; } catch {}
+    parts.push(management ? `Administración: ${management}` : 'Administración Ethernet');
+  }
+  return parts.join(' · ');
+}
+function revisionNotice(target) {
+  if (!target) return '';
+  const catalog = state.presets.find(item => item.preset_id === target.preset_id);
+  return catalog && !catalog.conflict && !catalog.deleted && catalog.revision.id !== target.revision
+    ? '<span class="muted"> · Revisión nueva disponible</span>' : '';
 }
 function presetOptions(selected='') {
   return '<option value="">Elegir preset…</option>' + state.presets.filter(p=>!p.deleted&&!p.conflict).map(p =>
@@ -71,7 +94,7 @@ function renderAgents() {
     const color=!a.online?'offline':busy?'busy':health==='error'?'error':a.discrepancy?'discrepancy':'';
     const connection=!a.online?'Offline':busy?'Ocupada':health==='error'?'Error':a.discrepancy?'Discrepancia':health==='waiting'?'Esperando equipo':'Online';
     const observed=a.observed || a.state?.target;
-    return `<article class="card ${color}" data-serial="${escapeHTML(a.serial)}"><div class="card-top"><div><h2>${server()?`<label class="inline"><input type="checkbox" data-select="${escapeHTML(a.serial)}" ${state.selected.has(a.serial)?'checked':''}>` : ''}${escapeHTML(a.device_id ? `${a.device_id} · ${a.name}` : a.name||a.hostname||'Pi')}${server()?'</label>':''}</h2><span class="muted">${escapeHTML(a.hostname)} · ${escapeHTML(a.serial)}</span></div><span class="badge ${color==='error'?'red':color==='discrepancy'?'orange':'green'}">${connection}</span></div><dl><dt>Ejecuta</dt><dd>${escapeHTML(presetLabel(observed))}</dd>${server()?`<dt>Esperado</dt><dd>${escapeHTML(presetLabel(a.expected))}</dd>`:''}<dt>Salud</dt><dd>${escapeHTML(health)} ${escapeHTML(a.state?.detail||'')}</dd><dt>Red</dt><dd>${escapeHTML(JSON.stringify(a.state?.network||{}))}</dd></dl>${busy?`<pre class="console">${escapeHTML(operationText(a))}</pre>${button('Consultar operación','operation',!a.online)}`:`<div class="toolbar"><select data-preset aria-label="Preset para ${escapeHTML(a.name||a.hostname)}" ${disabled?'disabled':''}>${presetOptions()}</select>${button('Aplicar','apply',disabled)}${button('Standby','standby',disabled)}${button('Editar actual','edit-current',disabled||!observed)}${button('Editar desde esta Pi','edit-context',disabled)}${server()&&a.discrepancy?button('Aceptar estado','accept',disabled)+button('Sincronizar','synchronize',disabled):''}</div><div class="toolbar">${button('Logs','logs',!a.online)}${button('Reiniciar','reboot',disabled)}${button('Apagar','poweroff',disabled)}${server()?button('ID / nombre','identity')+button('Retirar','forget'):''}</div>`}${!busy&&a.last_command?.error?`<p class="warning">${escapeHTML(a.last_command.error)}</p>`:''}${!busy&&a.state?.operation?.error?`<pre class="console">${escapeHTML(operationText(a))}</pre>`:''}</article>`;
+    return `<article class="card ${color}" data-serial="${escapeHTML(a.serial)}"><div class="card-top"><div><h2>${server()?`<label class="inline"><input type="checkbox" data-select="${escapeHTML(a.serial)}" ${state.selected.has(a.serial)?'checked':''}>` : ''}${escapeHTML(a.device_id ? `${a.device_id} · ${a.name}` : a.name||a.hostname||'Pi')}${server()?'</label>':''}</h2><span class="muted">${escapeHTML(a.hostname)} · ${escapeHTML(a.serial)}</span></div><span class="badge ${color==='error'?'red':color==='discrepancy'?'orange':'green'}">${connection}</span></div><dl><dt>Ejecuta</dt><dd>${escapeHTML(presetLabel(observed))}${revisionNotice(observed)}</dd>${server()?`<dt>Esperado</dt><dd>${escapeHTML(presetLabel(a.expected))}</dd>`:''}<dt>Salud</dt><dd>${escapeHTML(healthLabel(health))} ${escapeHTML(a.state?.detail||'')}</dd><dt>Red</dt><dd>${escapeHTML(networkLabel(a))}</dd></dl>${busy?`<pre class="console">${escapeHTML(operationText(a))}</pre>${button('Consultar operación','operation',!a.online)}`:`<div class="toolbar"><select data-preset aria-label="Preset para ${escapeHTML(a.name||a.hostname)}" ${disabled?'disabled':''}>${presetOptions()}</select>${button('Aplicar','apply',disabled)}${button('Standby','standby',disabled)}${button('Editar actual','edit-current',disabled||!observed)}${button('Editar desde esta Pi','edit-context',disabled)}${server()&&a.discrepancy?button('Aceptar estado','accept',disabled)+button('Sincronizar','synchronize',disabled):''}</div><div class="toolbar">${button('Logs','logs',!a.online)}${button('Reiniciar','reboot',disabled)}${button('Apagar','poweroff',disabled)}${server()?button('ID / nombre','identity')+button('Retirar','forget'):''}</div>`}${!busy&&a.last_command?.error?`<p class="warning">${escapeHTML(a.last_command.error)}</p>`:''}${!busy&&a.state?.operation?.error?`<pre class="console">${escapeHTML(operationText(a))}</pre>`:''}</article>`;
   }).join('') || '<p class="empty">Todavía no hay Pi incorporadas. Encienda un agente y use Onboard en Descubiertos.</p>';
   $('agent-list').querySelectorAll('[data-serial]').forEach(card=>{const select=card.querySelector('[data-preset]');if(select&&selections.get(card.dataset.serial))select.value=selections.get(card.dataset.serial);});
   $('discovered').innerHTML = state.agents.filter(a=>!a.onboarded).map(a=>`<article class="card ${a.online?'':'offline'}" data-serial="${escapeHTML(a.serial)}"><h2>${escapeHTML(a.hostname)}</h2><p class="muted">Serial ${escapeHTML(a.serial)}<br>${escapeHTML(a.endpoint)} · ${a.online?'Online':'Offline'}</p><p>Estado local: ${escapeHTML(presetLabel(a.state?.target))}</p>${a.import_available?'<p class="warning">Biblioteca central vacía: puede importar los presets de esta Pi al incorporarla.</p>':''}${button('Onboard','onboard',!a.online)}</article>`).join('') || '<p class="empty">No hay equipos nuevos descubiertos.</p>';

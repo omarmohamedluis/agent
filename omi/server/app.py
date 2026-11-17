@@ -12,6 +12,7 @@ from typing import Any, Callable
 from urllib.parse import quote, urlsplit
 
 import httpx
+from omi import __version__
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -401,7 +402,7 @@ def create_app(data_dir: Path, *, transport=None, offline_after=None, request_ti
         finally:
             await central.close()
 
-    app = FastAPI(title="OMI Central", version="3.0.0", lifespan=lifespan)
+    app = FastAPI(title="OMI Central", version=__version__, lifespan=lifespan)
     app.state.central = central
     app.state.store = central.store
     app.state.library = central.library
@@ -425,7 +426,7 @@ def create_app(data_dir: Path, *, transport=None, offline_after=None, request_ti
             update = json.loads((central.directory / "update-status.json").read_text(encoding="utf-8"))
         except (FileNotFoundError, ValueError):
             update = None
-        return {"role": "server", "version": "3.0.0", "simulated": simulated,
+        return {"role": "server", "version": __version__, "simulated": simulated,
                 "agents": len([a for a in central.agents.values() if a.get("onboarded")]),
                 "online": sum(central.online(a) for a in central.agents.values()),
                 "library_digest": central.library.digest(), "update": update, "code_revision": code_revision(),

@@ -20,21 +20,37 @@ PY
 
 atomic_link() {
     local target=$1 link=$2
-    ln -sfn -- "$target" "$link.new"
+    ln -sfn -- "$target" "$link.new" || return 1
     mv -Tf -- "$link.new" "$link"
 }
 
 wait_healthy() {
     local port=8081
+    local health_commit=${1:-$commit}
+    local health_target=${2:-${expected_target:-null}}
     [[ "$role" == server ]] && port=8080
     python3 "$source_dir/scripts/verify-health.py" --role "$role" --port "$port" \
-        --commit "$commit" --target "${expected_target:-null}" --timeout 180
-    systemctl is-active --quiet "$unit"
+        --commit "$health_commit" --target "$health_target" --timeout 180 || return 1
+    systemctl is-active --quiet "$unit" || return 1
+}
+
+saved_target() {
+    python3 - "$data_dir/omi.sqlite3" <<'PY'
+import json,pathlib,sqlite3,sys
+path=pathlib.Path(sys.argv[1])
+target=None
+if path.is_file():
+    with sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True) as db:
+        row=db.execute("SELECT value FROM kv WHERE key='execution'").fetchone()
+        if row: target=json.loads(row[0]).get('target')
+print(json.dumps(target,separators=(',',':')))
+PY
 }
 
 rollback_release() {
-    status_write running rollback 'Restoring previous release and pre-update data' || true
-    systemctl stop "$unit" || true
+    # A failed stop does not prove the new process has exited. Preserve its code
+    # and data unchanged rather than restoring a snapshot underneath a live DB.
+    systemctl stop "$unit" || return 1
     if [[ -n "$previous" ]]; then atomic_link "$previous" "$prefix/current" || return 1; fi
     if [[ -n "${previous_satellite:-}" ]]; then atomic_link "$previous_satellite" "$prefix/satellite/current" || return 1; fi
     if [[ -f "$snapshot" ]]; then
@@ -44,11 +60,19 @@ rollback_release() {
         tar -xzf "$snapshot" -C "$data_dir" || return 1
         if [[ "$role" == server ]]; then chown -R omi:omi "$data_dir" || return 1; fi
     fi
+    # Keep the failed process's files, including its status, intact in failed_data.
+    status_write running rollback 'Restoring previous release and pre-update data' || true
     if [[ -f "$unit_backup" ]]; then cp -- "$unit_backup" "$unit_path" || return 1; fi
     systemctl daemon-reload || return 1
     if [[ -n "$previous" ]]; then
+        local recovery_commit recovery_target=null
+        recovery_commit=$(cat "$previous/.code-revision") || return 1
+        if [[ "$role" == client ]]; then recovery_target=$(saved_target) || return 1; fi
         systemctl reset-failed "$unit" || true
         systemctl start "$unit" || return 1
+        # Starting systemd is insufficient: the old process must finish booting
+        # and recover exactly the target from the snapshot restored above.
+        wait_healthy "$recovery_commit" "$recovery_target" || return 1
     fi
 }
 
@@ -70,17 +94,7 @@ activate_release() {
     fi
     expected_target=null
     if [[ "$role" == client ]]; then
-        expected_target=$(python3 - "$data_dir/omi.sqlite3" <<'PY'
-import json,pathlib,sqlite3,sys
-path=pathlib.Path(sys.argv[1])
-target=None
-if path.is_file():
-    with sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True) as db:
-        row=db.execute("SELECT value FROM kv WHERE key='execution'").fetchone()
-        if row: target=json.loads(row[0]).get('target')
-print(json.dumps(target,separators=(',',':')))
-PY
-)
+        expected_target=$(saved_target)
     fi
     if [[ -f "$unit_path" ]]; then cp -- "$unit_path" "$unit_backup"; fi
     cp -- "$source_dir/deploy/systemd/$unit" "$unit_path"
