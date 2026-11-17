@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import math
 import time
 import uuid
 from typing import Any, Literal
@@ -48,7 +49,7 @@ class OscDestination(Model):
 
 
 class MidiRoute(Model):
-    id: str = Field(default_factory=new_id, max_length=80)
+    id: str = Field(default_factory=new_id, min_length=1, max_length=80)
     kind: Literal["note", "cc"] = "note"
     number: int = Field(default=60, ge=0, le=127)
     channel: int | None = Field(default=None, ge=0, le=15)
@@ -61,6 +62,19 @@ class MidiRoute(Model):
     def valid_osc_address(cls, value: str) -> str:
         if not value.startswith("/") or any(c.isspace() or c == "\x00" for c in value):
             raise ValueError("OSC address must start with / and contain no whitespace")
+        return value
+
+    @field_validator("constant")
+    @classmethod
+    def valid_constant(cls, value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and not -(2**31) <= value < 2**31:
+            raise ValueError("OSC integer constants must fit signed 32 bits")
+        if isinstance(value, float) and (not math.isfinite(value) or abs(value) > 3.4028235e38):
+            raise ValueError("OSC float constants must be finite 32-bit values")
+        if isinstance(value, str) and (len(value.encode("utf-8")) > 2048 or "\x00" in value):
+            raise ValueError("OSC string constants must be at most 2048 UTF-8 bytes without NUL")
         return value
 
 
@@ -134,6 +148,7 @@ class RuntimeState(Model):
     operation: Operation | None = None
     service_info: dict[str, Any] = Field(default_factory=dict)
     network: dict[str, Any] = Field(default_factory=dict)
+    busy: bool = False
 
 
 class Heartbeat(Model):
@@ -161,6 +176,8 @@ class EditorRequest(Model):
     revision: str
     route_editor: bool = False
     input: str | None = None
+    config: PresetConfig | None = None  # unsaved draft, allowed only from standby
+    session_id: str | None = None
 
 
 class SavePreset(Model):

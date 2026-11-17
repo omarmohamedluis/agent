@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import sqlite3
 
 import pytest
 
@@ -87,3 +88,29 @@ def test_parallel_saves_and_reopen_are_consistent(library):
     assert Library(reopened).digest() == library.digest()
     assert {r.id for r in revisions}.issubset({r["id"] for r in Library(reopened).export()})
     reopened.close()
+
+
+def test_corrupt_database_preserved_and_handle_released(tmp_path):
+    original = b"invalid SQLite state; keep this for diagnosis"
+    path = tmp_path / "corrupt.sqlite3"
+    path.write_bytes(original)
+    with pytest.raises(sqlite3.DatabaseError):
+        Store(path)
+    assert path.read_bytes() == original
+    moved = path.rename(tmp_path / "corrupt-preserved.sqlite3")
+    assert moved.read_bytes() == original
+
+
+def test_temporary_reset_and_backup_preserve_identity_settings_and_library(library):
+    from omi.maintenance import reset_state
+    original = create(library)
+    library.store.put("central.last_reply", {"device_id": 2, "name": "FOH"})
+    library.store.put("settings", {"server_url": "http://central:8080"})
+    library.store.put("execution", {"target": {"preset_id": original.preset_id, "revision": original.id}})
+    library.store.put("command.old", {"operation": {"status": "succeeded"}})
+    reset_state(library.store)
+    assert not library.store.items("command.")
+    assert library.store.get("central.last_reply")["device_id"] == 2
+    assert library.store.get("settings")["server_url"] == "http://central:8080"
+    assert library.store.get("execution")["target"]["revision"] == original.id
+    assert library.get(original.id) == original

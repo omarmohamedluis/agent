@@ -27,7 +27,7 @@ omi-maintain = "omi.cli:maintain_main"
 include = ["omi*"]
 
 [tool.setuptools.package-data]
-omi = ["web/*.html", "web/*.js", "web/*.css", "display/assets/*"]
+omi = ["_build.json", "web/*.html", "web/*.js", "web/*.css", "display/assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

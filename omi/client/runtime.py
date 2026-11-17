@@ -14,11 +14,12 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import Field, field_validator
 
-from omi import __version__
+from omi import __version__, code_revision
 from omi.client.coordinator import Coordinator
 from omi.discovery import BeaconListener, local_ipv4, validate_url
 from omi.library import Library
-from omi.maintenance import run_update, wait_update
+from omi.logging import apply_log_budget
+from omi.maintenance import run_update, wait_update, update_unit_alive
 from omi.models import Heartbeat, HeartbeatReply, Model, Target, new_id
 from omi.network import NetworkManager, SimulatedNetwork, run_command
 from omi.store import Store
@@ -84,13 +85,17 @@ class ClientRuntime:
         self.network = network or (SimulatedNetwork() if simulated else NetworkManager(self.store, self.settings.interface, ip_timeout=self.settings.ip_timeout))
         self.coordinator = Coordinator(self.store, self.library, host, self.network,
                                        operation_timeout=self.settings.operation_timeout, editor_ttl=self.settings.editor_ttl,
-                                       power=power or self._power, updater=self._update)
+                                       power=power or self._power, updater=self._update,
+                                       update_probe=None if simulated else update_unit_alive)
         self.http = httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(3), trust_env=False)
         self.listener = listener or BeaconListener(self.settings.discovery_port)
         self.endpoint = endpoint
         self.server_url = self.settings.server_url or None
         self.last_contact = 0.0
-        self.server = HeartbeatReply()
+        self.server = HeartbeatReply.model_validate(self.store.get("central.last_reply", {}))
+        self._cached_endpoint: str | None = None
+        self._endpoint_task: asyncio.Task | None = None
+        self._endpoint_checked = 0.0
         self.booting = True
         self.closed = False
         self.tasks: list[asyncio.Task] = []
@@ -109,9 +114,19 @@ class ClientRuntime:
         result = {"role": "client", "serial": self.serial, "hostname": self.hostname,
                   "state": self.coordinator.snapshot().model_dump(), "local_control": self.local_control,
                   "connected": self.connected, "device_id": self.server.device_id, "name": self.server.name,
-                  "simulated": self.simulated, "booting": self.booting, "version": __version__,
+                  "simulated": self.simulated, "booting": self.booting, "version": __version__, "code_revision": code_revision(),
                   "server_url": self.server_url, "busy": self.coordinator.busy,
-                  "library_digest": self.library.digest()}
+                  "update_verifying": self.coordinator.update_verifying,
+                  "recovery_error": self.coordinator.recovery_error,
+                  "library_digest": self.library.digest(), "discrepancy": self.server.discrepancy,
+                  "management_ip": urlparse(self.endpoint or self._cached_endpoint or "").hostname or ""}
+        result["display"] = self.display.status() if self.display else {"available": False}
+        target = self.coordinator.state.target
+        if target:
+            try:
+                result["preset_name"] = self.library.get(target.revision).name
+            except KeyError:
+                result["preset_name"] = "Unknown revision"
         try:
             result["update"] = json.loads((self.data_dir / "update-status.json").read_text(encoding="utf-8"))
         except (FileNotFoundError, ValueError):
@@ -141,6 +156,7 @@ class ClientRuntime:
             await self.coordinator.restore()
         except Exception:
             log.exception("Boot recovery failed")
+            self.coordinator.recovery_error = True
             self.coordinator.state.health = "error"
             self.coordinator.state.detail = "Boot recovery failed; consult diagnostics"
         finally:
@@ -155,18 +171,40 @@ class ClientRuntime:
         hostname = urlparse(self.server_url or "").hostname or "192.0.2.1"
         return f"http://{local_ipv4(hostname)}:{self.port}"
 
+    async def _resolve_endpoint(self) -> str:
+        if self.endpoint or self.simulated:
+            return self._agent_endpoint()
+        if self._cached_endpoint and time.monotonic() - self._endpoint_checked < 10:
+            return self._cached_endpoint
+        if self._endpoint_task is None:
+            self._endpoint_task = asyncio.create_task(asyncio.to_thread(self._agent_endpoint), name="endpoint-discovery")
+        try:
+            endpoint = await asyncio.wait_for(asyncio.shield(self._endpoint_task), .8)
+        except asyncio.TimeoutError:
+            if self._cached_endpoint:
+                return self._cached_endpoint
+            raise OSError("Management endpoint discovery is still running")
+        except Exception as exc:
+            self._endpoint_task = None
+            raise OSError(f"Management endpoint discovery failed: {exc}") from exc
+        self._endpoint_task = None
+        self._cached_endpoint, self._endpoint_checked = endpoint, time.monotonic()
+        return endpoint
+
     async def _heartbeat_once(self) -> None:
         if not self.server_url:
             return
         saved = self.store.get("execution", {})
         try:
-            heartbeat = Heartbeat(serial=self.serial, hostname=self.hostname, endpoint=self._agent_endpoint(),
+            heartbeat = Heartbeat(serial=self.serial, hostname=self.hostname, endpoint=await self._resolve_endpoint(),
                                   state=self.coordinator.snapshot(), boot_id=self.boot_id,
                                   restoring=Target.model_validate(saved["target"]) if self.booting and saved.get("target") else None,
                                   library_digest=self.library.digest(), version=__version__)
             response = await self.http.post(self.server_url + "/api/heartbeat", json=heartbeat.model_dump())
             response.raise_for_status()
             self.server = HeartbeatReply.model_validate(response.json())
+            if self.store.get("central.last_reply") != self.server.model_dump():
+                self.store.put("central.last_reply", self.server.model_dump())
             was_connected = self.connected
             self.last_contact = time.monotonic()
             if not was_connected:
@@ -185,7 +223,7 @@ class ClientRuntime:
 
     async def _synchronize(self) -> None:
         while True:
-            if self.connected and self.server_url and self.server.library_digest != self.library.digest():
+            if self.connected and self.server.onboarded and self.server_url and self.server.library_digest != self.library.digest():
                 try:
                     response = await self.http.post(self.server_url + "/api/sync", json={"serial": self.serial, "revisions": self.library.export()})
                     response.raise_for_status()
@@ -234,6 +272,7 @@ class ClientRuntime:
         updated = Settings.model_validate({**self.settings.model_dump(), **value})
         self.store.put("settings", updated.model_dump())
         self.settings = updated
+        apply_log_budget(self.data_dir, updated.log_budget_mb)
         self.coordinator.operation_timeout = updated.operation_timeout
         self.coordinator.editor_ttl = updated.editor_ttl
         if isinstance(self.network, NetworkManager):
@@ -241,12 +280,32 @@ class ClientRuntime:
             self.network.ip_timeout = updated.ip_timeout
         return updated.model_dump()
 
+    async def reset_settings(self) -> None:
+        self.settings = Settings()
+        apply_log_budget(self.data_dir, self.settings.log_budget_mb)
+        self.server = HeartbeatReply()
+        self.server_url = None
+        self.last_contact = 0
+        self.coordinator.operation_timeout = self.settings.operation_timeout
+        self.coordinator.editor_ttl = self.settings.editor_ttl
+        if isinstance(self.network, NetworkManager):
+            self.network.interface = self.settings.interface
+            self.network.ip_timeout = self.settings.ip_timeout
+        await self.listener.close()
+        self.listener = BeaconListener(self.settings.discovery_port)
+        try:
+            await self.listener.start()
+        except OSError as exc:
+            log.warning("Discovery unavailable after reset: %s", exc)
+
     async def close(self) -> None:
         if self.closed:
             return
         self.closed = True
         for task in self.tasks:
             task.cancel()
+        if self._endpoint_task:
+            self._endpoint_task.cancel()
         for task in self.tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task

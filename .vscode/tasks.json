@@ -1,17 +1,14 @@
 {
-    "version": "2.0.0",
-    "tasks": [
-        {
-            "label": "wait-for-server",
-            "type": "shell",
-            "command": "python",
-            "args": [
-                "-c",
-                "import time; time.sleep(10)"
-            ],
-            "presentation": {
-                "reveal": "never"
-            }
-        }
-    ]
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "OMI: verificar",
+      "type": "process",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "windows": {"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe"},
+      "args": ["-m", "pytest", "-q"],
+      "group": {"kind": "test", "isDefault": true},
+      "problemMatcher": []
+    }
+  ]
 }

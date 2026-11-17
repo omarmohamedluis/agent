@@ -84,3 +84,24 @@ async def wait_update(data_dir: Path, operation_id: str, *, timeout: float = 180
                 return
         await asyncio.sleep(1)
     raise TimeoutError("Update result was not received; inspect systemd update unit")
+
+
+async def update_unit_alive(operation_id: str) -> bool | None:
+    """Only authoritative unit state can unlock an update without its result file."""
+    if sys.platform != "linux" or not re.fullmatch(r"[a-zA-Z0-9-]{1,80}", operation_id):
+        return None
+    process = await asyncio.create_subprocess_exec("systemctl", "is-active", f"omi-update-{operation_id}.service",
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        output, _ = await asyncio.wait_for(process.communicate(), 3)
+    except BaseException:
+        if process.returncode is None:
+            process.kill()
+        await process.communicate()
+        raise
+    state = output.decode(errors="replace").strip()
+    if state in ("active", "activating", "deactivating", "reloading", "refreshing"):
+        return True
+    if state in ("inactive", "failed", "unknown") and process.returncode in (0, 3, 4):
+        return False
+    return None

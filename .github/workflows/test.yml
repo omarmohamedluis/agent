@@ -1,0 +1,28 @@
+name: v3 verification
+on:
+  push:
+    branches: [v3]
+  pull_request:
+    branches: [v3]
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: 'requirements-*.lock'
+      - run: python -m pip install -r requirements-dev.lock
+      - run: python -m pip install --no-deps --no-build-isolation -e .
+      - run: python -m pip check
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m pytest -q
+      - run: python -m build --no-isolation

@@ -189,13 +189,13 @@ def create_app(runtime: ClientRuntime, *, manage_lifecycle: bool = True) -> Fast
         elif action == "factory-reset":
             if value.get("confirm") is not True:
                 raise ValueError("Explicit confirmation is required")
+            saved = backup(runtime.store, runtime.data_dir / "backups") if value.get("backup", True) else None
             operation = runtime.coordinator.submit(Command(action="standby"))
             await runtime.coordinator.task
             if runtime.coordinator.operation(operation.id).status != "succeeded":
                 raise RuntimeError("Cleanup failed; data has been preserved")
-            saved = factory_reset(runtime.store, confirm=True, backup_dir=runtime.data_dir / "backups" if value.get("backup", True) else None)
-            runtime.server = type(runtime.server)()
-            runtime.last_contact = 0
+            factory_reset(runtime.store, confirm=True)
+            await runtime.reset_settings()
             return {"ok": True, "backup": str(saved) if saved else None}
         elif action == "update":
             return runtime.coordinator.submit(Command(action="update", arguments=value))

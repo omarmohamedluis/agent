@@ -7,3 +7,4 @@
 *.json text eol=lf
 *.toml text eol=lf
 *.lock text eol=lf
+deploy/omi-update text eol=lf

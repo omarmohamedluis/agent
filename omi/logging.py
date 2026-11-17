@@ -39,3 +39,27 @@ def recent_logs(data_dir: Path, *, limit: int = 200, level: str = "") -> list[st
             lines = lines[1:]
         result.extend(line for line in lines if not level or f" {level.upper()} " in line)
     return result[-min(max(limit, 1), 2000):]
+
+
+def apply_log_budget(data_dir: Path, budget_mb: int) -> None:
+    path = (data_dir / "logs/omi.log").resolve()
+    budget = max(1, budget_mb) * 1024 * 1024
+    for handler in logging.getLogger().handlers:
+        if not isinstance(handler, RotatingFileHandler) or Path(handler.baseFilename).resolve() != path:
+            continue
+        handler.acquire()
+        try:
+            handler.maxBytes = budget // 5
+            handler.backupCount = 4
+            if path.exists() and path.stat().st_size >= handler.maxBytes:
+                handler.doRollover()
+            files = [candidate for candidate in path.parent.glob("omi.log.*") if candidate.name.rsplit(".", 1)[-1].isdigit()]
+            files.sort(key=lambda candidate: candidate.stat().st_mtime)
+            total = sum(candidate.stat().st_size for candidate in files) + (path.stat().st_size if path.exists() else 0)
+            for candidate in files:
+                if total <= budget:
+                    break
+                total -= candidate.stat().st_size
+                candidate.unlink()
+        finally:
+            handler.release()

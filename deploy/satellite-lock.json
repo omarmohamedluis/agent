@@ -1,0 +1,18 @@
+{
+  "version": "3.8.0",
+  "build": "804-8831637",
+  "source_commit": "8831637d4048ae176c7d25f2c16dbd2f31da8729",
+  "node_version": "24.22.2",
+  "archives": {
+    "arm64": {
+      "url": "https://cf-pub.bitfocus.io/companion/companion-satellite/companion-satellite-arm64-804-8831637.tar.gz",
+      "sha256": "be822dd3cab48248428ed2d4637854ccf2e9ed38a1a72aa621bcae42285a0db7",
+      "bytes": 267171687
+    },
+    "amd64": {
+      "url": "https://cf-pub.bitfocus.io/companion/companion-satellite/companion-satellite-x64-804-8831637.tar.gz",
+      "sha256": "6fe94a2cea66a69e61913aa7c173c3a54ff371fd4ca0b620a6dddb33179b4d94",
+      "bytes": 266755817
+    }
+  }
+}

@@ -1,0 +1,24 @@
+[Unit]
+Description=OMI Agent v3 Raspberry Pi client
+Wants=network-online.target
+After=network-online.target NetworkManager.service
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/lib/omi/client
+EnvironmentFile=-/etc/omi/omi.env
+ExecStart=/opt/omi/current/venv/bin/omi-agent --data-dir /var/lib/omi/client --host 0.0.0.0 --port 8081
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=50
+KillMode=control-group
+UMask=0027
+LimitNOFILE=4096
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

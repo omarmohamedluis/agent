@@ -16,14 +16,20 @@ class Store:
         self.lock = threading.RLock()
         self.connection = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self.connection.row_factory = sqlite3.Row
+        try:
+            self._initialize()
+        except BaseException:
+            self.connection.close()
+            raise
+
+    def _initialize(self) -> None:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         self.connection.execute("PRAGMA busy_timeout=5000")
         # Invalid/corrupt databases raise, preserving the original for diagnosis.
         result = self.connection.execute("PRAGMA quick_check").fetchone()[0]
         if result != "ok":
-            self.connection.close()
-            raise RuntimeError(f"Database integrity failure: {result}; original preserved at {path}")
+            raise RuntimeError(f"Database integrity failure: {result}; original preserved at {self.path}")
         self.connection.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self.connection.execute("CREATE TABLE IF NOT EXISTS revisions (id TEXT PRIMARY KEY, preset_id TEXT NOT NULL, value TEXT NOT NULL)")
         self.connection.execute("CREATE INDEX IF NOT EXISTS revisions_preset ON revisions(preset_id)")

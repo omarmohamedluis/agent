@@ -1,7 +1,0 @@
-fastapi
-uvicorn
-jinja2
-pydantic
-Pillow
-pydantic
-smbus2

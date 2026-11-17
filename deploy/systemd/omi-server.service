@@ -1,0 +1,29 @@
+[Unit]
+Description=OMI Agent v3 central server
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=omi
+Group=omi
+WorkingDirectory=/var/lib/omi/server
+EnvironmentFile=-/etc/omi/omi.env
+ExecStart=/opt/omi/current/venv/bin/omi-server --data-dir /var/lib/omi/server --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=50
+KillMode=control-group
+UMask=0027
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/omi/server
+LimitNOFILE=4096
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

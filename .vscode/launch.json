@@ -1,58 +1,39 @@
 {
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "name": "Python: OMI client",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/client/client.py",
-            "console": "integratedTerminal",
-            "python": "${workspaceFolder}/scripts/sudo_python.sh",
-            "justMyCode": false
-        },
-        {
-            "name": "Python: OMI server",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "server.app",
-            "cwd": "${workspaceFolder}",
-            "console": "integratedTerminal",
-            "python": "${workspaceFolder}/.venv/bin/python",
-            "windows": {
-                "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe"
-            }
-        },
-        {
-            "name": "Python: OMI client (delayed)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/client/client.py",
-            "console": "integratedTerminal",
-            "python": "${workspaceFolder}/scripts/sudo_python.sh",
-            "justMyCode": false,
-            "preLaunchTask": "wait-for-server"
-        },
-        {
-            "name": "Windows Server",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "server.app",
-            "cwd": "${workspaceFolder}",
-            "console": "integratedTerminal",
-            "windows": {
-                "python": "python.exe"
-            },
-            "justMyCode": false
-        },
-    ],
-    "compounds": [
-        {
-            "name": "Python: Server + Client (delay)",
-            "configurations": [
-                "Python: OMI server",
-                "Python: OMI client (delayed)"
-            ],
-            "stopAll": true
-        }
-    ]
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "OMI: servidor simulado",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "omi",
+      "args": ["server", "--simulate", "--data-dir", ".omi-dev/server", "--host", "127.0.0.1", "--no-beacon"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "windows": {"python": "${workspaceFolder}\\.venv\\Scripts\\python.exe"}
+    },
+    {
+      "name": "OMI: Pi simulada",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "omi",
+      "args": ["client", "--simulate", "--serial", "dev-pi-1", "--data-dir", ".omi-dev/client", "--host", "127.0.0.1", "--server", "http://127.0.0.1:8080"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "windows": {"python": "${workspaceFolder}\\.venv\\Scripts\\python.exe"}
+    },
+    {
+      "name": "OMI: pruebas",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-q"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "windows": {"python": "${workspaceFolder}\\.venv\\Scripts\\python.exe"}
+    }
+  ],
+  "compounds": [{"name": "OMI: servidor + Pi simulados", "configurations": ["OMI: servidor simulado", "OMI: Pi simulada"], "stopAll": true}]
 }

@@ -4,8 +4,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import ipaddress
 import logging
 import socket
+import subprocess
+import sys
 from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
@@ -89,6 +92,27 @@ class BeaconBroadcaster:
 
 def local_ipv4(destination: str = "192.0.2.1") -> str:
     """Route lookup using UDP connect, without transmitting a datagram."""
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.connect((destination, 9))
-        return sock.getsockname()[0]
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect((destination, 9))
+            return sock.getsockname()[0]
+    except OSError:
+        # Isolated show LANs need no default gateway. Inspect existing addresses.
+        if sys.platform == "linux":
+            result = subprocess.run(["ip", "-j", "-4", "address", "show", "scope", "global"],
+                                    check=True, capture_output=True, text=True, timeout=2)
+            interfaces = json.loads(result.stdout)
+            interfaces.sort(key=lambda item: (not item["ifname"].startswith(("eth", "en")), item["ifname"]))
+            for interface in interfaces:
+                if interface["ifname"].startswith(("lo", "docker", "veth", "br-")):
+                    continue
+                for address in interface.get("addr_info", []):
+                    candidate = ipaddress.IPv4Address(address["local"])
+                    if not candidate.is_loopback and not candidate.is_link_local:
+                        return str(candidate)
+        else:
+            for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                candidate = ipaddress.IPv4Address(item[4][0])
+                if not candidate.is_loopback and not candidate.is_link_local:
+                    return str(candidate)
+        raise RuntimeError("No management IPv4 address found; configure Ethernet or pass --advertise")

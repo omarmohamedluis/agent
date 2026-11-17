@@ -68,10 +68,10 @@ def agent_main() -> None:
         locks.enter_context(instance_lock(lock))
         if lock != args.data_dir / "instance.lock":
             locks.enter_context(instance_lock(args.data_dir / "instance.lock"))
-        configure_logging(args.data_dir)
         settings = {"server_url": args.server} if args.server else {}
         runtime = ClientRuntime(args.data_dir, simulated=args.simulate, serial=args.serial,
                                 endpoint=args.endpoint, port=args.port, settings=settings)
+        configure_logging(args.data_dir, budget_mb=runtime.settings.log_budget_mb)
         uvicorn.run(create_app(runtime), host=args.host, port=args.port, access_log=False, timeout_graceful_shutdown=35)
 
 
@@ -81,12 +81,11 @@ def server_main() -> None:
     parser.add_argument("--no-beacon", action="store_true")
     args = parser.parse_args()
     import uvicorn
-    from omi.discovery import local_ipv4
     from omi.server.app import create_app
-    advertise = args.advertise or f"http://{local_ipv4()}:{args.port}"
     with instance_lock(args.data_dir / "instance.lock"):
         configure_logging(args.data_dir)
-        app = create_app(args.data_dir, simulated=args.simulate, advertise=advertise, beacon_enabled=not args.no_beacon)
+        app = create_app(args.data_dir, simulated=args.simulate, advertise=args.advertise,
+                         beacon_enabled=not args.no_beacon, http_port=args.port)
         uvicorn.run(app, host=args.host, port=args.port, access_log=False, timeout_graceful_shutdown=35)
 
 
@@ -118,7 +117,13 @@ def maintain_main() -> None:
         if args.role == "client" and sys.platform == "linux":
             report["networkmanager"] = shutil.which("nmcli")
             satellite_dir = Path(os.environ.get("OMI_SATELLITE_DIR", "/opt/omi/satellite/current"))
-            report["satellite"] = (satellite_dir / "manifest.json").is_file()
+            try:
+                from omi.services.satellite import prepared_command
+                prepared_command(satellite_dir, args.data_dir / "runtime/satellite.json")
+                report["satellite"] = "prepared pinned launcher OK"
+            except RuntimeError as exc:
+                report["satellite"] = str(exc)
+                report["ok"] = False
             if not report["networkmanager"]:
                 report["ok"] = False
         if (args.data_dir / "omi.sqlite3").exists():
