@@ -1,0 +1,145 @@
+ENCARGO AUTÓNOMO: IMPLEMENTAR OMI AGENT V3
+
+Objetivo
+Construye la versión v3 completa y coherente de OMI Agent, lista para instalar
+y comenzar las pruebas físicas en una Raspberry Pi 5 con Raspberry Pi OS de
+64 bits y un CT Proxmox con Debian 12. Termina la implementación, su integración,
+la documentación y las comprobaciones automatizadas que puedan ejecutarse sin
+mi hardware. Trabaja autónomamente: estaré durmiendo y no responderé preguntas
+durante la ejecución.
+
+Referencias y prioridad
+1. Lee REFACTOR.md y refactor2.md completos antes de diseñar o cambiar código.
+2. La sección 6 de refactor2.md consolida las decisiones finales y prevalece
+   sobre las preguntas, propuestas y tablas anteriores que la contradigan.
+3. Este encargo define el procedimiento de trabajo. No sustituye requisitos
+   funcionales de las entrevistas. Las decisiones técnicas pendientes están
+   delegadas: elígelas, documéntalas y sigue trabajando.
+4. El código previo es una referencia de comportamiento e integración. Puedes
+   reorganizarlo, reemplazarlo o retirar piezas dentro del alcance acordado.
+
+Estado de partida y autorización
+- Ya existe el checkpoint 31851af con la base anterior y las entrevistas.
+- main y origin/main conservan esa base; v3 ya está creado y publicado.
+- Trabaja exclusivamente en v3. No repitas la reorganización de ramas.
+- Tienes autorización para implementar, reorganizar y retirar código obsoleto,
+  añadir dependencias justificadas, preparar entornos locales, ejecutar pruebas
+  y realizar commits y push normales a origin/v3.
+- Conserva los documentos de requisitos y el historial. Respeta las ediciones
+  locales preexistentes, especialmente mis anotaciones de TODO; no las reviertas.
+- No modifiques main durante este trabajo, no hagas force-push y no publiques
+  una release estable antes de la validación física posterior.
+- No actúes sobre equipos del bolo ni cambies la red del ordenador anfitrión.
+  Las pruebas de red, alimentación, resets y dispositivos usarán sustitutos,
+  directorios temporales y conexiones de prueba locales. No ejecutes apagados,
+  reinicios del sistema ni instalaciones del sistema operativo para probarlos.
+
+Coordinación
+- Actúa como ingeniero principal y coordinador del resultado completo.
+- Utiliza subagentes para tareas independientes y para una revisión final.
+  Primero define los contratos compartidos y quién puede editar cada módulo;
+  después divide el trabajo para evitar modificaciones simultáneas incompatibles.
+- Usa hasta tres subagentes simultáneos, además del coordinador. Para auxiliares
+  de implementación puedes usar gpt-6.1-sol con razonamiento xhigh; reserva el
+  modelo principal para arquitectura, decisiones, integración y revisión.
+- Proporciona a cada agente el alcance, las interfaces, los requisitos y las
+  pruebas que le corresponden. Integra y comprueba su trabajo tú mismo.
+- Pide una revisión desde un contexto independiente y corrige los defectos
+  encontrados. No des por correcta una integración porque los agentes hayan
+  terminado por separado.
+
+Autonomía y seguimiento
+- Crea un plan de ejecución y una lista de criterios verificables derivados de
+  los requisitos. Mantén el progreso en el repositorio para poder continuar
+  aunque se compacte el chat o cambie el agente.
+- Resuelve las decisiones rutinarias sin pedirme confirmación. Ante una duda
+  técnica, usa las referencias, comprueba la documentación oficial pertinente,
+  elige una solución razonable y registra la decisión.
+- Si falta acceso a hardware o a un servicio externo, completa el resto del
+  trabajo, deja la comprobación reproducible preparada y especifica el límite.
+  No confundas una comprobación no ejecutada con un resultado satisfactorio.
+- No cierres la tarea entregando únicamente arquitectura, interfaces vacías,
+  stubs, un componente aislado o un listado de trabajo pendiente de implementar.
+- Haz commits de cambios coherentes y publica los avances en origin/v3. La
+  entrega final debe corresponder al código que realmente has comprobado.
+
+Alcance mínimo de la entrega
+- Contratos comunes, validación, estado persistente y revisiones de presets.
+- Coordinador del cliente, procesos, salud, operaciones excluyentes, progreso,
+  cierre ordenado y recuperación del estado local al arrancar.
+- Gestión real de NetworkManager mediante un adaptador comprobable: red de
+  administración sin etiquetar y VLAN exclusiva del servicio, con verificación
+  de IP y retirada al detenerlo.
+- MIDI/OSC real, selección conservada del controlador, filtros, conversión,
+  rutas aplicadas en caliente, editor y Learn con silencio de toda la salida
+  mientras esté abierto el editor de añadir/editar rutas, también remotamente.
+- Camino MIDI/OSC sin colas de eventos pendientes ni reintentos de eventos
+  atrasados. Descartes bajo carga, destinos conservados para los eventos nuevos
+  y recuperación del mismo controlador si se desconecta durante el uso.
+- Integración de Companion Satellite y Stream Deck con instalación y versión
+  controladas, supervisión y configuración central coherentes.
+- Descubrimiento, onboard, IDs y nombres editables, comunicación independiente
+  del trabajo, funcionamiento autónomo y disponibilidad condicional de la web
+  local conforme a los requisitos.
+- Servidor con registro, asignación esperada frente a ejecución observada,
+  discrepancias aceptables/resincronizables, biblioteca replicada con conflictos
+  y operaciones individuales y de grupo sin cola para agentes offline.
+- Interfaces web funcionales sin iframes innecesarios, edición y aplicación a
+  destinos seleccionados, captura MIDI remota y consola acotada de progreso.
+- Pantallas opcionales: conservar los drivers útiles y su autodetección, con
+  presentación común del estado y franja superior amarilla.
+- Logs acotados, diagnóstico, actualizaciones y comandos de limpieza/reset con
+  los alcances acordados. Separar datos de usuario de las versiones del código.
+- Instaladores de cliente y servidor, supervisión systemd, documentación de uso
+  y desarrollo, y configuración reproducible de dependencias.
+- Retirada de servicios ajenos al alcance y de scripts, código y documentación
+  reemplazados. Mantener la trazabilidad de los requisitos.
+
+Instalación y desarrollo
+- El usuario instala mediante un comando documentado para cada rol. El README
+  debe apuntar a archivos que existan en la rama publicada que se está probando.
+- Distingue la instalación de uso normal y el modo de desarrollo con Git/SSH.
+  Las actualizaciones deben conservar presets, identidad y ajustes locales.
+- Elige versiones compatibles y comprobables; una instalación ya preparada
+  debe arrancar sin descargar dependencias de Internet.
+- Este equipo es Windows. Usa adaptadores y sustitutos para probar aquí la
+  lógica; comprueba scripts con Bash y usa pruebas Linux automatizadas cuando
+  estén disponibles. No presentes eso como una instalación real en Pi o CT.
+
+Comprobaciones exigidas
+- Pruebas unitarias e integración de recorridos completos y fallos: operaciones
+  concurrentes/duplicadas, orden de parada/red/arranque, ausencia de DHCP,
+  desconexión del servidor, recuperación local y discrepancias al reconectar.
+- Pruebas de revisiones: guardado, aplicación selectiva, conflictos offline,
+  biblioteca vacía y bloqueo del borrado de presets usados/asignados.
+- Pruebas MIDI: notas y CC con canales, note-on/off y velocidad cero, todas las
+  rutas coincidentes, Learn, silencio del editor y desconexión del controlador.
+- Pruebas específicas con ráfagas de fader y carga para detectar acumulación,
+  reenvíos o salida tardía de valores. Las métricas e interfaces no deben
+  introducir una cola en el procesamiento de eventos.
+- Pruebas de cliente/servidor y sus interfaces, persistencia y recuperación de
+  errores. Incluye comprobaciones prácticas en modo simulado de los recorridos
+  de las webs; corrige los errores de integración que encuentres.
+- Comprueba empaquetado, puntos de entrada, dependencias y sintaxis de scripts;
+  prepara una comprobación reproducible de instalación y diagnóstico por rol.
+- Tras corregir defectos, vuelve a ejecutar las comprobaciones afectadas y
+  finalmente el conjunto pertinente. No sustituyas resultados por estimaciones.
+
+Criterio de finalización y entrega
+La tarea termina cuando los componentes del alcance están implementados e
+integrados, las comprobaciones automatizadas pertinentes han pasado y v3 está
+publicado con documentación suficiente para empezar la validación física.
+No es necesario esperar a mi respuesta ni tener acceso a mi Pi/CT para cerrar
+esta fase; su validación física y el funcionamiento real durante semanas son
+una fase posterior que debe quedar identificada con claridad.
+
+Entrega un informe breve con:
+1. Cambios principales, arquitectura y decisiones relevantes.
+2. Comandos de instalación del cliente y servidor desde la versión publicada.
+3. Pruebas realmente ejecutadas y sus resultados.
+4. Límites, defectos conocidos y comprobaciones pendientes de hardware.
+5. Rama y commit final, estado de Git y una secuencia de pruebas físicas para
+   mañana, empezando por la instalación limpia.
+
+Continúa implementando, integrando, verificando y corrigiendo hasta alcanzar
+ese resultado. Mantén los informes de progreso breves durante la ejecución.
