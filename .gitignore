@@ -5,6 +5,13 @@ __pycache__/
 
 # Virtual environment
 .venv/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.omi-dev/
+test-results/
+playwright-report/
 
 # Logs y temporales
 *.log
@@ -12,6 +19,7 @@ __pycache__/
 *.out
 *.flag
 *.lock
+!requirements-*.lock
 *.pid
 *_TEMP.json
 

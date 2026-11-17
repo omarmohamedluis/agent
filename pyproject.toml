@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omi-agent"
+version = "3.0.0.dev0"
+description = "Autonomous Raspberry Pi show-control agents and central preset library"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi==0.115.12",
+  "uvicorn==0.34.3",
+  "pydantic==2.11.7",
+  "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+display = ["Pillow==11.2.1", "smbus2==0.5.0"]
+dev = ["pytest==8.4.0", "pytest-asyncio==1.0.0", "build==1.2.2.post1", "playwright==1.52.0"]
+
+[project.scripts]
+omi-agent = "omi.cli:agent_main"
+omi-server = "omi.cli:server_main"
+omi-maintain = "omi.cli:maintain_main"
+
+[tool.setuptools.packages.find]
+include = ["omi*"]
+
+[tool.setuptools.package-data]
+omi = ["web/*.html", "web/*.js", "web/*.css", "display/assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
